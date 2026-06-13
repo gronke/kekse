@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: the job only reads the repo and uses the cache service.
+permissions:
+  contents: read
+
+env:
+  # Incremental compilation is counter-productive in CI: it bloats the cache
+  # and never pays off across the clean checkouts each run starts from.
+  CARGO_INCREMENTAL: 0
+  # No debug symbols in CI: nobody attaches a debugger to these artifacts.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  ci:
+    name: fmt, clippy, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Restore on every run (main and PRs). The save step below runs only on
+      # main, so PRs consume a cache warmed by main read-only.
+      - name: Restore cargo cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # rustfmt + clippy ship with the runner's stable toolchain; ensure they
+      # are present and record versions for debuggable logs.
+      - name: Toolchain
+        run: |
+          rustup component add rustfmt clippy
+          rustc --version && cargo --version
+          cargo fmt --version && cargo clippy --version
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # kekse exposes no cargo features yet, so one universe covers the whole
+      # tree. Add `--all-features` / `--no-default-features` legs once a member
+      # gains feature-gated code (e.g. when kekse-keksbruch lands).
+      - name: test
+        run: cargo test --workspace
+
+      # Warm the shared cache from main only. An unchanged Cargo.lock hits the
+      # exact key and this save is a no-op.
+      - name: Save cargo cache
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
