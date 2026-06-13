@@ -1,0 +1,29 @@
+[workspace]
+members = ["crates/kekse"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Stefan Grönke"]
+homepage = "https://github.com/gronke/kekse"
+repository = "https://github.com/gronke/kekse"
+license = "MIT"
+edition = "2021"
+publish = false
+# MSRV. `OnceLock` (1.70) is used deliberately over `LazyLock` (1.80).
+rust-version = "1.77.2"
+
+# Shared dependency versions for the workspace's crates.
+[workspace.dependencies]
+# The RFC 6265 §4.1.1 cookie-value set is defined on top of this primitive.
+percent-encoding = "2"
+# RFC 7230 token grammar for cookie-names (via `http`'s `HeaderName`), borrowed
+# rather than re-implemented as a homemade table.
+http = "1"
+# Fail-soft parse logs a skipped pair at debug level.
+tracing = "0.1"
+# Dev-only: the integration tests drive kekse through real axum request /
+# response types. `oneshot` is in-memory, so tokio needs only a basic runtime.
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

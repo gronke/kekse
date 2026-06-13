@@ -1,0 +1,26 @@
+[package]
+name = "kekse"
+description = "A strict, dependency-light cookie codec: a Set-Cookie builder and a Cookie-header parser built on the RFC 6265 grammar."
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# RFC 7230 token grammar for cookie-names (no homemade table).
+http.workspace = true
+# Percent-encoding primitive; the RFC 6265 cookie-value set is defined on top.
+percent-encoding.workspace = true
+# Fail-soft parse logs a skipped pair at debug.
+tracing.workspace = true
+
+[dev-dependencies]
+# Integration tests drive kekse through real axum request/response types.
+# All already first-party workspace deps — dev-only, nothing new for consumers.
+axum.workspace = true
+tower = { workspace = true, features = ["util"] }
+tokio = { workspace = true }
