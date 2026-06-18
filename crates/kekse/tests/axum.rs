@@ -182,8 +182,11 @@ async fn set_cookie_then_read_it_back_through_axum() {
 #[tokio::test]
 async fn lenient_reads_quoted_and_spaced_values_off_a_real_header() {
     let app = app();
-    // `Auto` quotes to carry the space; the rendering is a valid Cookie header.
-    let rendered = SetCookie::new("pref", "dark mode").to_string();
+    // `Auto` quotes to carry the space (opt-in now that `Percent` is the
+    // default); the lenient reader handles the quoted form off a real header.
+    let rendered = SetCookie::new("pref", "dark mode")
+        .value_encoding(ValueEncoding::Auto)
+        .to_string();
     assert_eq!(rendered, "pref=\"dark mode\"");
     let resp = app
         .clone()
