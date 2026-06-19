@@ -1,0 +1,3 @@
+# Differential-harness fixture dependencies (installed locally, never committed).
+.venv/
+node_modules/

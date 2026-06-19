@@ -1,0 +1,15 @@
+[package]
+name = "keksbruch"
+description = "Differential cookie-wire test harness for kekse — its chaos monkey for robustness and cross-implementation compliance."
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The system under test. Path dep so keksbruch always exercises the local tree.
+kekse = { path = "../kekse" }

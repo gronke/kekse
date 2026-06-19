@@ -12,8 +12,10 @@ There is no cookie *store* (no persistence, eviction, or domain/path send-matchi
 It never panics on untrusted input, and a malformed pair in a header is skipped rather than aborting the parse, so attacker-appended junk can never evict a later valid cookie.
 See its [README](crates/kekse/README.md) for the builder's encoding modes and the lenient and strict parsers.
 
-`keksbruch` (planned) is the companion test-payload generator.
-It takes kekse structures and re-emits them both in unusual-but-valid encodings and in malformed ones — unequal quotes, doubled quotes, injection bytes — so the codec can be challenged in both directions, when building and when parsing.
+[`keksbruch`](crates/keksbruch) is the companion test harness — kekse's *chaos monkey*.
+It renders the same logical cookie two ways: a clean baseline through kekse, and a malformed variant built directly as bytes — unbalanced quotes, spliced control bytes, truncated escapes, smuggled `;`, garbage attributes.
+**Layer A** (run in CI) pins kekse's own fail-soft behaviour against this corpus — never panics, never echoes an injection byte, strict ⊆ lenient.
+A later, opt-in differential layer feeds the same payloads to cookie parsers in other languages to tabulate where they diverge, checking kekse against both the RFC (*standard*) and real-world parsers (*expectation*).
 
 ## Dependencies and support
 
