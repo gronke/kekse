@@ -73,6 +73,15 @@ pub fn is_cookie_octet(b: u8) -> bool {
     (b as usize) < 128 && table[b as usize]
 }
 
+/// Whether `b` is an RFC 6265 §4.1.1 *av-octet* — a byte a `Set-Cookie`
+/// attribute value (`Path`/`Domain`) may carry: `%x20-3A / %x3C-7E` (visible
+/// ASCII and `SP`, minus `;` and `DEL`). Excludes control bytes, the `;`
+/// attribute delimiter, and non-ASCII — exactly the bytes that could break out
+/// of or inject into the header line.
+pub(crate) fn is_av_octet(b: u8) -> bool {
+    matches!(b, 0x20..=0x3a | 0x3c..=0x7e)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

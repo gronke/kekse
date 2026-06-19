@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use crate::attributes::CookieAttributes;
+use crate::attributes::{CookieAttributes, Domain, Path};
 use crate::cookie::Cookie;
 use crate::encoding::{decode_cookie_value, ValueEncoding};
 use crate::grammar::{is_cookie_name, is_ws_char};
@@ -54,10 +54,12 @@ impl<'a> SetCookie<'a> {
         Self::from_parts(Cookie::new(name, value), CookieAttributes::default())
     }
 
-    /// Parse one `Set-Cookie` header value into a `SetCookie` (RFC 6265 §5.2) —
-    /// **strict**, the default: an **unrecognised attribute rejects the cookie**
-    /// (`None`). Use [`parse_lenient`](SetCookie::parse_lenient) to ignore unknown
-    /// attributes instead.
+    /// Parse one `Set-Cookie` header value into a `SetCookie` (RFC 6265 §5.2). An
+    /// **unrecognised attribute is ignored** and the cookie is kept, per §5.2 — so
+    /// a modern attribute this version does not model (`Partitioned`, `Priority`,
+    /// …) never costs you the cookie. Use
+    /// [`parse_strict`](SetCookie::parse_strict) to reject on an unknown attribute
+    /// instead.
     ///
     /// Splits on the first `;` into the `name=value` pair and the attribute list,
     /// then the pair on its first `=`. The name must be a cookie-name token; the
@@ -70,16 +72,18 @@ impl<'a> SetCookie<'a> {
     /// value is not acted on yet — date handling is a planned follow-up. Returns
     /// `None` when there is no usable pair — no `=`, an empty or non-token name,
     /// or a value outside the accepted set / with escapes that are not valid
-    /// UTF-8 — or, in strict mode, when an attribute is unrecognised. Never panics.
+    /// UTF-8. Never panics.
     pub fn parse(header_value: &'a str) -> Option<Self> {
-        Self::parse_with(header_value, true)
+        Self::parse_with(header_value, false)
     }
 
-    /// Like [`parse`](SetCookie::parse) but **lenient**: an unrecognised attribute
-    /// is ignored rather than rejecting the cookie. A malformed *known* attribute
-    /// (e.g. a non-numeric `Max-Age`) is dropped in both modes.
-    pub fn parse_lenient(header_value: &'a str) -> Option<Self> {
-        Self::parse_with(header_value, false)
+    /// Like [`parse`](SetCookie::parse) but **strict**: an unrecognised attribute
+    /// rejects the whole cookie (`None`) instead of being ignored. A tripwire for
+    /// cookies you minted yourself, where an attribute you did not emit signals
+    /// something is wrong. A malformed *known* attribute (e.g. a non-numeric
+    /// `Max-Age`) is dropped, not fatal, in both modes.
+    pub fn parse_strict(header_value: &'a str) -> Option<Self> {
+        Self::parse_with(header_value, true)
     }
 
     fn parse_with(header_value: &'a str, strict: bool) -> Option<Self> {
@@ -110,19 +114,21 @@ impl<'a> SetCookie<'a> {
             } else if attr.eq_ignore_ascii_case(attr_name::SAME_SITE) {
                 set_cookie.attributes.same_site = parse_same_site(val);
             } else if attr.eq_ignore_ascii_case(attr_name::PATH) {
-                set_cookie.attributes.path = Some(val);
+                // An invalid value (control byte, `;`, non-ASCII) is dropped like a
+                // malformed Max-Age — the cookie is kept, the attribute discarded.
+                set_cookie.attributes.path = Path::new(val);
             } else if attr.eq_ignore_ascii_case(attr_name::DOMAIN) {
-                set_cookie.attributes.domain = Some(val);
+                set_cookie.attributes.domain = Domain::new(val);
             } else if attr.eq_ignore_ascii_case(attr_name::MAX_AGE) {
                 set_cookie.attributes.max_age = val.parse::<u64>().ok();
             } else if attr.eq_ignore_ascii_case(attr_name::EXPIRES) {
                 // Recognised, but date handling is deferred to a follow-up; the
                 // value is not acted on yet.
             } else if strict {
-                // Strict (default): an unrecognised attribute rejects the cookie.
+                // Strict (opt-in): an unrecognised attribute rejects the cookie.
                 return None;
             }
-            // Lenient: an unrecognised attribute is ignored.
+            // Default: an unrecognised attribute is ignored (RFC 6265 §5.2).
         }
         Some(set_cookie)
     }
@@ -165,17 +171,19 @@ impl<'a> SetCookie<'a> {
         self
     }
 
-    /// Set the `Path` attribute.
+    /// Set the `Path` attribute. An invalid path (control byte, `;`, or non-ASCII
+    /// — see [`Path`](crate::Path)) is rejected and leaves the attribute unset.
     #[must_use]
     pub fn path(mut self, path: &'a str) -> Self {
-        self.attributes.path = Some(path);
+        self.attributes.path = Path::new(path);
         self
     }
 
-    /// Set the `Domain` attribute. Omit for a host-only cookie.
+    /// Set the `Domain` attribute. Omit for a host-only cookie. An invalid domain
+    /// (see [`Domain`](crate::Domain)) is rejected and leaves the attribute unset.
     #[must_use]
     pub fn domain(mut self, domain: &'a str) -> Self {
-        self.attributes.domain = Some(domain);
+        self.attributes.domain = Domain::new(domain);
         self
     }
 
@@ -258,8 +266,8 @@ impl<'a> SetCookie<'a> {
             a.http_only.then_some(SetCookieAttribute::HttpOnly),
             a.same_site.map(SetCookieAttribute::SameSite),
             a.secure.then_some(SetCookieAttribute::Secure),
-            a.path.map(SetCookieAttribute::Path),
-            a.domain.map(SetCookieAttribute::Domain),
+            a.path.map(|p| SetCookieAttribute::Path(p.as_str())),
+            a.domain.map(|d| SetCookieAttribute::Domain(d.as_str())),
             a.max_age.map(SetCookieAttribute::MaxAge),
         ]
         .into_iter()
@@ -506,7 +514,7 @@ mod tests {
         assert_eq!(sc.cookie().to_request_pair(), "n=v");
         // The attributes are readable as fields.
         assert!(sc.attributes().secure);
-        assert_eq!(sc.attributes().path, Some("/x"));
+        assert_eq!(sc.attributes().path.map(|v| v.as_str()), Some("/x"));
         // Owned demotion drops the attributes; the request pair carries none.
         assert_eq!(sc.into_cookie().to_request_pair(), "n=v");
     }
@@ -603,7 +611,7 @@ mod tests {
         assert_eq!(parsed.value(), "deadbeef");
         assert!(parsed.attributes().http_only && parsed.attributes().secure);
         assert_eq!(parsed.attributes().same_site, Some(SameSite::Strict));
-        assert_eq!(parsed.attributes().path, Some("/"));
+        assert_eq!(parsed.attributes().path.map(|v| v.as_str()), Some("/"));
         assert_eq!(parsed.attributes().max_age, Some(3600));
         assert_eq!(parsed.attributes().domain, None);
         // Re-render is byte-equal (deadbeef is octet-clean).
@@ -622,16 +630,16 @@ mod tests {
             SetCookie::parse("n=v; SECURE; httponly; samesite=lax; PATH=/x; max-age=60").unwrap();
         assert!(p.attributes().secure && p.attributes().http_only);
         assert_eq!(p.attributes().same_site, Some(SameSite::Lax));
-        assert_eq!(p.attributes().path, Some("/x"));
+        assert_eq!(p.attributes().path.map(|v| v.as_str()), Some("/x"));
         assert_eq!(p.attributes().max_age, Some(60));
     }
 
     #[test]
-    fn parse_strict_rejects_unknown_lenient_ignores() {
-        // Strict (default): an unrecognised attribute (`Priority`) rejects it.
-        assert!(SetCookie::parse("SID=x; Priority=High; Max-Age=60").is_none());
-        // Lenient: the unknown attribute is ignored and the cookie survives.
-        let p = SetCookie::parse_lenient("SID=x; Priority=High; Max-Age=60").unwrap();
+    fn parse_strict_rejects_unknown_default_ignores() {
+        // Strict (opt-in): an unrecognised attribute (`Priority`) rejects it.
+        assert!(SetCookie::parse_strict("SID=x; Priority=High; Max-Age=60").is_none());
+        // Default (RFC §5.2): the unknown attribute is ignored and the cookie survives.
+        let p = SetCookie::parse("SID=x; Priority=High; Max-Age=60").unwrap();
         assert_eq!(p.value(), "x");
         assert_eq!(p.attributes().max_age, Some(60));
     }
@@ -697,6 +705,6 @@ mod tests {
         let p = SetCookie::parse("a=b=c; Path=/x").unwrap();
         assert_eq!(p.name(), "a");
         assert_eq!(p.value(), "b=c"); // only the first '=' splits name/value
-        assert_eq!(p.attributes().path, Some("/x"));
+        assert_eq!(p.attributes().path.map(|v| v.as_str()), Some("/x"));
     }
 }
