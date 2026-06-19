@@ -8,7 +8,7 @@ pub enum Direction {
     /// A request `Cookie:` header — tested via `parse_pairs` / `parse_pairs_strict`.
     Request,
     /// A response `Set-Cookie:` header value — tested via `SetCookie::parse` /
-    /// `parse_lenient`.
+    /// `parse_strict`.
     Response,
 }
 

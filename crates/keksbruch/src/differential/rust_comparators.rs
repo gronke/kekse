@@ -58,7 +58,7 @@ impl RustComparator for KekseLenient {
         }
     }
     fn parse_response(&self, wire: &str) -> ParseOutcome {
-        match kekse::SetCookie::parse_lenient(wire) {
+        match kekse::SetCookie::parse(wire) {
             Some(sc) => ParseOutcome::SetCookie {
                 set_cookie: kekse_view(&sc),
             },
@@ -84,8 +84,8 @@ impl RustComparator for KekseStrict {
         }
     }
     fn parse_response(&self, wire: &str) -> ParseOutcome {
-        // kekse's default `parse` is strict: an unknown attribute rejects.
-        match kekse::SetCookie::parse(wire) {
+        // kekse's opt-in `parse_strict` rejects on an unknown attribute.
+        match kekse::SetCookie::parse_strict(wire) {
             Some(sc) => ParseOutcome::SetCookie {
                 set_cookie: kekse_view(&sc),
             },
@@ -104,8 +104,8 @@ fn kekse_view(sc: &kekse::SetCookie) -> SetCookieView {
         http_only: a.http_only,
         secure: a.secure,
         same_site: a.same_site.map(|s| s.as_str().to_string()),
-        path: a.path.map(str::to_string),
-        domain: a.domain.map(str::to_string),
+        path: a.path.map(|p| p.as_str().to_string()),
+        domain: a.domain.map(|d| d.as_str().to_string()),
         max_age: a.max_age.map(|m| m as i64),
     }
 }

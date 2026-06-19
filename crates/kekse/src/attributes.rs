@@ -1,9 +1,50 @@
 //! The `Set-Cookie` response attributes as a standalone [`CookieAttributes`] —
 //! the part a request `Cookie:` cookie does not carry. A
 //! [`SetCookie`](crate::SetCookie) is a [`Cookie`](crate::Cookie) kernel plus a
-//! `CookieAttributes`.
+//! `CookieAttributes`. The `Path` and `Domain` values are validated [`Path`] /
+//! [`Domain`] newtypes, so the public fields cannot carry an injection byte.
 
+use crate::grammar::is_av_octet;
 use crate::same_site::SameSite;
+
+/// A validated `Path` attribute value: RFC 6265 §4.1.1 av-octets only — no
+/// control byte, no `;`, ASCII — so it can never break out of or inject into a
+/// `Set-Cookie` line. The newtype makes the public [`CookieAttributes::path`]
+/// field **unforgeable**: the only way to obtain one is [`Path::new`], which
+/// validates. Read the inner string with [`as_str`](Path::as_str).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Path<'a>(&'a str);
+
+impl<'a> Path<'a> {
+    /// `Some(Path)` iff every byte is an av-octet; `None` otherwise — a control
+    /// byte, a `;`, or non-ASCII, anything that could break the header line.
+    pub fn new(value: &'a str) -> Option<Self> {
+        value.bytes().all(is_av_octet).then_some(Self(value))
+    }
+
+    /// The validated path value.
+    pub fn as_str(&self) -> &'a str {
+        self.0
+    }
+}
+
+/// A validated `Domain` attribute value — the same av-octet guarantee as
+/// [`Path`], so the public [`CookieAttributes::domain`] field is unforgeable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Domain<'a>(&'a str);
+
+impl<'a> Domain<'a> {
+    /// `Some(Domain)` iff every byte is an av-octet (no control byte, `;`, or
+    /// non-ASCII).
+    pub fn new(value: &'a str) -> Option<Self> {
+        value.bytes().all(is_av_octet).then_some(Self(value))
+    }
+
+    /// The validated domain value.
+    pub fn as_str(&self) -> &'a str {
+        self.0
+    }
+}
 
 /// The response attributes of a `Set-Cookie:` line: `HttpOnly`, `Secure`,
 /// `SameSite`, `Path`, `Domain`, `Max-Age` — everything a request `Cookie:`
@@ -21,10 +62,12 @@ use crate::same_site::SameSite;
 /// `HttpOnly` and `Secure` are valueless presence flags on the wire, so their
 /// setters are **nullary**: calling [`http_only`](CookieAttributes::http_only)
 /// or [`secure`](CookieAttributes::secure) adds the attribute; not calling it
-/// omits it. There is no "set to false" — leave it unset.
+/// omits it. There is no "set to false" — leave it unset. `path` / `domain` are
+/// validated [`Path`] / [`Domain`] newtypes (read them with `.as_str()`); an
+/// invalid value leaves the attribute unset.
 ///
 /// ```
-/// use kekse::{CookieAttributes, SameSite};
+/// use kekse::{CookieAttributes, Path, SameSite};
 ///
 /// // Define a hardened policy once, reuse it across cookies.
 /// let hardened = CookieAttributes::default()
@@ -32,8 +75,8 @@ use crate::same_site::SameSite;
 ///     .secure()
 ///     .same_site(SameSite::Strict)
 ///     .path("/");
-/// assert!(hardened.secure);            // read a field
-/// assert_eq!(hardened.path, Some("/"));
+/// assert!(hardened.secure); // read a field
+/// assert_eq!(hardened.path, Path::new("/"));
 /// ```
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct CookieAttributes<'a> {
@@ -43,10 +86,11 @@ pub struct CookieAttributes<'a> {
     pub secure: bool,
     /// The `SameSite` attribute, if set.
     pub same_site: Option<SameSite>,
-    /// The `Path` attribute, if set.
-    pub path: Option<&'a str>,
-    /// The `Domain` attribute, if set. Omit for a host-only cookie.
-    pub domain: Option<&'a str>,
+    /// The `Path` attribute, if set — a validated [`Path`].
+    pub path: Option<Path<'a>>,
+    /// The `Domain` attribute, if set — a validated [`Domain`]. Omit for a
+    /// host-only cookie.
+    pub domain: Option<Domain<'a>>,
     /// The `Max-Age` attribute in seconds, if set. `0` deletes the cookie.
     pub max_age: Option<u64>,
 }
@@ -76,17 +120,19 @@ impl<'a> CookieAttributes<'a> {
         self
     }
 
-    /// Set the `Path` attribute.
+    /// Set the `Path` attribute. An invalid path (a control byte, `;`, or
+    /// non-ASCII — see [`Path`]) is rejected and leaves the attribute unset.
     #[must_use]
     pub fn path(mut self, path: &'a str) -> Self {
-        self.path = Some(path);
+        self.path = Path::new(path);
         self
     }
 
-    /// Set the `Domain` attribute. Omit for a host-only cookie.
+    /// Set the `Domain` attribute. Omit for a host-only cookie. An invalid domain
+    /// (see [`Domain`]) is rejected and leaves the attribute unset.
     #[must_use]
     pub fn domain(mut self, domain: &'a str) -> Self {
-        self.domain = Some(domain);
+        self.domain = Domain::new(domain);
         self
     }
 
@@ -135,8 +181,20 @@ mod tests {
             .max_age(60);
         assert!(a.http_only && a.secure);
         assert_eq!(a.same_site, Some(SameSite::Lax));
-        assert_eq!(a.path, Some("/app"));
-        assert_eq!(a.domain, Some("example.test"));
+        assert_eq!(a.path, Path::new("/app"));
+        assert_eq!(a.domain, Domain::new("example.test"));
         assert_eq!(a.max_age, Some(60));
+    }
+
+    #[test]
+    fn path_and_domain_reject_injection() {
+        // A `;` or a control byte cannot be smuggled into a Path/Domain value.
+        assert_eq!(Path::new("/a;b"), None);
+        assert_eq!(Path::new("/a\r\nb"), None);
+        assert_eq!(Domain::new("ex\0ample"), None);
+        // The attribute setter drops an invalid value rather than storing it.
+        assert_eq!(CookieAttributes::default().path("/a\0b").path, None);
+        // A clean value round-trips.
+        assert_eq!(Path::new("/ok").map(|p| p.as_str()), Some("/ok"));
     }
 }

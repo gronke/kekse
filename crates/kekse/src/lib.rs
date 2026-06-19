@@ -81,9 +81,10 @@
 //!
 //! On the response side, [`SetCookie::parse`] reads one `Set-Cookie` header value
 //! back into a [`SetCookie`] (RFC 6265 §5.2, attributes matched
-//! case-insensitively). It is **strict** by default — an unrecognised attribute
-//! rejects the cookie; [`SetCookie::parse_lenient`] ignores unknown attributes
-//! instead. (`Expires` is recognised; date handling is a planned follow-up.)
+//! case-insensitively). Per §5.2 an **unrecognised attribute is ignored** and the
+//! cookie kept (so a newer attribute like `Partitioned` never costs the cookie);
+//! [`SetCookie::parse_strict`] rejects on an unknown attribute instead.
+//! (`Expires` is recognised; date handling is a planned follow-up.)
 //!
 //! ## A single source of truth for the grammar
 //!
@@ -110,7 +111,7 @@ mod jar;
 mod same_site;
 mod set_cookie;
 
-pub use attributes::CookieAttributes;
+pub use attributes::{CookieAttributes, Domain, Path};
 pub use cookie::Cookie;
 pub use encoding::{encode_value, ValueEncoding};
 pub use grammar::{is_cookie_name, is_cookie_octet};
