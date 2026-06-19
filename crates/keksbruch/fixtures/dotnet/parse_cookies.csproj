@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>parse_cookies</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ASP.NET Core's header parser: CookieHeaderValue / SetCookieHeaderValue. -->
+    <PackageReference Include="Microsoft.Net.Http.Headers" Version="8.0.*" />
+  </ItemGroup>
+
+</Project>

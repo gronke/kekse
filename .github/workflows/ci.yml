@@ -54,9 +54,11 @@ jobs:
       - name: test
         run: cargo test --workspace
 
-      # kekse's `tracing` is an optional feature; the gated fail-soft logging
-      # only compiles with it on. Lint and test that universe too so it can't
-      # bit-rot.
+      # The all-features universe enables kekse's optional `tracing` (gated
+      # fail-soft logging) and keksbruch' `differential` harness. This is
+      # the compile-only leg for the harness: clippy type-checks it against
+      # cookie/biscotti, while `cargo test` skips the matrix itself (it is
+      # `#[ignore]`d and needs python/node), so no extra toolchains are required.
       - name: clippy + test (all features)
         run: |
           cargo clippy --workspace --all-targets --all-features -- -D warnings

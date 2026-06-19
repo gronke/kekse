@@ -13,3 +13,37 @@ rust-version.workspace = true
 [dependencies]
 # The system under test. Path dep so keksbruch always exercises the local tree.
 kekse = { path = "../kekse" }
+
+# --- differential harness (opt-in; never built on the default / MSRV CI legs) ---
+# All optional and gated behind `differential`. cookie + biscotti are edition
+# 2024 / Rust 1.85; keeping them optional preserves kekse's MSRV 1.77.2.
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+cookie = { workspace = true, optional = true }
+biscotti = { workspace = true, optional = true }
+axum-extra = { workspace = true, optional = true }
+csv = { workspace = true, optional = true }
+# Only to build the HeaderMap the axum-extra extractor reads from.
+http = { workspace = true, optional = true }
+
+[features]
+default = []
+# The opt-in cross-language differential matrix: the JSONL sidecar protocol and
+# the in-process Rust comparators. Enabled only for the local matrix run and the
+# compile-only `--all-features` clippy leg — never the default `cargo test`.
+differential = [
+    "dep:serde",
+    "dep:serde_json",
+    "dep:base64",
+    "dep:cookie",
+    "dep:biscotti",
+    "dep:axum-extra",
+    "dep:http",
+    "dep:csv",
+]
+
+[dev-dependencies]
+# Layer A asserts the Set-Cookie HeaderValue gate rejects injection that a raw
+# attribute value could carry; kekse already pulls http transitively.
+http = { workspace = true }

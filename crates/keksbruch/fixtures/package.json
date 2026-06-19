@@ -1,0 +1,10 @@
+{
+  "name": "keksbruch-fixtures",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Node cookie-parser dependencies for the keksbruch differential matrix sidecar.",
+  "dependencies": {
+    "cookie": "^0.7.0",
+    "tough-cookie": "^5.1.0"
+  }
+}

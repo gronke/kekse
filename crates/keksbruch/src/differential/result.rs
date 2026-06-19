@@ -1,0 +1,139 @@
+//! The common normalized schema every comparator (in-process Rust, or a
+//! language sidecar over JSONL) maps its parse into, so wildly different parser
+//! APIs become diff-able cells. Internally tagged so the sidecar JSON reads
+//! `{"outcome":"Cookies","cookies":[...]}`.
+
+use serde::{Deserialize, Serialize};
+
+/// What one parser did with one payload, normalized.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome")]
+pub enum ParseOutcome {
+    /// A request header parsed into these `(name, value)` cookies, in order.
+    Cookies { cookies: Vec<CookieView> },
+    /// A request parser rejected the whole header (fail-hard — biscotti's mode).
+    Rejected { error: String },
+    /// A `Set-Cookie` parsed into one cookie.
+    SetCookie { set_cookie: SetCookieView },
+    /// A `Set-Cookie` parser rejected the input.
+    SetCookieRejected { error: String },
+    /// This parser does not handle this direction (e.g. biscotti has no
+    /// `Set-Cookie` parser; a request-only library asked for a response).
+    NotApplicable,
+    /// The adapter panicked — a finding about the parser, not a harness crash.
+    Panicked { message: String },
+    /// The comparator was unavailable (interpreter or dependency missing) — SKIP.
+    Skipped,
+}
+
+/// One parsed request cookie, normalized to name and decoded value.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CookieView {
+    pub name: String,
+    pub value: String,
+}
+
+/// One parsed `Set-Cookie`, normalized. `max_age` is `i64` to preserve a
+/// negative delta some parsers keep; `same_site` is a `String` to preserve a
+/// token kekse's enum would not (e.g. a parser that echoes a bogus value).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SetCookieView {
+    pub name: String,
+    pub value: String,
+    #[serde(default)]
+    pub http_only: bool,
+    #[serde(default)]
+    pub secure: bool,
+    #[serde(default)]
+    pub same_site: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub domain: Option<String>,
+    #[serde(default)]
+    pub max_age: Option<i64>,
+}
+
+impl ParseOutcome {
+    /// A compact, single-cell rendering for the matrix.
+    pub fn cell(&self) -> String {
+        match self {
+            ParseOutcome::Cookies { cookies } => render_cookies(cookies),
+            ParseOutcome::Rejected { .. } => "✗reject".to_string(),
+            ParseOutcome::SetCookie { set_cookie } => set_cookie.cell(),
+            ParseOutcome::SetCookieRejected { .. } => "✗reject".to_string(),
+            ParseOutcome::NotApplicable => "n/a".to_string(),
+            ParseOutcome::Panicked { .. } => "PANIC".to_string(),
+            ParseOutcome::Skipped => "SKIP".to_string(),
+        }
+    }
+
+    /// The key the consensus vote groups on: the very string the cell shows, so
+    /// "agreement" means "rendered the same outcome" and the consensus column
+    /// reads identically to the parser cells. A request `Rejected` and a
+    /// Set-Cookie `SetCookieRejected` both render `✗reject`, so they already group
+    /// together. (`n/a` and `SKIP` are excluded from the vote by the caller.)
+    pub fn consensus_key(&self) -> String {
+        self.cell()
+    }
+}
+
+impl SetCookieView {
+    fn cell(&self) -> String {
+        let mut flags = Vec::new();
+        if self.http_only {
+            flags.push("HttpOnly".to_string());
+        }
+        if self.secure {
+            flags.push("Secure".to_string());
+        }
+        if let Some(s) = &self.same_site {
+            flags.push(format!("SameSite={s}"));
+        }
+        if let Some(p) = &self.path {
+            flags.push(format!("Path={p}"));
+        }
+        if let Some(d) = &self.domain {
+            flags.push(format!("Domain={d}"));
+        }
+        if let Some(m) = self.max_age {
+            flags.push(format!("Max-Age={m}"));
+        }
+        if flags.is_empty() {
+            format!("{}={}", self.name, short(&self.value))
+        } else {
+            format!("{}={} ;{}", self.name, short(&self.value), flags.join(";"))
+        }
+    }
+}
+
+/// Render a parsed cookie list compactly, truncating long values and long lists
+/// so a scale payload (a 4 KiB value, 21 pairs) stays a readable single cell.
+fn render_cookies(cookies: &[CookieView]) -> String {
+    if cookies.is_empty() {
+        return "∅".to_string();
+    }
+    const MAX: usize = 4;
+    let shown = cookies
+        .iter()
+        .take(MAX)
+        .map(|c| format!("{}={}", c.name, short(&c.value)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if cookies.len() > MAX {
+        format!("[{shown}, …(+{} more)]", cookies.len() - MAX)
+    } else {
+        format!("[{shown}]")
+    }
+}
+
+/// Truncate a long value to a short prefix plus a length marker.
+fn short(value: &str) -> String {
+    let count = value.chars().count();
+    if count > 24 {
+        let prefix: String = value.chars().take(12).collect();
+        format!("{prefix}…<{count} chars>")
+    } else {
+        value.to_string()
+    }
+}

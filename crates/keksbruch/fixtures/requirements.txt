@@ -1,0 +1,3 @@
+# Python cookie-parser dependency for the keksbruch differential matrix
+# sidecar. SimpleCookie is stdlib and needs nothing here.
+Werkzeug>=3.0

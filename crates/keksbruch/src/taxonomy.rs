@@ -94,4 +94,20 @@ pub enum Keksbruch {
     ValuedFlag(&'static str),
     /// A duplicated attribute: `; Path=/a; Path=/b`.
     DuplicateAttribute(&'static str),
+
+    // ── extra coverage: NUL positions, HTAB, multibyte UTF-8 ─────────────────
+    /// A NUL byte in the cookie *name*: `n\0x=v`.
+    NulInName,
+    /// A NUL fused to a middle pair's name, between valid cookies: `a=1; \0b=2; c=3`.
+    NulBetweenCookies,
+    /// A NUL byte in a `Set-Cookie` attribute *name*: `Pa\0th` (Response).
+    NulInAttrName,
+    /// A NUL byte in a `Set-Cookie` attribute *value*: `Path=/a\0b` (Response).
+    NulInAttrValue,
+    /// HTAB (not SP) around name and value — is tab accepted as whitespace?
+    TabAround,
+    /// A raw 4-byte UTF-8 emoji value: `n=🤖`.
+    RawEmojiValue,
+    /// A percent-encoded 4-byte UTF-8 emoji value: `n=%F0%9F%A4%96`.
+    PercentEmojiValue,
 }

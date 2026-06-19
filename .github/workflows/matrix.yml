@@ -1,0 +1,75 @@
+name: Differential matrix
+
+# Generate the cross-language parser divergence matrix in a clean environment
+# that has every toolchain installed (so no column degrades to SKIP), and publish
+# the Markdown + CSV as downloadable artifacts. Runs on demand and on main — in
+# its own workflow, separate from the gating CI, since it is informational.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "crates/**"
+      - ".github/workflows/matrix.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - ".github/workflows/matrix.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    name: cross-language parser matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustc --version
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python sidecar deps (Werkzeug; SimpleCookie is stdlib)
+        run: python -m pip install -r crates/keksbruch/fixtures/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Node sidecar deps (cookie, tough-cookie)
+        run: npm install --prefix crates/keksbruch/fixtures
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      # The matrix test is #[ignore]d, so --ignored runs exactly it. It writes
+      # COOKIE_MATRIX.md and COOKIE_MATRIX.csv next to the crate; a sidecar
+      # whose toolchain is somehow missing degrades to SKIP rather than failing.
+      - name: Generate the matrix
+        run: cargo test -p keksbruch --features differential -- --ignored --nocapture
+
+      # Render the matrix on the run's summary page, so a reviewer sees it on the
+      # PR check without downloading the artifact.
+      - name: Publish the matrix to the run summary
+        if: always()
+        run: |
+          f=crates/keksbruch/COOKIE_MATRIX.md
+          if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Upload matrix (Markdown + CSV)
+        uses: actions/upload-artifact@v4
+        with:
+          name: keksbruch-matrix
+          path: |
+            crates/keksbruch/COOKIE_MATRIX.md
+            crates/keksbruch/COOKIE_MATRIX.csv
+          if-no-files-found: error
