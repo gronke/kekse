@@ -51,14 +51,14 @@ fn managed_set_cookie_is_always_a_valid_header_value() {
             ValueEncoding::Percent,
             ValueEncoding::Quoted,
         ] {
-            let rendered = SetCookie::new("SID", v)
-                .value_encoding(enc)
-                .http_only(true)
-                .secure(true)
+            let rendered = SetCookie::new("SID", *v)
+                .with_encoding(enc)
+                .http_only()
+                .secure()
                 .same_site(SameSite::Strict)
                 .path("/")
                 .max_age(3600)
-                .to_string();
+                .to_set_cookie();
             let hv = HeaderValue::from_str(&rendered);
             assert!(
                 hv.is_ok(),
@@ -76,8 +76,8 @@ fn raw_injection_is_caught_by_the_header_layer() {
     // HeaderValue, so a consumer's clearing-cookie fallback engages instead of
     // a smuggled header.
     let rendered = SetCookie::new("SID", "x\r\nSet-Cookie: evil=1")
-        .value_encoding(ValueEncoding::Raw)
-        .to_string();
+        .with_encoding(ValueEncoding::Raw)
+        .to_set_cookie();
     assert!(HeaderValue::from_str(&rendered).is_err());
 }
 
@@ -87,13 +87,13 @@ fn raw_injection_is_caught_by_the_header_layer() {
 async fn set_handler() -> impl IntoResponse {
     let hv = HeaderValue::from_str(
         &SetCookie::new("SID", "deadbeefcafe")
-            .value_encoding(ValueEncoding::Percent)
-            .http_only(true)
-            .secure(true)
+            .with_encoding(ValueEncoding::Percent)
+            .http_only()
+            .secure()
             .same_site(SameSite::Strict)
             .path("/")
             .max_age(3600)
-            .to_string(),
+            .to_set_cookie(),
     )
     .unwrap();
     ([(SET_COOKIE, hv)], "set")
@@ -185,8 +185,8 @@ async fn lenient_reads_quoted_and_spaced_values_off_a_real_header() {
     // `Auto` quotes to carry the space (opt-in now that `Percent` is the
     // default); the lenient reader handles the quoted form off a real header.
     let rendered = SetCookie::new("pref", "dark mode")
-        .value_encoding(ValueEncoding::Auto)
-        .to_string();
+        .with_encoding(ValueEncoding::Auto)
+        .to_set_cookie();
     assert_eq!(rendered, "pref=\"dark mode\"");
     let resp = app
         .clone()
@@ -243,8 +243,8 @@ fn percent_encoded_value_round_trips_through_the_http_layer() {
     // A non-octet value Percent-encodes to a valid HeaderValue and decodes back.
     for v in ["café", "a;b", "a b", "🦀", "100%"] {
         let rendered = SetCookie::new("SID", v)
-            .value_encoding(ValueEncoding::Percent)
-            .to_string();
+            .with_encoding(ValueEncoding::Percent)
+            .to_set_cookie();
         let hv = HeaderValue::from_str(&rendered).expect("percent output is header-safe");
         let on_wire = hv.to_str().unwrap();
         let pair = on_wire.split(';').next().unwrap();

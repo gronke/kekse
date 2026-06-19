@@ -4,8 +4,9 @@
 use std::borrow::Cow;
 
 use crate::cookie::Cookie;
-use crate::encoding::decode_cookie_value;
+use crate::encoding::{decode_cookie_value, ValueEncoding};
 use crate::grammar::{is_cookie_name, is_ws_char};
+use http::header::{HeaderValue, InvalidHeaderValue};
 
 /// Parse a request `Cookie` header into `(name, decoded value)` pairs, in order,
 /// yielding every well-formed pair. Lenient: tolerates raw whitespace and the
@@ -33,23 +34,23 @@ fn split_pairs(header: &str, allow_ws: bool) -> impl Iterator<Item = (&str, Cow<
         let (raw_name, raw_value) = segment.split_once('=')?;
         let name = raw_name.trim_matches(is_ws_char);
         if name.is_empty() || !is_cookie_name(name) {
+            #[cfg(feature = "tracing")]
             tracing::debug!(
                 name = %name.escape_debug(),
                 "ignoring a cookie pair with an empty or non-token name"
             );
             return None;
         }
-        match decode_cookie_value(raw_value, allow_ws) {
-            Some(value) => Some((name, value)),
-            None => {
-                tracing::debug!(
-                    cookie = %name,
-                    "ignoring cookie: value carries a byte outside the accepted \
-                     set or percent-escapes that are not valid UTF-8"
-                );
-                None
-            }
+        let value = decode_cookie_value(raw_value, allow_ws);
+        #[cfg(feature = "tracing")]
+        if value.is_none() {
+            tracing::debug!(
+                cookie = %name,
+                "ignoring cookie: value carries a byte outside the accepted \
+                 set or percent-escapes that are not valid UTF-8"
+            );
         }
+        value.map(|value| (name, value))
     })
 }
 
@@ -114,6 +115,59 @@ impl<'a> CookieJar<'a> {
     /// Whether the jar holds no cookies.
     pub fn is_empty(&self) -> bool {
         self.cookies.is_empty()
+    }
+
+    /// An empty jar to build up with [`add`](CookieJar::add) /
+    /// [`replace`](CookieJar::replace) — the way to mint a request `Cookie:`
+    /// header, or to rewrite one after [`parse`](CookieJar::parse).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Append `cookie`, keeping any existing pair of the same name — duplicate
+    /// names are legal on the wire, so this is order-preserving and additive.
+    /// Use [`replace`](CookieJar::replace) to overwrite a name instead.
+    pub fn add(&mut self, cookie: Cookie<'a>) {
+        self.cookies.push(cookie);
+    }
+
+    /// Remove every cookie named `name`, returning how many were dropped.
+    pub fn remove(&mut self, name: &str) -> usize {
+        let before = self.cookies.len();
+        self.cookies.retain(|c| c.name() != name);
+        before - self.cookies.len()
+    }
+
+    /// Make `cookie` the sole pair of its name: drop any existing same-name
+    /// cookies, then append it. The canonical single-value write.
+    pub fn replace(&mut self, cookie: Cookie<'a>) {
+        self.remove(cookie.name());
+        self.add(cookie);
+    }
+
+    /// Render the whole jar as one request `Cookie:` header string — each pair
+    /// `name=value` escaped under `encoding`, joined with `"; "`. Values are
+    /// re-encoded from their decoded form, so a parsed-then-rendered header is
+    /// **canonical**: it carries no raw bytes the encoding would not itself emit
+    /// (no raw retention). For the typed header use
+    /// [`to_header_value`](CookieJar::to_header_value).
+    pub fn to_header_string(&self, encoding: ValueEncoding) -> String {
+        self.cookies
+            .iter()
+            .map(|c| c.to_pair(encoding))
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    /// Render the jar as an `http::HeaderValue` ready to set on a request.
+    /// `Err` only under [`ValueEncoding::Raw`], where a value may carry bytes no
+    /// header value can hold (CR/LF/NUL); the managed encodings are always
+    /// header-safe, so they never fail here.
+    pub fn to_header_value(
+        &self,
+        encoding: ValueEncoding,
+    ) -> Result<HeaderValue, InvalidHeaderValue> {
+        HeaderValue::from_str(&self.to_header_string(encoding))
     }
 }
 
@@ -396,5 +450,77 @@ mod tests {
         let jar = CookieJar::parse("n=a\u{1}b; m=ok");
         assert!(jar.get("n").is_none());
         assert_eq!(jar.get("m").map(|c| c.value()), Some("ok"));
+    }
+
+    // ---- write side: build / mutate / serialize ---------------------------
+
+    #[test]
+    fn new_starts_empty_and_add_appends_in_order() {
+        let mut jar = CookieJar::new();
+        assert!(jar.is_empty());
+        jar.add(Cookie::new("a", "1"));
+        jar.add(Cookie::new("b", "2"));
+        jar.add(Cookie::new("a", "3")); // duplicate name is legal on the wire
+        assert_eq!(
+            jar.iter()
+                .map(|c| (c.name(), c.value()))
+                .collect::<Vec<_>>(),
+            vec![("a", "1"), ("b", "2"), ("a", "3")]
+        );
+    }
+
+    #[test]
+    fn remove_drops_all_matches_and_returns_the_count() {
+        let mut jar = CookieJar::parse("a=1; b=2; a=3");
+        assert_eq!(jar.remove("a"), 2);
+        assert_eq!(jar.remove("missing"), 0);
+        assert_eq!(jar.iter().map(|c| c.name()).collect::<Vec<_>>(), vec!["b"]);
+    }
+
+    #[test]
+    fn replace_is_the_canonical_single_value_write() {
+        let mut jar = CookieJar::parse("SID=old; SID=stale; theme=dark");
+        jar.replace(Cookie::new("SID", "new"));
+        assert_eq!(
+            jar.get_all("SID").map(|c| c.value()).collect::<Vec<_>>(),
+            vec!["new"] // the stale duplicates are gone
+        );
+        assert_eq!(jar.get("theme").map(|c| c.value()), Some("dark"));
+    }
+
+    #[test]
+    fn header_string_joins_pairs_and_round_trips() {
+        let jar = CookieJar::parse_strict("a=1; b=2; c=3");
+        let rendered = jar.to_header_string(ValueEncoding::Percent);
+        assert_eq!(rendered, "a=1; b=2; c=3");
+        let again = CookieJar::parse_strict(&rendered);
+        assert_eq!(
+            again
+                .iter()
+                .map(|c| (c.name(), c.value()))
+                .collect::<Vec<_>>(),
+            vec![("a", "1"), ("b", "2"), ("c", "3")]
+        );
+    }
+
+    #[test]
+    fn re_encode_is_canonical_no_raw_retention() {
+        // Values that arrived quoted / percent-escaped are re-emitted in the one
+        // canonical Percent form — the original wire shape is not retained.
+        let jar = CookieJar::parse(r#"pref="a b"; name=caf%C3%A9"#);
+        assert_eq!(
+            jar.to_header_string(ValueEncoding::Percent),
+            "pref=a%20b; name=caf%C3%A9"
+        );
+    }
+
+    #[test]
+    fn to_header_value_rejects_raw_injection_but_managed_neutralizes_it() {
+        let mut jar = CookieJar::new();
+        jar.add(Cookie::new("SID", "x\r\nSet-Cookie: evil=1"));
+        // Raw emits the bytes verbatim → not a valid header value.
+        assert!(jar.to_header_value(ValueEncoding::Raw).is_err());
+        // Percent neutralizes the CR/LF → header-safe.
+        assert!(jar.to_header_value(ValueEncoding::Percent).is_ok());
     }
 }

@@ -51,11 +51,16 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # kekse exposes no cargo features yet, so one universe covers the whole
-      # tree. Add `--all-features` / `--no-default-features` legs once a member
-      # gains feature-gated code (e.g. when kekse-keksbruch lands).
       - name: test
         run: cargo test --workspace
+
+      # kekse's `tracing` is an optional feature; the gated fail-soft logging
+      # only compiles with it on. Lint and test that universe too so it can't
+      # bit-rot.
+      - name: clippy + test (all features)
+        run: |
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo test --workspace --all-features
 
       # Warm the shared cache from main only. An unchanged Cargo.lock hits the
       # exact key and this save is a no-op.

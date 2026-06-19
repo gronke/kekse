@@ -1,7 +1,7 @@
 # kekse
 
 A strict, dependency-light cookie codec.
-It builds `Set-Cookie` response values from a `SetCookie` recipe, reads a `Cookie` request header into a `CookieJar` of typed `Cookie`s, and converts a recipe straight into an `http::HeaderValue` — directly on the RFC 6265 §4.1.1 grammar.
+It builds `Set-Cookie` response values from a `SetCookie`, reads *and writes* a `Cookie` request header through a `CookieJar` of typed `Cookie`s, and converts either straight into an `http::HeaderValue` — directly on the RFC 6265 §4.1.1 grammar.
 There is no cookie *store* (no persistence, eviction, or domain/path send-matching), no signing or encryption, and no date handling — a lifetime is `Max-Age` seconds (a `u64`), never an `Expires` date — so the crate pulls in no `time`/`chrono`.
 It never panics on untrusted input, and a malformed pair in a header is skipped rather than aborting the parse, so attacker-appended junk can never evict a later valid cookie.
 
@@ -11,7 +11,7 @@ It depends only on `percent-encoding` (the value codec) and `http` (the RFC 7230
 
 RFC 6265 lets a cookie value carry only "cookie-octets".
 Anything else — a space, a `;`, a `"`, a control byte, any non-ASCII — has to be escaped to travel on the wire.
-`SetCookie::value_encoding` chooses how:
+The `with_encoding` builder chooses how:
 
 | `ValueEncoding` | Behaviour |
 | --- | --- |
@@ -27,19 +27,19 @@ Every managed encoding is lossless and unambiguous.
 use kekse::{SetCookie, SameSite, ValueEncoding};
 
 let header = SetCookie::new("SID", "deadbeef")
-    .value_encoding(ValueEncoding::Percent)
-    .http_only(true)
+    .with_encoding(ValueEncoding::Percent)
+    .http_only()
     .same_site(SameSite::Strict)
-    .secure(true)
+    .secure()
     .path("/")
     .max_age(3600)
-    .to_string();
+    .to_set_cookie();
 assert_eq!(header, "SID=deadbeef; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age=3600");
 ```
 
 Attributes are emitted in a fixed order: `HttpOnly`, `SameSite`, `Secure`, `Path`, `Domain`, `Max-Age`, each only when set.
 
-To hand the recipe straight to `http`, use `HeaderValue::try_from(set_cookie)` (or `&set_cookie`) instead of `.to_string()`: the managed encodings are always valid header bytes, so it fails only for a `Raw` value the caller deliberately built with non-header bytes.
+To hand the cookie straight to `http`, use `HeaderValue::try_from(set_cookie)` (or `&set_cookie`) instead of `.to_set_cookie()`: the managed encodings are always valid header bytes, so it fails only for a `Raw` value the caller deliberately built with non-header bytes.
 
 ## Parsing a header
 
@@ -59,12 +59,13 @@ let value = kekse::parse_pairs_strict("SID=deadbeef; theme=dark")
 assert_eq!(value.as_deref(), Some("deadbeef"));
 ```
 
-## Typed cookies
+## Three types, two headers
 
 `parse_pairs` yields `(name, value)` tuples; `CookieJar` is the typed view over it.
-A `Cookie` is a *baked* cookie — the `name=value` a request carries, with no attributes.
-A `SetCookie` is the *recipe* — a name and value plus the response attributes.
-`SetCookie::bake()` drops the attributes to recover the `Cookie`; `Cookie::unbake()` promotes one back into a recipe to re-decorate and re-emit.
+A `Cookie` is the request `Cookie:` cookie — the `name=value` a request carries (plus its wire encoding), with no attributes; it is the shared kernel a `SetCookie` composes.
+A `SetCookie` is the response `Set-Cookie:` cookie — a `Cookie` kernel plus `CookieAttributes` (`HttpOnly`, `Secure`, `SameSite`, `Path`, `Domain`, `Max-Age`), with plain-`bool` flags.
+Set attributes with the fluent verbs — the valueless flags `http_only()` / `secure()` are nullary, the rest take a value (`same_site(..)`, `path(..)`, …) — and read them back as fields via `set_cookie.attributes()` (e.g. `sc.attributes().secure`). The same verbs build a `CookieAttributes` on its own, so a hardened policy can be defined once and reused across cookies.
+`Cookie::into_set_cookie()` (default attributes) or `Cookie::with_attributes(..)` (a prebuilt set) completes a request cookie into a `SetCookie` to emit; `SetCookie::into_cookie()` / `cookie()` drop back to the kernel.
 
 ```rust
 use kekse::CookieJar;
@@ -78,7 +79,7 @@ let sid = jar
 assert_eq!(sid.as_deref(), Some("deadbeef"));
 ```
 
-`CookieJar` is a parsed, in-order view of one `Cookie:` header — not a stateful cookie store (persistence and domain/path send-matching are out of scope).
+`CookieJar` reads one `Cookie:` header in order, and is writable too — `add` / `replace` / `remove`, then `jar.to_header_value(encoding)` renders the whole header back, each value re-encoded canonically from its decoded form (no raw retention). It is a parsed-and-rebuildable view, not a stateful cookie store (persistence and domain/path send-matching are out of scope).
 
 ## License & Disclaimer
 
