@@ -14,7 +14,13 @@ A `KeksbruchRecipe` renders the same logical cookie two ways: a clean `baseline(
   cargo test -p keksbruch
   ```
 
-- **The differential matrix** (a later, opt-in layer behind a `differential` feature, never in CI) feeds the same payloads to cookie parsers in other languages (Python, Node) and the Rust `cookie`/`biscotti` crates, then tabulates where they diverge — to see whether kekse is *standard*-compliant (matches RFC 6265) and *expectation*-compliant (matches what real parsers actually do).
+- **The differential matrix** (opt-in, behind a `differential` feature, never in the gating CI) feeds the same payloads to cookie parsers across languages — Rust (`cookie`, `biscotti`), Python (stdlib `SimpleCookie`, Werkzeug), Node (`cookie`, `tough-cookie`), Go (`net/http`), and .NET (`Microsoft.Net.Http.Headers`) — and tabulates where they diverge, to see whether kekse is *standard*-compliant (RFC 6265) and *expectation*-compliant (what real parsers do). It writes `COOKIE_MATRIX.md` (one row per tool, one column per test) and `COOKIE_MATRIX.csv`; a sidecar whose toolchain is absent degrades to `SKIP`.
+
+  ```
+  cargo test -p keksbruch --features differential -- --ignored --nocapture
+  ```
+
+  The **Differential matrix** GitHub Action runs this in a clean environment with every toolchain installed (so no column is `SKIP`) and uploads the two files as build artifacts.
 
 ## Why
 

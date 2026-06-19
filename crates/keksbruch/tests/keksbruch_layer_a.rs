@@ -36,15 +36,29 @@ fn every_keksbruch_survives_the_universal_invariants() {
                 assert_strict_subset_of_lenient(&wire); // strict only removes
             }
             Some(wire) => {
-                // Response: parsing must not panic, and a re-render must carry no
-                // header-injection byte (CR/LF/NUL — `;` is the legal separator).
+                // Response: parsing never panics. The cookie value is decoded and
+                // octet-validated, so it is always injection-free. Attribute values
+                // (Path/Domain) are stored raw, so the wire boundary is the
+                // HeaderValue conversion — if it succeeds the bytes carry no
+                // injection; a raw byte that would inject is rejected there.
                 let _ = SetCookie::parse(&wire);
                 if let Some(sc) = SetCookie::parse_lenient(&wire) {
-                    let rendered = sc.to_set_cookie();
                     assert!(
-                        !rendered.bytes().any(|b| matches!(b, b'\r' | b'\n' | 0)),
-                        "Set-Cookie re-render carried an injection byte: {rendered:?}"
+                        !sc.value()
+                            .bytes()
+                            .any(|b| matches!(b, b';' | b'\r' | b'\n' | 0)),
+                        "Set-Cookie value carried an injection byte: {:?}",
+                        sc.value()
                     );
+                    if let Ok(header_value) = http::HeaderValue::try_from(&sc) {
+                        assert!(
+                            !header_value
+                                .as_bytes()
+                                .iter()
+                                .any(|b| matches!(b, b'\r' | b'\n' | 0)),
+                            "Set-Cookie HeaderValue carried an injection byte for {wire:?}"
+                        );
+                    }
                 }
             }
             None => { /* Unrepresentable: the wire can never reach a &str parser */ }

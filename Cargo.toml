@@ -27,3 +27,17 @@ tracing = "0.1"
 axum = { version = "0.8", features = ["macros"] }
 tower = "0.5"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# keksbruch differential harness (behind its `differential` feature): the
+# JSONL sidecar protocol (serde) and the cross-parser comparators. `cookie` and
+# `biscotti` are edition 2024 / Rust 1.85, so they stay optional and never reach
+# kekse's MSRV 1.77.2 default or MSRV CI legs.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+cookie = { version = "0.18", features = ["percent-encode"] }
+biscotti = "0.4"
+# axum's standard cookie extractor (itself a thin layer over the `cookie` crate),
+# fed through a real `HeaderValue` so the matrix shows the HTTP-layer boundary.
+axum-extra = { version = "0.10", features = ["cookie"] }
+# Render the matrix's CSV companion with a real CSV writer (quoting, escaping).
+csv = "1.3"

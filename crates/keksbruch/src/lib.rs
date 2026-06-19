@@ -28,6 +28,8 @@
 //! would refuse to emit them). [`payloads`] is the generator over the
 //! corpus; [`scenarios`] is the curated, [`Expect`]-annotated subset.
 
+#[cfg(feature = "differential")]
+pub mod differential;
 mod invariants;
 mod recipe;
 mod scenario;

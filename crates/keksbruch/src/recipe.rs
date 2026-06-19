@@ -103,6 +103,22 @@ impl<'a> KeksbruchRecipe<'a> {
             (Keksbruch::RawNonAsciiValue, _) => format!("{n}=café; m=ok").into_bytes(),
             (Keksbruch::NonAsciiName, _) => "naïve=v; m=ok".to_string().into_bytes(),
 
+            (Keksbruch::NulInName, _) => {
+                let mut w = n.as_bytes().to_vec();
+                w.push(0);
+                w.extend_from_slice(b"x=v; m=ok");
+                w
+            }
+            (Keksbruch::NulBetweenCookies, _) => {
+                let mut w = b"a=1; ".to_vec();
+                w.push(0);
+                w.extend_from_slice(b"b=2; c=3");
+                w
+            }
+            (Keksbruch::TabAround, _) => format!("\t{n}\t=\tv\t; m=ok").into_bytes(),
+            (Keksbruch::RawEmojiValue, _) => format!("{n}=🤖; m=ok").into_bytes(),
+            (Keksbruch::PercentEmojiValue, _) => format!("{n}=%F0%9F%A4%96; m=ok").into_bytes(),
+
             (Keksbruch::HugeValue(k), _) => format!("{n}={}", "x".repeat(*k)).into_bytes(),
             (Keksbruch::ManyPairs(k), _) => {
                 let mut s: String = (0..*k).map(|i| format!("k{i}=v{i}; ")).collect();
@@ -135,6 +151,19 @@ impl<'a> KeksbruchRecipe<'a> {
                 self.base.baseline(Direction::Response)
             )
             .into_bytes(),
+            (Keksbruch::NulInAttrName, Direction::Response) => {
+                let mut w = format!("{}; Pa", self.base.baseline(Direction::Response)).into_bytes();
+                w.push(0);
+                w.extend_from_slice(b"th=/");
+                w
+            }
+            (Keksbruch::NulInAttrValue, Direction::Response) => {
+                let mut w =
+                    format!("{}; Path=/a", self.base.baseline(Direction::Response)).into_bytes();
+                w.push(0);
+                w.push(b'b');
+                w
+            }
 
             // The Response-only attribute Keksbruch variants are never paired with Request in
             // the corpus; fall back to the honest baseline so the match is total.
@@ -143,7 +172,9 @@ impl<'a> KeksbruchRecipe<'a> {
                 | Keksbruch::BadMaxAge(_)
                 | Keksbruch::GarbageSameSite(_)
                 | Keksbruch::ValuedFlag(_)
-                | Keksbruch::DuplicateAttribute(_),
+                | Keksbruch::DuplicateAttribute(_)
+                | Keksbruch::NulInAttrName
+                | Keksbruch::NulInAttrValue,
                 Direction::Request,
             ) => self.base.baseline(Direction::Request).into_bytes(),
         }
