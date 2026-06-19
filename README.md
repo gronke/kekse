@@ -7,7 +7,7 @@ This repository is a Cargo workspace.
 ## Crates
 
 [`kekse`](crates/kekse) is the library: a strict, dependency-light cookie codec.
-It builds `Set-Cookie` response values from a `SetCookie` recipe, reads a `Cookie` request header into a `CookieJar` of typed `Cookie`s, and converts a recipe straight into an `http::HeaderValue` — directly on the RFC 6265 §4.1.1 grammar.
+It reads a `Cookie:` request header into a `CookieJar` of `Cookie`s, builds and parses `Set-Cookie:` response values through the `SetCookie` type, and converts one straight into an `http::HeaderValue` — directly on the RFC 6265 §4.1.1 grammar.
 There is no cookie *store* (no persistence, eviction, or domain/path send-matching), no signing or encryption, and no date handling — a lifetime is `Max-Age` seconds, never an `Expires` date — so it pulls in neither `time` nor `chrono`.
 It never panics on untrusted input, and a malformed pair in a header is skipped rather than aborting the parse, so attacker-appended junk can never evict a later valid cookie.
 See its [README](crates/kekse/README.md) for the builder's encoding modes and the lenient and strict parsers.

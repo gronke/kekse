@@ -15,8 +15,14 @@ rust-version.workspace = true
 http.workspace = true
 # Percent-encoding primitive; the RFC 6265 cookie-value set is defined on top.
 percent-encoding.workspace = true
-# Fail-soft parse logs a skipped pair at debug.
-tracing.workspace = true
+# Optional debug-level logging of skipped/ignored pieces, behind the `tracing`
+# feature so the core stays dependency-light (no logging facade by default).
+tracing = { workspace = true, optional = true }
+
+[features]
+default = []
+# Emit debug-level `tracing` for the fail-soft parse skips.
+tracing = ["dep:tracing"]
 
 [dev-dependencies]
 # Integration tests drive kekse through real axum request/response types.
