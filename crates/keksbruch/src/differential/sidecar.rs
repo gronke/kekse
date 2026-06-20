@@ -187,6 +187,36 @@ const SIDECARS: &[SidecarSpec] = &[
         script: "parse_cookies_nginx.lua",
         deps: &["$cookie_<name>", "lua-resty-cookie", "proxy"],
     },
+    SidecarSpec {
+        lang: "java",
+        // tomcat-embed-core (the Rfc6265 + Legacy cookie processors) and the
+        // jakarta.ws.rs API with TWO providers (RESTEasy + Jersey, discovered via
+        // ServiceLoader). A CI step shades fixtures/java into target/sidecar.jar with
+        // the maven image; the harness then runs that self-contained jar from
+        // eclipse-temurin:<ver>-jre (the narrow bind-mount of …/java/target is why the
+        // jar must be self-contained). Keycloak is intentionally absent — it delegates
+        // request parsing to the JAX-RS layer (RESTEasy), so its parsing *is* the
+        // `Jakarta RESTEasy` column (see matrix.rs prose). The two Jakarta columns
+        // parse both directions; the two Tomcat columns are request-only (→ n/a).
+        // Override the JDK with JAVA_VERSION (the -jre flavor is fixed). Locally, with
+        // no docker, it falls back to host `java` (needs a host-built jar); absent → SKIP.
+        command: "java",
+        image: Some(ImageSpec {
+            repo: "eclipse-temurin",
+            default_version: "25",
+            tag_suffix: "-jre",
+            version_env: "JAVA_VERSION",
+        }),
+        args: &["-jar"],
+        post_args: &[],
+        script: "java/target/sidecar.jar",
+        deps: &[
+            "Tomcat RFC6265",
+            "Tomcat legacy",
+            "Jakarta RESTEasy",
+            "Jakarta Jersey",
+        ],
+    },
 ];
 
 /// Build every sidecar-backed column (graceful SKIP where unavailable), plus a
@@ -401,6 +431,10 @@ mod tests {
             image_of("nginx").resolve_with(None),
             "openresty/openresty:1.31.1.1-0-bookworm"
         );
+        assert_eq!(
+            image_of("java").resolve_with(None),
+            "eclipse-temurin:25-jre"
+        );
     }
 
     #[test]
@@ -414,6 +448,11 @@ mod tests {
             image_of("nginx").resolve_with(Some("1.25.3.2-2")),
             "openresty/openresty:1.25.3.2-2-bookworm"
         );
+        // The -jre flavor is fixed; JAVA_VERSION sets only the JDK version.
+        assert_eq!(
+            image_of("java").resolve_with(Some("21")),
+            "eclipse-temurin:21-jre"
+        );
     }
 
     #[test]
@@ -423,6 +462,10 @@ mod tests {
         assert_eq!(
             image_of("nginx").resolve_with(Some("  ")),
             "openresty/openresty:1.31.1.1-0-bookworm"
+        );
+        assert_eq!(
+            image_of("java").resolve_with(Some("")),
+            "eclipse-temurin:25-jre"
         );
     }
 }

@@ -36,11 +36,66 @@ pub enum ParseOutcome {
     Skipped,
 }
 
-/// One parsed request cookie, normalized to name and decoded value.
+/// The structural shape of a parsed cookie value. Almost every parser returns a
+/// flat string ([`ValueShape::Scalar`]); PHP's `$_COOKIE` (and any future
+/// structuring parser) builds an array from `name[]=v` or a map from `name[k]=v`
+/// — a *rich type* the flat `value` string cannot honestly represent. The `value`
+/// still carries the JSON-encoded shape for display; this field is the explicit
+/// marker that the result *is* structured, so it is never confused with a string
+/// that merely looks like JSON. Defaults to `Scalar`, so a sidecar that omits it
+/// (every one but PHP) deserializes correctly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValueShape {
+    /// A flat string value — the shape every parser but PHP produces.
+    #[default]
+    Scalar,
+    /// An indexed array (PHP `name[]=v`); `value` carries its JSON encoding.
+    Array,
+    /// An associative map (PHP `name[k]=v`); `value` carries its JSON encoding.
+    Object,
+}
+
+impl ValueShape {
+    /// Whether this is the default flat-string shape — drives the
+    /// `skip_serializing_if` so a scalar cookie serializes with no `shape` key.
+    fn is_scalar(&self) -> bool {
+        matches!(self, ValueShape::Scalar)
+    }
+
+    /// The type name to display when the parsed value is not a string, or `None`
+    /// for a plain string (which needs no annotation).
+    fn type_name(self) -> Option<&'static str> {
+        match self {
+            ValueShape::Scalar => None,
+            ValueShape::Array => Some("array"),
+            ValueShape::Object => Some("object"),
+        }
+    }
+}
+
+/// One parsed request cookie, normalized to name and decoded value. `shape` marks
+/// a value the parser built as a rich type (array/map) rather than a string —
+/// only PHP's `$_COOKIE` does this today; see [`ValueShape`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CookieView {
     pub name: String,
     pub value: String,
+    #[serde(default, skip_serializing_if = "ValueShape::is_scalar")]
+    pub shape: ValueShape,
+}
+
+impl CookieView {
+    /// A scalar (plain-string) cookie — the shape every in-process comparator and
+    /// every sidecar but PHP produces. PHP's structured values arrive over the
+    /// wire with an explicit `shape`, so they are built by deserialization.
+    pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+            shape: ValueShape::Scalar,
+        }
+    }
 }
 
 /// One parsed `Set-Cookie`, normalized. `max_age` is `i64` to preserve a
@@ -130,7 +185,14 @@ fn render_cookies(cookies: &[CookieView]) -> String {
     let shown = cookies
         .iter()
         .take(MAX)
-        .map(|c| format!("{}={}", c.name, short(&c.value)))
+        // When a parser interpreted the value as a non-string type (PHP's `$_COOKIE`
+        // arrays/maps), show that type name in ⟨…⟩ before the JSON-encoded value, so
+        // a rich type reads distinctly from a string; the inner `[...]`/`{...}` shows
+        // array vs map.
+        .map(|c| match c.shape.type_name() {
+            None => format!("{}={}", c.name, short(&c.value)),
+            Some(t) => format!("{}=⟨{}⟩{}", c.name, t, short(&c.value)),
+        })
         .collect::<Vec<_>>()
         .join(", ");
     if cookies.len() > MAX {

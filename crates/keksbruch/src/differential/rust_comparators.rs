@@ -50,10 +50,7 @@ impl RustComparator for KekseLenient {
     fn parse_request(&self, wire: &str) -> ParseOutcome {
         ParseOutcome::Cookies {
             cookies: kekse::parse_pairs(wire)
-                .map(|(n, v)| CookieView {
-                    name: n.to_string(),
-                    value: v.into_owned(),
-                })
+                .map(|(n, v)| CookieView::new(n, v))
                 .collect(),
         }
     }
@@ -76,10 +73,7 @@ impl RustComparator for KekseStrict {
     fn parse_request(&self, wire: &str) -> ParseOutcome {
         ParseOutcome::Cookies {
             cookies: kekse::parse_pairs_strict(wire)
-                .map(|(n, v)| CookieView {
-                    name: n.to_string(),
-                    value: v.into_owned(),
-                })
+                .map(|(n, v)| CookieView::new(n, v))
                 .collect(),
         }
     }
@@ -122,10 +116,7 @@ impl RustComparator for CookieCrate {
             .filter_map(Result::ok)
             .map(|c| {
                 let (name, value) = c.name_value();
-                CookieView {
-                    name: name.to_string(),
-                    value: value.to_string(),
-                }
+                CookieView::new(name, value)
             })
             .collect();
         ParseOutcome::Cookies { cookies }
@@ -191,10 +182,7 @@ fn biscotti_cookies(jar: &biscotti::RequestCookies, wire: &str) -> Vec<CookieVie
         seen.push(name);
         if let Some(values) = jar.get_all(name) {
             for value in values.values() {
-                out.push(CookieView {
-                    name: name.to_string(),
-                    value: value.to_string(),
-                });
+                out.push(CookieView::new(name, value.to_string()));
             }
         }
     }
@@ -224,10 +212,7 @@ impl RustComparator for AxumExtra {
         // parsers.
         let mut cookies: Vec<CookieView> = jar
             .iter()
-            .map(|c| CookieView {
-                name: c.name().to_string(),
-                value: c.value().to_string(),
-            })
+            .map(|c| CookieView::new(c.name(), c.value()))
             .collect();
         cookies.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.value.cmp(&b.value)));
         ParseOutcome::Cookies { cookies }

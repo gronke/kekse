@@ -465,5 +465,156 @@ pub fn scenarios() -> Vec<Scenario> {
                 secure: false,
             },
         ),
+        // ── structured & injection-flavoured (rich-type probes) ─────────────
+        // Names/values that might coax a parser into a rich type (array/map) or
+        // an injection. kekse is token-strict (drops bracket/angle names) and
+        // octet-strict (drops a value carrying a non-octet); PHP's $_COOKIE is
+        // the lone structurer (request-only) — see the matrix prose.
+        s(
+            "array-name",
+            "a bracketed array-name: kekse drops the non-token; PHP builds an array",
+            Request,
+            "token",
+            Keksbruch::BracketName { assoc: false },
+            Expect::BothPairs(vec![("m", "ok")]),
+        ),
+        s(
+            "assoc-name",
+            "a bracketed map-name: kekse drops the non-token; PHP builds a map",
+            Request,
+            "sess",
+            Keksbruch::BracketName { assoc: true },
+            Expect::BothPairs(vec![("m", "ok")]),
+        ),
+        s(
+            "json-value",
+            "a JSON object as a value: the interior DQUOTE is a non-octet, so it drops",
+            Request,
+            "data",
+            Keksbruch::ValuePayload("{\"testdata\":\"JSON\"}"),
+            Expect::BothPairs(vec![("m", "ok")]),
+        ),
+        s(
+            "bracket-value",
+            "brackets in the value are cookie-octets: kept verbatim (cf. array-name)",
+            Request,
+            "data",
+            Keksbruch::ValuePayload("[nested]"),
+            Expect::BothPairs(vec![("data", "[nested]"), ("m", "ok")]),
+        ),
+        s(
+            "markup-no-equals",
+            "a bare <script> token has no =, so that segment is skipped",
+            Request,
+            "<script>",
+            Keksbruch::MarkupName { valued: false },
+            Expect::BothPairs(vec![("m", "ok")]),
+        ),
+        s(
+            "markup-name",
+            "angle brackets are not token chars, so the <script> name drops",
+            Request,
+            "<script>",
+            Keksbruch::MarkupName { valued: true },
+            Expect::BothPairs(vec![("m", "ok")]),
+        ),
+        s(
+            "quoted-html-value",
+            "a quoted markup value: quotes strip, then the interior space splits lenient from strict",
+            Request,
+            "data",
+            Keksbruch::ValuePayload("\"<img src=x />\""),
+            Expect::SplitPairs {
+                lenient: vec![("data", "<img src=x />"), ("m", "ok")],
+                strict: vec![("m", "ok")],
+            },
+        ),
+        s(
+            "truthy",
+            "a clean truthy value stays the string \"yes\" — no parser coerces a bool",
+            Request,
+            "truthy",
+            Keksbruch::ValuePayload("yes"),
+            Expect::BothPairs(vec![("truthy", "yes"), ("m", "ok")]),
+        ),
+        s(
+            "equals-bare",
+            "a bare = is an empty name: the pair is dropped",
+            Request,
+            "n",
+            Keksbruch::EqualsOnly(1),
+            Expect::BothPairs(vec![]),
+        ),
+        s(
+            "equals-double",
+            "== splits to an empty name with value `=`: the pair is dropped",
+            Request,
+            "n",
+            Keksbruch::EqualsOnly(2),
+            Expect::BothPairs(vec![]),
+        ),
+        s(
+            "nul-empty-name",
+            "a name that is a lone NUL byte is a non-token: that pair is dropped",
+            Request,
+            "n",
+            Keksbruch::NulOnlyName,
+            Expect::BothPairs(vec![("m", "ok")]),
+        ),
+        // ── structured shapes (Response) ────────────────────────────────────
+        // The Set-Cookie mirrors of the value-shaped probes. No Set-Cookie parser
+        // builds a rich type (PHP is request-only), so these test flat parsing of
+        // the same malformed values; kekse's response value rule always allows
+        // whitespace (unlike strict request), so quoted-html keeps here.
+        s(
+            "resp-array-name",
+            "a bracketed array-name in Set-Cookie: the non-token name is refused",
+            Response,
+            "token",
+            Keksbruch::BracketName { assoc: false },
+            Expect::ResponseNone,
+        ),
+        s(
+            "resp-json-value",
+            "a JSON object Set-Cookie value: the interior DQUOTE is refused",
+            Response,
+            "data",
+            Keksbruch::ValuePayload("{\"testdata\":\"JSON\"}"),
+            Expect::ResponseNone,
+        ),
+        s(
+            "resp-bracket-value",
+            "brackets in a Set-Cookie value are octets: a valid cookie",
+            Response,
+            "data",
+            Keksbruch::ValuePayload("[nested]"),
+            Expect::ResponseValue {
+                value: "[nested]",
+                max_age: None,
+                http_only: false,
+                secure: false,
+            },
+        ),
+        s(
+            "resp-quoted-html-value",
+            "a quoted markup Set-Cookie value: response always allows WS, so both modes keep it",
+            Response,
+            "data",
+            Keksbruch::ValuePayload("\"<img src=x />\""),
+            Expect::ResponseValue {
+                value: "<img src=x />",
+                max_age: None,
+                http_only: false,
+                secure: false,
+            },
+        ),
+        s(
+            "resp-quoted-pair-flag",
+            "a whole quoted name=value plus a flag: the leading DQUOTE makes the name a non-token",
+            Response,
+            "sid",
+            Keksbruch::QuotedPairWithFlag,
+            Expect::ResponseNone,
+        ),
     ]
 }

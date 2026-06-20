@@ -14,7 +14,7 @@ A `KeksbruchRecipe` renders the same logical cookie two ways: a clean `baseline(
   cargo test -p keksbruch
   ```
 
-- **The differential matrix** (opt-in, behind a `differential` feature, never in the gating CI) feeds the same payloads to cookie parsers across languages — Rust (`cookie`, `biscotti`, `axum-extra`), Python (stdlib `SimpleCookie`, Werkzeug), Node (`cookie`, `tough-cookie`), Go (`net/http`), .NET (`Microsoft.Net.Http.Headers`), PHP (native `$_COOKIE`), and nginx (openresty — native `$cookie_<name>`, `lua-resty-cookie`, and `proxy` forwarding fidelity) — and tabulates where they diverge, to see whether kekse is *standard*-compliant (RFC 6265) and *expectation*-compliant (what real parsers do). It writes `COOKIE_MATRIX.md` (one row per tool, one column per test) and `COOKIE_MATRIX.csv`; a sidecar whose toolchain is absent degrades to `SKIP`.
+- **The differential matrix** (opt-in, behind a `differential` feature, never in the gating CI) feeds the same payloads to cookie parsers across languages — Rust (`cookie`, `biscotti`, `axum-extra`), Python (stdlib `SimpleCookie`, Werkzeug), Node (`cookie`, `tough-cookie`), Go (`net/http`), .NET (`Microsoft.Net.Http.Headers`), PHP (native `$_COOKIE`), nginx (openresty — native `$cookie_<name>`, `lua-resty-cookie`, and `proxy` forwarding fidelity), and Java (Tomcat's `Rfc6265CookieProcessor` + `LegacyCookieProcessor`, and the `jakarta.ws.rs` cookie API via both RESTEasy and Jersey) — and tabulates where they diverge, to see whether kekse is *standard*-compliant (RFC 6265) and *expectation*-compliant (what real parsers do). It writes `COOKIE_MATRIX.md` (one row per tool, one column per test) and `COOKIE_MATRIX.csv`; a sidecar whose toolchain is absent degrades to `SKIP`.
 
   ```
   cargo test -p keksbruch --features differential -- --ignored --nocapture
@@ -40,7 +40,7 @@ The library under test is [`kekse`](../kekse); depend on that instead.
 
 ## Third-party fixtures
 
-`fixtures/` vendors third-party parser source for the differential matrix (e.g. CloudFlare's BSD-licensed `lua-resty-cookie`) and drives others through their own build-time dependencies (Go, Node, PHP, Python, .NET).
+`fixtures/` vendors third-party parser source for the differential matrix (e.g. CloudFlare's BSD-licensed `lua-resty-cookie`) and drives others through their own build-time dependencies (Go, Node, PHP, Python, .NET, Java).
 Vendored files remain under their respective upstream licenses; see [`NOTICE`](NOTICE) and each file's header.
 
 ## License

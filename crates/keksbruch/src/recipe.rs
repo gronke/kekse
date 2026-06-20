@@ -141,6 +141,48 @@ impl<'a> KeksbruchRecipe<'a> {
                 w
             }
 
+            // ── structured / injection-flavoured (rich-type) shapes ──────────
+            // Request appends a `; m=ok` sentinel so a dropped pair is told apart
+            // from one that poisons its neighbour; Response omits it (a trailing
+            // `; m=ok` would parse as an unknown attribute, muddying the cookie).
+            (Keksbruch::BracketName { assoc }, Direction::Request) => {
+                if *assoc {
+                    format!("{n}[k]=v; m=ok").into_bytes()
+                } else {
+                    format!("{n}[]=nested; m=ok").into_bytes()
+                }
+            }
+            (Keksbruch::BracketName { assoc }, Direction::Response) => {
+                if *assoc {
+                    format!("{n}[k]=v").into_bytes()
+                } else {
+                    format!("{n}[]=nested").into_bytes()
+                }
+            }
+            (Keksbruch::ValuePayload(payload), Direction::Request) => {
+                format!("{n}={payload}; m=ok").into_bytes()
+            }
+            (Keksbruch::ValuePayload(payload), Direction::Response) => {
+                format!("{n}={payload}").into_bytes()
+            }
+            // Request-only in the corpus: an XSS-flavoured name, with or without a value.
+            (Keksbruch::MarkupName { valued }, _) => {
+                if *valued {
+                    format!("{n}=empty; m=ok").into_bytes()
+                } else {
+                    format!("{n}; m=ok").into_bytes()
+                }
+            }
+            (Keksbruch::EqualsOnly(k), _) => "=".repeat(*k).into_bytes(),
+            (Keksbruch::NulOnlyName, _) => {
+                let mut w = vec![0u8];
+                w.extend_from_slice(b"=; m=ok");
+                w
+            }
+            (Keksbruch::QuotedPairWithFlag, Direction::Response) => {
+                format!("\"{n}=surrounded-by-doublequote\" ; Secure").into_bytes()
+            }
+
             (Keksbruch::UnknownAttribute(attr), Direction::Response) => {
                 format!("{}; {attr}=High", self.base.baseline(Direction::Response)).into_bytes()
             }
@@ -183,7 +225,8 @@ impl<'a> KeksbruchRecipe<'a> {
                 | Keksbruch::ValuedFlag(_)
                 | Keksbruch::DuplicateAttribute(_)
                 | Keksbruch::NulInAttrName
-                | Keksbruch::NulInAttrValue,
+                | Keksbruch::NulInAttrValue
+                | Keksbruch::QuotedPairWithFlag,
                 Direction::Request,
             ) => self.base.baseline(Direction::Request).into_bytes(),
         }
