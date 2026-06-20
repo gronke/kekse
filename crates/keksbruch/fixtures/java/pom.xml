@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  keksbruch Java sidecar.
+
+  Builds a single self-contained (shaded) jar — target/sidecar.jar — that parses
+  cookies with four JVM parsers: Tomcat's Rfc6265 + Legacy cookie processors and
+  the jakarta.ws.rs cookie API via two providers (RESTEasy + Jersey). The harness
+  runs it with `java -jar target/sidecar.jar` from a JRE image; this jar carries
+  every dependency, which is why the harness can bind-mount just target/.
+
+  Built in CI by a maven image (see .github/workflows/matrix.yml). The compiler
+  release is pinned to 17 — a comfortable floor above every dependency's minimum
+  (RESTEasy/Jersey need 11+, Tomcat 9.0 needs 8+) — so the jar runs on any JDK >= 17,
+  independent of the JRE the harness happens to use.
+
+  Tomcat is pinned to the 9.0 line because it is the last that ships BOTH cookie
+  processors: the strict Rfc6265CookieProcessor and the lenient LegacyCookieProcessor
+  (removed in Tomcat 10.1/11). The processors live in org.apache.tomcat.util.http and
+  are independent of the servlet namespace, so 9.0 composes fine with the rest.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>net.gronke.keksbruch</groupId>
+  <artifactId>java-sidecar</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- Single source of truth for the pinned versions: used both for the
+         dependency coordinates and (via resource filtering) for the version
+         strings the sidecar reports, since a shaded jar loses per-jar manifests. -->
+    <tomcat.version>9.0.118</tomcat.version>
+    <jakarta.rs.version>3.1.0</jakarta.rs.version>
+    <resteasy.version>6.2.16.Final</resteasy.version>
+    <jersey.version>3.1.11</jersey.version>
+    <gson.version>2.14.0</gson.version>
+  </properties>
+
+  <dependencies>
+    <!-- Tomcat's request-cookie processors (Rfc6265CookieProcessor + the lenient
+         LegacyCookieProcessor) live in tomcat-embed-core. -->
+    <dependency>
+      <groupId>org.apache.tomcat.embed</groupId>
+      <artifactId>tomcat-embed-core</artifactId>
+      <version>${tomcat.version}</version>
+    </dependency>
+
+    <!-- The Jakarta REST API: Cookie.valueOf / NewCookie parsing is delegated to a
+         provider's RuntimeDelegate at run time, so the API alone is not enough. -->
+    <dependency>
+      <groupId>jakarta.ws.rs</groupId>
+      <artifactId>jakarta.ws.rs-api</artifactId>
+      <version>${jakarta.rs.version}</version>
+    </dependency>
+
+    <!-- Two providers, each supplying a RuntimeDelegate (discovered via
+         ServiceLoader) so the matrix can compare the same API across both. RESTEasy
+         is the one Keycloak sits on. -->
+    <dependency>
+      <groupId>org.jboss.resteasy</groupId>
+      <artifactId>resteasy-core</artifactId>
+      <version>${resteasy.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.glassfish.jersey.core</groupId>
+      <artifactId>jersey-common</artifactId>
+      <version>${jersey.version}</version>
+    </dependency>
+
+    <!-- Protocol JSON. Gson is tiny and independent of any JSON lib the providers
+         bundle, keeping the base64-JSONL contract isolated from their classpaths. -->
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>${gson.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <!-- The shaded jar replaces the main artifact, so it lands at target/sidecar.jar
+         (the path the SidecarSpec resolves). -->
+    <finalName>sidecar</finalName>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>true</filtering>
+      </resource>
+    </resources>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <!-- Don't rewrite the pom; this is a leaf build, not a published lib. -->
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <transformers>
+                <!-- java -jar reads Main-Class from the manifest. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <manifestEntries>
+                    <Main-Class>Sidecar</Main-Class>
+                  </manifestEntries>
+                </transformer>
+                <!-- Merge META-INF/services so BOTH providers' RuntimeDelegate
+                     registrations survive into the uber-jar (ServiceLoader then
+                     finds both). -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+              </transformers>
+              <filters>
+                <filter>
+                  <!-- Drop module descriptors (the jar runs on the classpath, not as
+                       a module) and any signature files (invalid once repackaged). -->
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>module-info.class</exclude>
+                    <exclude>META-INF/versions/*/module-info.class</exclude>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -23,6 +23,10 @@ on:
         description: "openresty image version, -bookworm flavor fixed (default 1.31.1.1-0)"
         required: false
         type: string
+      java_version:
+        description: "eclipse-temurin JDK version, -jre flavor fixed (default 25)"
+        required: false
+        type: string
   pull_request:
     paths:
       - "crates/**"
@@ -48,6 +52,7 @@ jobs:
       GO_VERSION: ${{ inputs.go_version }}
       PHP_VERSION: ${{ inputs.php_version }}
       OPENRESTY_VERSION: ${{ inputs.openresty_version }}
+      JAVA_VERSION: ${{ inputs.java_version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -76,17 +81,24 @@ jobs:
           echo "GO_IMAGE=golang:${GO_VERSION:-1.26}" >> "$GITHUB_ENV"
           echo "PHP_IMAGE=php:${PHP_VERSION:-8.5}-cli" >> "$GITHUB_ENV"
           echo "OPENRESTY_IMAGE=openresty/openresty:${OPENRESTY_VERSION:-1.31.1.1-0}-bookworm" >> "$GITHUB_ENV"
+          # Java: the harness runs the shaded jar from a lean JRE image (JAVA_IMAGE,
+          # matching ImageSpec); a matching maven image (same JDK) only builds the jar.
+          echo "JAVA_IMAGE=eclipse-temurin:${JAVA_VERSION:-25}-jre" >> "$GITHUB_ENV"
+          echo "MAVEN_IMAGE=maven:3.9-eclipse-temurin-${JAVA_VERSION:-25}" >> "$GITHUB_ENV"
 
-      # The PHP, Go, Node and nginx sidecars run containerized: the harness shells
+      # The PHP, Go, Node, nginx and Java sidecars run containerized: the harness shells
       # out to `docker run` against these images (Docker is preinstalled on
       # ubuntu-latest), so the runner needs none of those toolchains. Pre-pull so the
       # harness's runs are fast and a pull failure surfaces as its own step. (Locally,
-      # with no Docker, the harness falls back to host `php`/`go`/`node`/`resty`.)
+      # with no Docker, the harness falls back to host `php`/`go`/`node`/`resty`/`java`.)
+      # MAVEN_IMAGE builds the Java jar (next step); JAVA_IMAGE runs it.
       - name: Pull the containerized sidecar images
         run: |
           docker pull "$PHP_IMAGE"
           docker pull "$GO_IMAGE"
           docker pull "$NODE_IMAGE"
+          docker pull "$JAVA_IMAGE"
+          docker pull "$MAVEN_IMAGE"
 
       # The official openresty image installs openresty with --no-install-recommends,
       # so it ships *without* the `resty` CLI (which lives in the recommended
@@ -116,6 +128,26 @@ jobs:
         run: |
           fix="$PWD/crates/keksbruch/fixtures"
           docker run --rm -v "$fix:$fix" -w "$fix" "$NODE_IMAGE" npm ci
+
+      # The Java sidecar's four parser columns (Tomcat ×2; the jakarta.ws.rs API via
+      # RESTEasy + Jersey) live in a shaded jar. Build it once with the maven image into
+      # the bind-mounted fixtures (deps resolve into the container's ephemeral ~/.m2);
+      # the harness then runs the self-contained jar from JAVA_IMAGE — offline, no
+      # rebuild. The same JDK builds and runs (JAVA_VERSION drives both image tags).
+      - name: Build the Java sidecar jar
+        run: |
+          fix="$PWD/crates/keksbruch/fixtures"
+          docker run --rm -v "$fix:$fix" -w "$fix/java" "$MAVEN_IMAGE" \
+            mvn -q -B -DskipTests package
+
+      # Surface the Java sidecar's selfcheck (the harness runs the same line but
+      # discards it): it loads all four parsers and prints availability + versions, so a
+      # Java SKIP in the matrix is diagnosable from the log rather than silent.
+      - name: Smoke-test the Java sidecar
+        run: |
+          fix="$PWD/crates/keksbruch/fixtures"
+          docker run --rm -v "$fix:$fix" -w "$fix" "$JAVA_IMAGE" \
+            java -jar "$fix/java/target/sidecar.jar" --selfcheck
 
       # The matrix test is #[ignore]d, so --ignored runs exactly it. It writes
       # COOKIE_MATRIX.md and COOKIE_MATRIX.csv next to the crate; a sidecar

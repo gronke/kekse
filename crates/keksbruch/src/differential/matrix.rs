@@ -40,6 +40,15 @@ fn rfc_verdict(id: &str) -> Option<&'static str> {
         "dup-name" => Some("all duplicates kept"),
         "no-equals" | "empty-name" => Some("skip bad pair, keep rest"),
         "extra-equals" => Some("split on first `=`"),
+        "markup-no-equals" | "equals-bare" | "equals-double" => Some("skip bad pair, keep rest"),
+        "array-name"
+        | "assoc-name"
+        | "markup-name"
+        | "nul-empty-name"
+        | "resp-array-name"
+        | "resp-quoted-pair-flag" => Some("non-token name skipped"),
+        "bracket-value" | "resp-bracket-value" => Some("`[` `]` are cookie-octets"),
+        "json-value" | "resp-json-value" => Some("DQUOTE is not a cookie-octet"),
         "attr-unknown" | "attr-bad-maxage" | "attr-garbage-samesite" => {
             Some("keep cookie, ignore attr (§5.2)")
         }
@@ -161,7 +170,9 @@ pub fn render(scenarios: &[Scenario], columns: &[Column], versions: &[String]) -
     out.push_str(
         "Legend: `[n=v, …]` parsed pairs · `∅` parsed to nothing · `❌` whole header/cookie \
          rejected (fail-hard) · `n/a` direction not handled · `SKIP` parser unavailable · \
-         `PANIC` adapter panicked · `≡`/`≠` proxy forwarded the Cookie verbatim / altered. \
+         `PANIC` adapter panicked · `≡`/`≠` proxy forwarded the Cookie verbatim / altered · \
+         `⟨array⟩`/`⟨object⟩` the value was parsed as a non-string type, shown by name \
+         (e.g. PHP's `$_COOKIE` arrays/maps). \
          **Bold** = differs from the real-world *consensus*. \
          kekse is the subject under test, excluded from the consensus vote.\n\n",
     );
@@ -171,7 +182,10 @@ pub fn render(scenarios: &[Scenario], columns: &[Column], versions: &[String]) -
          exposes no general iterator, so its accepted pairs are enumerated by name. PHP's \
          `$_COOKIE` is parsed natively behind its built-in server (`php -S`), so it too is \
          request-only (no Set-Cookie parser → `n/a`) and shows PHP's own quirks — value \
-         urldecoding, cookie-name mangling, and transport-layer rejection of CR/LF/NUL. Go \
+         urldecoding, cookie-name mangling, and transport-layer rejection of CR/LF/NUL. A \
+         bracketed name (`name[]`/`name[k]`) makes PHP build an array/map — the only non-string \
+         types in this matrix, shown by type name (`⟨array⟩`/`⟨object⟩`); every other parser keeps \
+         a bracketed name a flat string or drops it as a non-token. Go \
          (`net/http`, since 1.23) and .NET (`Microsoft.Net.Http.Headers`) parse both \
          directions; a toolchain absent from the run shows `SKIP` (the CI matrix job has them all).\n\n",
     );
@@ -184,6 +198,18 @@ pub fn render(scenarios: &[Scenario], columns: &[Column], versions: &[String]) -
          table). `nginx/proxy` is a different axis: it reports whether a `proxy_pass` forwarded the \
          Cookie verbatim (`≡`), altered it (`≠`), or refused it (`❌`), and is excluded from the \
          consensus vote.\n\n",
+    );
+    out.push_str(
+        "The Java sidecar runs from a JVM image and adds four columns. Its two Tomcat columns are \
+         that server's request-cookie processors — `Tomcat RFC6265` (the strict default) and \
+         `Tomcat legacy` (the lenient RFC2109-era processor) — a strict-vs-lenient pair from one \
+         library; both are request-only (no inbound Set-Cookie parser → `n/a`). The two `Jakarta` \
+         columns are the same `jakarta.ws.rs` cookie API resolved through two providers, RESTEasy \
+         and Jersey, and parse **both** directions — the first JVM Set-Cookie parsers here. Keycloak \
+         is deliberately not its own column: it does not parse cookies itself but reads them through \
+         the JAX-RS layer (RESTEasy), so its request parsing *is* the `java/Jakarta RESTEasy` column; \
+         Keycloak's distinct contribution is Set-Cookie *construction* policy (SameSite/HttpOnly/\
+         Secure/Max-Age), which is generation rather than parsing and out of scope for this matrix.\n\n",
     );
     out.push_str(
         "Rows are tools, columns are tests. The `payload` row is the exact wire sent — \

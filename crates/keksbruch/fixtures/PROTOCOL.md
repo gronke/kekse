@@ -73,7 +73,7 @@ Internally tagged by `"outcome"`. Matrix rendering shown in parentheses.
 
 | `outcome` | extra fields | meaning | cell |
 |---|---|---|---|
-| `Cookies` | `cookies: [{name, value}, …]` | request parsed to pairs, in order | `[n=v, …]` / `∅` if empty |
+| `Cookies` | `cookies: [{name, value, shape?}, …]` | request parsed to pairs, in order | `[n=v, …]` / `∅` if empty |
 | `Rejected` | `error: string` | request parser rejected the whole header | `❌` |
 | `SetCookie` | `set_cookie: {…}` (below) | a `Set-Cookie` parsed | `name=value ;Attr;…` |
 | `SetCookieRejected` | `error: string` | `Set-Cookie` parser rejected the input | `❌` |
@@ -86,6 +86,11 @@ Internally tagged by `"outcome"`. Matrix rendering shown in parentheses.
 
 `set_cookie` fields: `name`, `value` (strings); `http_only`, `secure` (bool); `same_site`, `path`,
 `domain` (string or null); `max_age` (integer or null — kept as `i64` so a negative delta survives).
+
+A cookie's optional `shape` is `"scalar"` (the default — omit it), `"array"`, or `"object"`. A parser
+that builds a *rich type* from a bracketed name — only PHP's `$_COOKIE`, via `name[]=`/`name[k]=` — sets
+it and puts the JSON-encoded structure in `value`; the matrix then displays the type name
+(`⟨array⟩`/`⟨object⟩`). Every other sidecar omits `shape`, and the harness defaults a missing `shape` to scalar.
 
 The `error` (and `Panicked` `message`) strings are free-form, human-facing debug text — they are
 **not** rendered in the matrix (a rejection always shows `❌`), so they never affect a cell or the
@@ -113,4 +118,7 @@ column), not a parse, so the harness excludes them from the cross-parser consens
 2. Add the driver under `fixtures/` implementing the two modes above. `parse_cookies.php` (a server it
    boots and replays raw requests to) and `parse_cookies.py` (an in-process parser) are good templates.
 3. If it needs deps, vendor them under `fixtures/` or install them in CI (`.github/workflows/matrix.yml`),
-   the way node's `npm ci` and the vendored `lua/resty/cookie.lua` do.
+   the way node's `npm ci` and the vendored `lua/resty/cookie.lua` do. A compiled, dep-bearing sidecar can
+   be built once in CI into the bind-mounted `fixtures/` with its own toolchain image and then run from a
+   runtime image — see Java (`fixtures/java/`): a maven image shades `target/sidecar.jar`, which the harness
+   runs with `java -jar` from a JRE image.

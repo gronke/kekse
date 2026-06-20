@@ -121,10 +121,16 @@ function parse_request($wire)
     }
     $cookies = [];
     foreach ($decoded as $pair) {
-        $cookies[] = [
+        $cookie = [
             'name' => latin1_to_utf8(base64_decode($pair['n'] ?? '')),
             'value' => latin1_to_utf8(base64_decode($pair['v'] ?? '')),
         ];
+        // PHP is the lone parser that builds a rich type (array/map) from a
+        // bracketed name; carry its `shape` through so the matrix can badge it.
+        if (isset($pair['shape'])) {
+            $cookie['shape'] = $pair['shape'];
+        }
+        $cookies[] = $cookie;
     }
     return ['outcome' => 'Cookies', 'cookies' => $cookies];
 }

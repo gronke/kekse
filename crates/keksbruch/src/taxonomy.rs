@@ -110,4 +110,24 @@ pub enum Keksbruch {
     RawEmojiValue,
     /// A percent-encoded 4-byte UTF-8 emoji value: `n=%F0%9F%A4%96`.
     PercentEmojiValue,
+
+    // ── structured / injection-flavoured (rich-type) shapes ──────────────────
+    /// A bracketed (array-style) name: `n[]=nested` (indexed) or `n[k]=v`
+    /// (associative). PHP's `$_COOKIE` builds an array/map from these — the
+    /// matrix's only rich types; a token-strict parser drops the pair.
+    BracketName { assoc: bool },
+    /// A structured-looking *value* carried verbatim — a JSON object
+    /// `n={"a":"b"}`, a bracket value `n=[x]`, a quoted-markup value
+    /// `n="<img src=x>"`, or a plain control `n=yes`. The payload is the value.
+    ValuePayload(&'static str),
+    /// A markup/injection name: `<script>=empty` (valued) or bare `<script>`
+    /// (no `=`). Probes whether a non-token, XSS-flavoured name is kept.
+    MarkupName { valued: bool },
+    /// A degenerate run of `=` and nothing else: `=` (`k=1`) or `==` (`k=2`).
+    EqualsOnly(usize),
+    /// A name that is a single NUL byte with an empty value: `\0=`.
+    NulOnlyName,
+    /// A whole `name=value` wrapped in DQUOTEs plus a flag attribute:
+    /// `"sid=..." ; Secure` (Response).
+    QuotedPairWithFlag,
 }
