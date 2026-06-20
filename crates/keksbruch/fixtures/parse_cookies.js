@@ -8,6 +8,7 @@
 //
 // Protocol in:  {"id","direction":"request"|"response","wire_b64"}
 // Protocol out: {"id","by_dep":{"<dep>":{"outcome":...}}}
+// Full contract: ./PROTOCOL.md.
 "use strict";
 
 const readline = require("readline");

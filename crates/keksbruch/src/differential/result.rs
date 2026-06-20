@@ -17,6 +17,16 @@ pub enum ParseOutcome {
     SetCookie { set_cookie: SetCookieView },
     /// A `Set-Cookie` parser rejected the input.
     SetCookieRejected { error: String },
+    /// A *forwarding* target (nginx proxy) passed the request Cookie header on
+    /// byte-for-byte. A fidelity verdict, not a parse — kept off the consensus
+    /// vote (see `matrix::consensus`), so it never groups with the parse columns.
+    ForwardedVerbatim,
+    /// A forwarding target passed a Cookie header on, but altered the bytes;
+    /// `forwarded` is what the upstream received.
+    ForwardedAltered { forwarded: String },
+    /// A forwarding target did not pass the Cookie on — it rejected the request
+    /// (e.g. nginx 400 on a malformed header) or dropped the header.
+    ForwardedRejected,
     /// This parser does not handle this direction (e.g. biscotti has no
     /// `Set-Cookie` parser; a request-only library asked for a response).
     NotApplicable,
@@ -59,9 +69,12 @@ impl ParseOutcome {
     pub fn cell(&self) -> String {
         match self {
             ParseOutcome::Cookies { cookies } => render_cookies(cookies),
-            ParseOutcome::Rejected { .. } => "✗reject".to_string(),
+            ParseOutcome::Rejected { .. } => "❌".to_string(),
             ParseOutcome::SetCookie { set_cookie } => set_cookie.cell(),
-            ParseOutcome::SetCookieRejected { .. } => "✗reject".to_string(),
+            ParseOutcome::SetCookieRejected { .. } => "❌".to_string(),
+            ParseOutcome::ForwardedVerbatim => "≡".to_string(),
+            ParseOutcome::ForwardedAltered { forwarded } => format!("≠ {}", short(forwarded)),
+            ParseOutcome::ForwardedRejected => "❌".to_string(),
             ParseOutcome::NotApplicable => "n/a".to_string(),
             ParseOutcome::Panicked { .. } => "PANIC".to_string(),
             ParseOutcome::Skipped => "SKIP".to_string(),
@@ -71,7 +84,7 @@ impl ParseOutcome {
     /// The key the consensus vote groups on: the very string the cell shows, so
     /// "agreement" means "rendered the same outcome" and the consensus column
     /// reads identically to the parser cells. A request `Rejected` and a
-    /// Set-Cookie `SetCookieRejected` both render `✗reject`, so they already group
+    /// Set-Cookie `SetCookieRejected` both render `❌`, so they already group
     /// together. (`n/a` and `SKIP` are excluded from the vote by the caller.)
     pub fn consensus_key(&self) -> String {
         self.cell()

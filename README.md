@@ -28,6 +28,8 @@ Copyright © 2026 Stefan Grönke.
 
 Licensed under the MIT License — see [`LICENSE`](LICENSE).
 
+Some third-party test fixtures bundled in [`keksbruch`](crates/keksbruch) (e.g. the BSD-2-Clause `lua-resty-cookie`) remain under their own licenses — see [`crates/keksbruch/NOTICE`](crates/keksbruch/NOTICE).
+
 This software is provided free of charge and **“as is,” without warranty of any kind**, as specified in the MIT License.
 No support, maintenance, updates, or assurance of correctness, security, or fitness for a particular purpose is provided.
 
