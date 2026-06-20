@@ -6,6 +6,23 @@ name: Differential matrix
 # its own workflow, separate from the gating CI, since it is informational.
 on:
   workflow_dispatch:
+    inputs:
+      node_version:
+        description: "node image version (Docker path only; default 24)"
+        required: false
+        type: string
+      go_version:
+        description: "golang image version (Docker path only; default 1.26)"
+        required: false
+        type: string
+      php_version:
+        description: "php image X.Y version, -cli flavor fixed (default 8.5)"
+        required: false
+        type: string
+      openresty_version:
+        description: "openresty image version, -bookworm flavor fixed (default 1.31.1.1-0)"
+        required: false
+        type: string
   pull_request:
     paths:
       - "crates/**"
@@ -23,6 +40,14 @@ jobs:
   matrix:
     name: cross-language parser matrix
     runs-on: ubuntu-latest
+    # Optional per-sidecar version overrides (set via workflow_dispatch; empty on
+    # pull_request/push → the defaults below and in sidecar.rs apply). Keep these
+    # in sync with ImageSpec::default_version in src/differential/sidecar.rs.
+    env:
+      NODE_VERSION: ${{ inputs.node_version }}
+      GO_VERSION: ${{ inputs.go_version }}
+      PHP_VERSION: ${{ inputs.php_version }}
+      OPENRESTY_VERSION: ${{ inputs.openresty_version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -37,19 +62,60 @@ jobs:
       - name: Python sidecar deps (Werkzeug; SimpleCookie is stdlib)
         run: python -m pip install -r crates/keksbruch/fixtures/requirements.txt
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Node sidecar deps (cookie, tough-cookie)
-        run: npm install --prefix crates/keksbruch/fixtures
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.23"
-
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
+
+      # Resolve the image tags once, honouring the optional *_VERSION overrides, so
+      # the pull, the npm ci, and the harness (which resolves the same env in Rust)
+      # all use one tag. Defaults here MUST match ImageSpec::default_version in
+      # src/differential/sidecar.rs.
+      - name: Resolve sidecar image tags
+        run: |
+          echo "NODE_IMAGE=node:${NODE_VERSION:-24}" >> "$GITHUB_ENV"
+          echo "GO_IMAGE=golang:${GO_VERSION:-1.26}" >> "$GITHUB_ENV"
+          echo "PHP_IMAGE=php:${PHP_VERSION:-8.5}-cli" >> "$GITHUB_ENV"
+          echo "OPENRESTY_IMAGE=openresty/openresty:${OPENRESTY_VERSION:-1.31.1.1-0}-bookworm" >> "$GITHUB_ENV"
+
+      # The PHP, Go, Node and nginx sidecars run containerized: the harness shells
+      # out to `docker run` against these images (Docker is preinstalled on
+      # ubuntu-latest), so the runner needs none of those toolchains. Pre-pull so the
+      # harness's runs are fast and a pull failure surfaces as its own step. (Locally,
+      # with no Docker, the harness falls back to host `php`/`go`/`node`/`resty`.)
+      - name: Pull the containerized sidecar images
+        run: |
+          docker pull "$PHP_IMAGE"
+          docker pull "$GO_IMAGE"
+          docker pull "$NODE_IMAGE"
+
+      # The official openresty image installs openresty with --no-install-recommends,
+      # so it ships *without* the `resty` CLI (which lives in the recommended
+      # openresty-resty package). The nginx sidecar's driver runs under `resty`, so
+      # derive an image that adds it — the base already carries the openresty apt repo
+      # and key, so it is a single install. Re-tag as the same ref the harness resolves
+      # from ImageSpec (openresty/openresty:<ver>-bookworm) so `docker run` uses it.
+      - name: Add the resty CLI to the openresty image
+        run: |
+          printf 'FROM %s\nRUN apt-get update && apt-get install -y --no-install-recommends openresty-resty && rm -rf /var/lib/apt/lists/*\n' "$OPENRESTY_IMAGE" \
+            | docker build -t "$OPENRESTY_IMAGE" -
+
+      # Surface the nginx sidecar's selfcheck (the harness runs the same line but
+      # discards its output): it boots nginx in the image and probes all three deps,
+      # so the printed JSON shows availability + versions — making an nginx SKIP in the
+      # matrix diagnosable from the log rather than silent.
+      - name: Smoke-test the nginx sidecar
+        run: |
+          fix="$PWD/crates/keksbruch/fixtures"
+          docker run --rm -v "$fix:$fix" -w "$fix" "$OPENRESTY_IMAGE" \
+            resty "$fix/parse_cookies_nginx.lua" --selfcheck
+
+      # Node alone has dependencies (cookie, tough-cookie): install them into the
+      # bind-mounted fixtures with the image's own npm, so the runner still needs no
+      # Node toolchain. The harness then runs the sidecar from the same node image.
+      - name: Install Node sidecar deps in the node image
+        run: |
+          fix="$PWD/crates/keksbruch/fixtures"
+          docker run --rm -v "$fix:$fix" -w "$fix" "$NODE_IMAGE" npm ci
 
       # The matrix test is #[ignore]d, so --ignored runs exactly it. It writes
       # COOKIE_MATRIX.md and COOKIE_MATRIX.csv next to the crate; a sidecar

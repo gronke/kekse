@@ -339,6 +339,70 @@ pub fn scenarios() -> Vec<Scenario> {
             Keksbruch::CrlfInValue,
             Expect::ResponseNone,
         ),
+        // ── value corruption (Response) ─────────────────────────────────────
+        // The Set-Cookie analogues of the request-value Keksbruch variants, so the
+        // response-only parsers (go/.NET/tough-cookie/SimpleCookie) are exercised
+        // on the same malformed *values*, not only on attributes. kekse refuses a
+        // value carrying a non-cookie-octet in both modes (a value reject is harder
+        // than an unknown-attribute reject, which is strict-only).
+        s(
+            "resp-ws-surrounding",
+            "SP around the Set-Cookie name and value are trimmed away",
+            Response,
+            "SID",
+            Keksbruch::SurroundingWhitespace,
+            Expect::ResponseValue {
+                value: "v",
+                max_age: None,
+                http_only: false,
+                secure: false,
+            },
+        ),
+        s(
+            "resp-empty-value",
+            "an empty Set-Cookie value is a valid, empty cookie",
+            Response,
+            "SID",
+            Keksbruch::EmptyValue,
+            Expect::ResponseValue {
+                value: "",
+                max_age: None,
+                http_only: false,
+                secure: false,
+            },
+        ),
+        s(
+            "resp-ctl-nul",
+            "a NUL in the Set-Cookie value is not a cookie-octet — the cookie is refused",
+            Response,
+            "SID",
+            Keksbruch::NulInValue,
+            Expect::ResponseNone,
+        ),
+        s(
+            "resp-ctl-other",
+            "a C0 control byte in the Set-Cookie value is refused",
+            Response,
+            "SID",
+            Keksbruch::ControlInValue(0x01),
+            Expect::ResponseNone,
+        ),
+        s(
+            "resp-quote-interior",
+            "an interior DQUOTE is not a cookie-octet — the cookie is refused",
+            Response,
+            "SID",
+            Keksbruch::InteriorQuote,
+            Expect::ResponseNone,
+        ),
+        s(
+            "resp-non-ascii",
+            "a raw non-ASCII Set-Cookie value is refused (not cookie-octets)",
+            Response,
+            "SID",
+            Keksbruch::RawNonAsciiValue,
+            Expect::ResponseNone,
+        ),
         // ── extra coverage: NUL positions, HTAB, multibyte UTF-8 ────────────
         s(
             "nul-in-name",

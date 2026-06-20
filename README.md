@@ -27,3 +27,5 @@ It targets Rust 1.77.2.
 Copyright © 2026 Stefan Grönke.
 
 Licensed under the MIT License — see [`LICENSE`](LICENSE).
+
+Some third-party test fixtures bundled in [`keksbruch`](crates/keksbruch) (e.g. the BSD-2-Clause `lua-resty-cookie`) remain under their own licenses — see [`crates/keksbruch/NOTICE`](crates/keksbruch/NOTICE).

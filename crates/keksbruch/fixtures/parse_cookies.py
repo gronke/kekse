@@ -8,6 +8,7 @@ can be loaded, then exits.
 
 Protocol in:  {"id","direction":"request"|"response","wire_b64"}
 Protocol out: {"id","by_dep":{"<dep>":{"outcome":...}}}
+Full contract: ./PROTOCOL.md.
 """
 import sys
 import json
@@ -92,7 +93,7 @@ def simplecookie_response(wire):
     except CookieError as e:
         return {"outcome": "SetCookieRejected", "error": "CookieError: " + str(e)}
     except Exception as e:
-        return {"outcome": "SetCookieRejected", "error": type(e).__name__}
+        return {"outcome": "SetCookieRejected", "error": type(e).__name__ + ": " + str(e)}
 
 
 def werkzeug_request(wire):
@@ -106,7 +107,7 @@ def werkzeug_request(wire):
         return {"outcome": "Cookies",
                 "cookies": [{"name": k, "value": v} for k, v in items]}
     except Exception as e:
-        return {"outcome": "Rejected", "error": type(e).__name__}
+        return {"outcome": "Rejected", "error": type(e).__name__ + ": " + str(e)}
 
 
 def main():

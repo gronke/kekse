@@ -14,13 +14,13 @@ A `KeksbruchRecipe` renders the same logical cookie two ways: a clean `baseline(
   cargo test -p keksbruch
   ```
 
-- **The differential matrix** (opt-in, behind a `differential` feature, never in the gating CI) feeds the same payloads to cookie parsers across languages — Rust (`cookie`, `biscotti`), Python (stdlib `SimpleCookie`, Werkzeug), Node (`cookie`, `tough-cookie`), Go (`net/http`), and .NET (`Microsoft.Net.Http.Headers`) — and tabulates where they diverge, to see whether kekse is *standard*-compliant (RFC 6265) and *expectation*-compliant (what real parsers do). It writes `COOKIE_MATRIX.md` (one row per tool, one column per test) and `COOKIE_MATRIX.csv`; a sidecar whose toolchain is absent degrades to `SKIP`.
+- **The differential matrix** (opt-in, behind a `differential` feature, never in the gating CI) feeds the same payloads to cookie parsers across languages — Rust (`cookie`, `biscotti`, `axum-extra`), Python (stdlib `SimpleCookie`, Werkzeug), Node (`cookie`, `tough-cookie`), Go (`net/http`), .NET (`Microsoft.Net.Http.Headers`), PHP (native `$_COOKIE`), and nginx (openresty — native `$cookie_<name>`, `lua-resty-cookie`, and `proxy` forwarding fidelity) — and tabulates where they diverge, to see whether kekse is *standard*-compliant (RFC 6265) and *expectation*-compliant (what real parsers do). It writes `COOKIE_MATRIX.md` (one row per tool, one column per test) and `COOKIE_MATRIX.csv`; a sidecar whose toolchain is absent degrades to `SKIP`.
 
   ```
   cargo test -p keksbruch --features differential -- --ignored --nocapture
   ```
 
-  The **Differential matrix** GitHub Action runs this in a clean environment with every toolchain installed (so no column is `SKIP`) and uploads the two files as build artifacts.
+  The **Differential matrix** GitHub Action runs this in a clean environment with every toolchain installed (so no column is `SKIP`) and uploads the two files as build artifacts. Each sidecar speaks a small base64-JSONL protocol — see [`fixtures/PROTOCOL.md`](fixtures/PROTOCOL.md) for the contract and how to add one.
 
 ## Why
 
@@ -37,6 +37,11 @@ The library under test is [`kekse`](../kekse); depend on that instead.
 - keksbruch generates malformed and edge-case cookie wire (injection-style bytes, smuggled `;`, control characters, truncated escapes) purely as **test input**, to probe where parsers diverge. It is a measurement tool, not a certification.
 - The differential matrix reports *observed divergence* between parsers — an insight and comparison aid, **not** a conformance certification of any parser, including kekse.
 - The corpus is not claimed to be exhaustive; it grows with every test added, and passing Layer A does not prove a parser free of defects.
+
+## Third-party fixtures
+
+`fixtures/` vendors third-party parser source for the differential matrix (e.g. CloudFlare's BSD-licensed `lua-resty-cookie`) and drives others through their own build-time dependencies (Go, Node, PHP, Python, .NET).
+Vendored files remain under their respective upstream licenses; see [`NOTICE`](NOTICE) and each file's header.
 
 ## License
 

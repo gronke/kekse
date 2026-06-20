@@ -6,6 +6,7 @@
 // per line. `--selfcheck` reports availability + version, then exits.
 //
 // stdlib-only, so `go run parse_cookies.go` needs no go.mod.
+// Full contract: ./PROTOCOL.md.
 package main
 
 import (
@@ -15,13 +16,15 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 )
 
 func selfcheck() {
 	out := map[string]any{
 		"available": map[string]bool{"net/http": true},
 		"versions": map[string]string{
-			"runtime":  runtime.Version(),
+			// "go1.26.4" → "Go 1.26.4", matching the other sidecars' "<Runtime> <X.Y.Z>".
+			"runtime":  "Go " + strings.TrimPrefix(runtime.Version(), "go"),
 			"net/http": "stdlib",
 		},
 	}

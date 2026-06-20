@@ -81,7 +81,12 @@ impl<'a> KeksbruchRecipe<'a> {
             (Keksbruch::ControlInValue(byte), Direction::Response) => splice(n, *byte, b""),
 
             (Keksbruch::UnbalancedQuote, _) => format!("{n}=\"v; m=ok").into_bytes(),
-            (Keksbruch::InteriorQuote, _) => format!("{n}=a\"b; m=ok").into_bytes(),
+            (Keksbruch::InteriorQuote, Direction::Request) => {
+                format!("{n}=a\"b; m=ok").into_bytes()
+            }
+            // Response: just the corrupted value, so the cookie — not a trailing
+            // `; m=ok` (which would read as an unknown attribute) — is what's tested.
+            (Keksbruch::InteriorQuote, Direction::Response) => format!("{n}=a\"b").into_bytes(),
 
             (Keksbruch::TruncatedPercent, _) => format!("{n}=%4; m=ok").into_bytes(),
             (Keksbruch::InvalidUtf8Percent, _) => format!("{n}=%FF; m=ok").into_bytes(),
@@ -98,9 +103,13 @@ impl<'a> KeksbruchRecipe<'a> {
             }
 
             (Keksbruch::EmptyName, _) => "=v; m=ok".to_string().into_bytes(),
-            (Keksbruch::EmptyValue, _) => format!("{n}=; m=ok").into_bytes(),
+            (Keksbruch::EmptyValue, Direction::Request) => format!("{n}=; m=ok").into_bytes(),
+            (Keksbruch::EmptyValue, Direction::Response) => format!("{n}=").into_bytes(),
 
-            (Keksbruch::RawNonAsciiValue, _) => format!("{n}=café; m=ok").into_bytes(),
+            (Keksbruch::RawNonAsciiValue, Direction::Request) => {
+                format!("{n}=café; m=ok").into_bytes()
+            }
+            (Keksbruch::RawNonAsciiValue, Direction::Response) => format!("{n}=café").into_bytes(),
             (Keksbruch::NonAsciiName, _) => "naïve=v; m=ok".to_string().into_bytes(),
 
             (Keksbruch::NulInName, _) => {

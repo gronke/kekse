@@ -4,6 +4,7 @@
 // Microsoft.Net.Http.Headers — CookieHeaderValue for a request Cookie header,
 // SetCookieHeaderValue for a Set-Cookie line. Emits one normalized JSONL result
 // per line. `--selfcheck` reports availability + version, then exits.
+// Full contract: ../PROTOCOL.md.
 
 using System.Text;
 using System.Text.Json;
@@ -66,7 +67,7 @@ static object ParseRequest(string wire)
             .ToList();
         return new Dictionary<string, object> { ["outcome"] = "Cookies", ["cookies"] = pairs };
     }
-    return new Dictionary<string, object> { ["outcome"] = "Rejected", ["error"] = "TryParseList failed" };
+    return new Dictionary<string, object> { ["outcome"] = "Rejected", ["error"] = "CookieHeaderValue.TryParseList returned false" };
 }
 
 static object ParseResponse(string wire)
@@ -92,5 +93,5 @@ static object ParseResponse(string wire)
         };
         return new Dictionary<string, object> { ["outcome"] = "SetCookie", ["set_cookie"] = view };
     }
-    return new Dictionary<string, object> { ["outcome"] = "SetCookieRejected", ["error"] = "TryParse failed" };
+    return new Dictionary<string, object> { ["outcome"] = "SetCookieRejected", ["error"] = "SetCookieHeaderValue.TryParse returned false" };
 }

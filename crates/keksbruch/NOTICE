@@ -1,0 +1,24 @@
+keksbruch — THIRD-PARTY NOTICES
+===============================
+
+keksbruch's differential matrix exercises third-party cookie parsers. Most are pulled
+at build time through each ecosystem's own dependency manifest — fixtures/package.json,
+fixtures/requirements.txt, fixtures/java/pom.xml, fixtures/dotnet/parse_cookies.csproj —
+and are NOT redistributed in this repository; they remain governed by their respective
+upstream licenses.
+
+The following third-party source is VENDORED (redistributed verbatim) in this repository
+and retains its original license and copyright:
+
+------------------------------------------------------------------------------
+fixtures/lua/resty/cookie.lua
+
+    lua-resty-cookie — https://github.com/cloudflare/lua-resty-cookie
+    Pinned commit 9ecca85a37f946575d40b12de9e6a1a39c128b68 (_VERSION "0.01").
+
+    Copyright (C) 2013-2016 Jiale Zhi (calio) <vipcalio@gmail.com>, CloudFlare Inc.
+    Copyright (C) 2013      Yichun Zhang (agentzh) <agentzh@gmail.com>, CloudFlare Inc.
+
+    Licensed under the BSD 2-Clause "Simplified" License. The full license text is
+    reproduced in the header of the vendored file. Included unmodified.
+------------------------------------------------------------------------------
