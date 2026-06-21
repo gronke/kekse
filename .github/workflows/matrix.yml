@@ -163,11 +163,53 @@ jobs:
           f=crates/keksbruch/COOKIE_MATRIX.md
           if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; fi
 
-      - name: Upload matrix (Markdown + CSV)
+      - name: Upload matrix (Markdown + CSV + HTML)
         uses: actions/upload-artifact@v4
         with:
           name: keksbruch-matrix
           path: |
             crates/keksbruch/COOKIE_MATRIX.md
             crates/keksbruch/COOKIE_MATRIX.csv
+            crates/keksbruch/COOKIE_MATRIX.html
           if-no-files-found: error
+
+  # Publish the matrix's three files to GitHub Pages: the HTML report is the
+  # well-readable view, with the .md and .csv beside it as downloads (the report
+  # links to them by relative path). There is deliberately no index.html — the
+  # files are served at their own URLs, entry point COOKIE_MATRIX.html. Runs
+  # only on a push to main; never on pull_request (a fork cannot, and must not,
+  # publish). One-time repo setup: Settings → Pages → Source = "GitHub Actions".
+  deploy-pages:
+    name: publish matrix to GitHub Pages
+    needs: matrix
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+      contents: read
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    steps:
+      # The matrix job uploaded the three files under a common ancestor, so they
+      # land flat in site/ (site/COOKIE_MATRIX.{md,csv,html}).
+      - name: Download the matrix artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: keksbruch-matrix
+          path: site
+      # Serve the files verbatim — no Jekyll build, no index synthesis.
+      - name: Mark the site as static
+        run: touch site/.nojekyll
+      - uses: actions/configure-pages@v5
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -14,13 +14,13 @@ A `KeksbruchRecipe` renders the same logical cookie two ways: a clean `baseline(
   cargo test -p keksbruch
   ```
 
-- **The differential matrix** (opt-in, behind a `differential` feature, never in the gating CI) feeds the same payloads to cookie parsers across languages — Rust (`cookie`, `biscotti`, `axum-extra`), Python (stdlib `SimpleCookie`, Werkzeug), Node (`cookie`, `tough-cookie`), Go (`net/http`), .NET (`Microsoft.Net.Http.Headers`), PHP (native `$_COOKIE`), nginx (openresty — native `$cookie_<name>`, `lua-resty-cookie`, and `proxy` forwarding fidelity), and Java (Tomcat's `Rfc6265CookieProcessor` + `LegacyCookieProcessor`, and the `jakarta.ws.rs` cookie API via both RESTEasy and Jersey) — and tabulates where they diverge, to see whether kekse is *standard*-compliant (RFC 6265) and *expectation*-compliant (what real parsers do). It writes `COOKIE_MATRIX.md` (one row per tool, one column per test) and `COOKIE_MATRIX.csv`; a sidecar whose toolchain is absent degrades to `SKIP`.
+- **The differential matrix** (opt-in, behind a `differential` feature, never in the gating CI) feeds the same payloads to cookie parsers across languages — Rust (`cookie`, `biscotti`, `axum-extra`), Python (stdlib `SimpleCookie`, Werkzeug), Node (`cookie`, `tough-cookie`), Go (`net/http`), .NET (`Microsoft.Net.Http.Headers`), PHP (native `$_COOKIE`), nginx (openresty — native `$cookie_<name>`, `lua-resty-cookie`, and `proxy` forwarding fidelity), and Java (Tomcat's `Rfc6265CookieProcessor` + `LegacyCookieProcessor`, and the `jakarta.ws.rs` cookie API via both RESTEasy and Jersey) — and tabulates where they diverge, to see whether kekse is *standard*-compliant (RFC 6265) and *expectation*-compliant (what real parsers do). It writes `COOKIE_MATRIX.md` (one row per tool, one column per test), `COOKIE_MATRIX.csv`, and a self-contained `COOKIE_MATRIX.html` report — every untrusted cell entity-encoded, so a corrupted cookie's markup renders as text and never as live HTML; a sidecar whose toolchain is absent degrades to `SKIP`.
 
   ```
   cargo test -p keksbruch --features differential -- --ignored --nocapture
   ```
 
-  The **Differential matrix** GitHub Action runs this in a clean environment with every toolchain installed (so no column is `SKIP`) and uploads the two files as build artifacts. Each sidecar speaks a small base64-JSONL protocol — see [`fixtures/PROTOCOL.md`](fixtures/PROTOCOL.md) for the contract and how to add one.
+  The **Differential matrix** GitHub Action runs this in a clean environment with every toolchain installed (so no column is `SKIP`), uploads the three files as build artifacts, and (on `main`) publishes them to **GitHub Pages** — the HTML report (`COOKIE_MATRIX.html`) is the readable view, the `.md`/`.csv` sit beside it as downloads. The deploy job reports the live URL. Each sidecar speaks a small base64-JSONL protocol — see [`fixtures/PROTOCOL.md`](fixtures/PROTOCOL.md) for the contract and how to add one.
 
 ## Why
 

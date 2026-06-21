@@ -16,8 +16,10 @@ use result::ParseOutcome;
 use rust_comparators::rust_comparators;
 
 /// Run the whole matrix: every scenario through the in-process Rust comparators
-/// and the language sidecars, render it to markdown, print it, and write
-/// `COOKIE_MATRIX.md` next to the crate. Returns the markdown.
+/// and the language sidecars; render it to Markdown, CSV, and a self-contained
+/// HTML report; print the Markdown; and write `COOKIE_MATRIX.{md,csv,html}`
+/// next to the crate (the HTML report is the GitHub Pages view). Returns the
+/// Markdown.
 pub fn run_matrix() -> String {
     let scenarios = scenarios();
     let mut columns: Vec<Column> = Vec::new();
@@ -59,6 +61,12 @@ pub fn run_matrix() -> String {
     let csv = matrix::render_csv(&scenarios, &columns);
     if let Err(e) = std::fs::write(dir.join("COOKIE_MATRIX.csv"), &csv) {
         eprintln!("could not write COOKIE_MATRIX.csv: {e}");
+    }
+    // The self-contained HTML report — the well-readable, publishable view (the
+    // matrix's GitHub Pages page). Not printed; the Markdown is the stdout view.
+    let html = matrix::render_html(&scenarios, &columns, &versions);
+    if let Err(e) = std::fs::write(dir.join("COOKIE_MATRIX.html"), &html) {
+        eprintln!("could not write COOKIE_MATRIX.html: {e}");
     }
     markdown
 }

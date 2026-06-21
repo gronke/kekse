@@ -24,6 +24,8 @@ cookie = { workspace = true, optional = true }
 biscotti = { workspace = true, optional = true }
 axum-extra = { workspace = true, optional = true }
 csv = { workspace = true, optional = true }
+# Entity-encode untrusted cell content for the matrix's HTML report.
+html-escape = { workspace = true, optional = true }
 # Only to build the HeaderMap the axum-extra extractor reads from.
 http = { workspace = true, optional = true }
 
@@ -41,6 +43,7 @@ differential = [
     "dep:axum-extra",
     "dep:http",
     "dep:csv",
+    "dep:html-escape",
 ]
 
 [dev-dependencies]

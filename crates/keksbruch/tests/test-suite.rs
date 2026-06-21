@@ -6,10 +6,12 @@
 //! ```
 //!
 //! It renders the `(Lang+Dependency) × Scenario` matrix to stdout and writes
-//! both `COOKIE_MATRIX.md` (scenario rows, with a `payload` column) and
-//! `COOKIE_MATRIX.csv` (transposed: one row per tool, one column per test).
-//! Comparators whose interpreter or dependency is missing degrade to `SKIP`, so
-//! a partial run still produces a useful matrix.
+//! three views beside the crate: `COOKIE_MATRIX.md` (scenario rows, with a
+//! `payload` column), `COOKIE_MATRIX.csv` (transposed: one row per tool, one
+//! column per test), and a self-contained `COOKIE_MATRIX.html` report (every
+//! untrusted cell entity-encoded; the GitHub Pages view). Comparators whose
+//! interpreter or dependency is missing degrade to `SKIP`, so a partial run
+//! still produces a useful matrix.
 #![cfg(feature = "differential")]
 
 #[test]
