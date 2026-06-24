@@ -31,7 +31,7 @@ use crate::same_site::SameSite;
 /// only when set. The builder does **not** validate the name (check
 /// [`is_cookie_name`](crate::is_cookie_name) at the call site if it is
 /// untrusted); [`parse`](SetCookie::parse) does.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SetCookie<'a> {
     cookie: Cookie<'a>,
     attributes: CookieAttributes<'a>,
@@ -112,7 +112,9 @@ impl<'a> SetCookie<'a> {
             } else if attr.eq_ignore_ascii_case(attr_name::SECURE) {
                 set_cookie.attributes.secure = true;
             } else if attr.eq_ignore_ascii_case(attr_name::SAME_SITE) {
-                set_cookie.attributes.same_site = parse_same_site(val);
+                // `.ok()` drops an unrecognised token (keeping the cookie), same as
+                // a malformed Max-Age — see `SameSite`'s case-insensitive `FromStr`.
+                set_cookie.attributes.same_site = val.parse::<SameSite>().ok();
             } else if attr.eq_ignore_ascii_case(attr_name::PATH) {
                 // An invalid value (control byte, `;`, non-ASCII) is dropped like a
                 // malformed Max-Age — the cookie is kept, the attribute discarded.
@@ -284,20 +286,6 @@ impl<'a> From<(Cookie<'a>, CookieAttributes<'a>)> for SetCookie<'a> {
     }
 }
 
-/// Parse a `SameSite` attribute value ASCII-case-insensitively; `None` for an
-/// unrecognised token (the attribute is then dropped, not the cookie).
-fn parse_same_site(value: &str) -> Option<SameSite> {
-    if value.eq_ignore_ascii_case("Strict") {
-        Some(SameSite::Strict)
-    } else if value.eq_ignore_ascii_case("Lax") {
-        Some(SameSite::Lax)
-    } else if value.eq_ignore_ascii_case("None") {
-        Some(SameSite::None)
-    } else {
-        None
-    }
-}
-
 /// Canonical `Set-Cookie` attribute names — the single source of truth shared by
 /// the parser (matched ASCII-case-insensitively) and the serializer (the
 /// `Display` for `SetCookieAttribute`), so the reader and the writer can't drift.
@@ -318,7 +306,7 @@ mod attr_name {
 /// come from the `attr_name` constants the parser also matches, so the wire form
 /// has a single source of truth. Boolean flags are presence-only: `HttpOnly` and
 /// `Secure` render bare, with no `=value`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SetCookieAttribute<'a> {
     HttpOnly,
     SameSite(SameSite),
@@ -349,11 +337,16 @@ impl TryFrom<SetCookie<'_>> for http::HeaderValue {
     type Error = http::header::InvalidHeaderValue;
 
     /// Render the **`Set-Cookie`** form (via
-    /// [`to_set_cookie`](SetCookie::to_set_cookie)) into a `HeaderValue`. The
-    /// managed encodings are always visible-ASCII and never fail; only
-    /// [`Raw`](ValueEncoding::Raw), where the caller owns wire-correctness, can
-    /// produce bytes a header value rejects. For the request `Cookie:` form,
-    /// build from [`to_request_pair`](SetCookie::to_request_pair).
+    /// [`to_set_cookie`](SetCookie::to_set_cookie)) into a `HeaderValue`. For the
+    /// request `Cookie:` form, build from
+    /// [`to_request_pair`](SetCookie::to_request_pair).
+    ///
+    /// # Errors
+    ///
+    /// Only under [`Raw`](ValueEncoding::Raw), where the caller owns
+    /// wire-correctness, and only for a byte no header value may hold (CR, LF,
+    /// NUL, or another control). The managed encodings are always header-safe and
+    /// never error here.
     fn try_from(cookie: SetCookie<'_>) -> Result<Self, Self::Error> {
         http::HeaderValue::try_from(cookie.to_set_cookie())
     }
@@ -362,6 +355,13 @@ impl TryFrom<SetCookie<'_>> for http::HeaderValue {
 impl TryFrom<&SetCookie<'_>> for http::HeaderValue {
     type Error = http::header::InvalidHeaderValue;
 
+    /// Borrowing counterpart to the owned `SetCookie` → `HeaderValue` conversion
+    /// — renders the `Set-Cookie` form without consuming the cookie.
+    ///
+    /// # Errors
+    ///
+    /// Same as the owned conversion: only [`Raw`](ValueEncoding::Raw) with a
+    /// header-unsafe byte (CR, LF, NUL, or another control) errors.
     fn try_from(cookie: &SetCookie<'_>) -> Result<Self, Self::Error> {
         http::HeaderValue::try_from(cookie.to_set_cookie())
     }
@@ -565,6 +565,28 @@ mod tests {
         // at the header boundary rather than silently emitted.
         let c = SetCookie::new("n", "x\r\nSet-Cookie: evil=1").with_encoding(ValueEncoding::Raw);
         assert!(http::HeaderValue::try_from(c).is_err());
+    }
+
+    #[test]
+    fn raw_lets_non_ascii_through_construction_but_not_as_text() {
+        // Raw hands wire-correctness to the caller. Non-ASCII UTF-8 bytes (>= 0x80)
+        // are obs-text: HeaderValue *construction* accepts them — only CR/LF/NUL and
+        // other controls are refused — so a Raw "café" forms a header value, but one
+        // whose bytes are not visible-ASCII text, so `to_str()` then fails.
+        let raw = http::HeaderValue::try_from(
+            SetCookie::new("n", "café").with_encoding(ValueEncoding::Raw),
+        )
+        .expect("obs-text bytes are valid at header construction");
+        assert!(
+            raw.to_str().is_err(),
+            "the header carries raw non-ASCII bytes, not visible-ASCII text"
+        );
+        // A managed encoding escapes the non-ASCII losslessly, so it stays header text.
+        let managed = http::HeaderValue::try_from(
+            SetCookie::new("n", "café").with_encoding(ValueEncoding::Percent),
+        )
+        .unwrap();
+        assert_eq!(managed.to_str().unwrap(), "n=caf%C3%A9");
     }
 
     #[test]

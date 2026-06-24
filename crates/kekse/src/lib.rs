@@ -86,6 +86,15 @@
 //! [`SetCookie::parse_strict`] rejects on an unknown attribute instead.
 //! (`Expires` is recognised; date handling is a planned follow-up.)
 //!
+//! ## An axum extractor (optional)
+//!
+//! With the `axum` feature, `CookieJarBuf` is a `FromRequestParts` extractor: it
+//! owns the request `Cookie:` header and lends a borrowed [`CookieJar`] through
+//! its `jar()` (lenient) / `jar_strict()` (strict) views, so the *handler* picks
+//! the read mode. Extraction is infallible — a missing or malformed header just
+//! yields an empty jar — and it pulls in only `axum-core`, not the whole
+//! framework.
+//!
 //! ## A single source of truth for the grammar
 //!
 //! Cookie *names* are RFC 6265 cookie-names, i.e. RFC 7230 tokens — exactly what
@@ -101,9 +110,15 @@
 //! [`Cookie`] kernel), `attributes` (the response [`CookieAttributes`]),
 //! `set_cookie` (the response [`SetCookie`] = kernel + attributes, with its
 //! `Set-Cookie` parse/serialize), and `jar` (the request-`Cookie:` reader *and*
-//! writer) — all re-exported flat from the crate root.
+//! writer) — all re-exported flat from the crate root. With the `axum` feature,
+//! an `axum` module adds the `CookieJarBuf` extractor.
+
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 mod attributes;
+#[cfg(feature = "axum")]
+mod axum;
 mod cookie;
 mod encoding;
 mod grammar;
@@ -112,9 +127,11 @@ mod same_site;
 mod set_cookie;
 
 pub use attributes::{CookieAttributes, Domain, Path};
+#[cfg(feature = "axum")]
+pub use axum::CookieJarBuf;
 pub use cookie::Cookie;
 pub use encoding::{encode_value, ValueEncoding};
 pub use grammar::{is_cookie_name, is_cookie_octet};
 pub use jar::{parse_pairs, parse_pairs_strict, CookieJar};
-pub use same_site::SameSite;
+pub use same_site::{ParseSameSiteError, SameSite};
 pub use set_cookie::SetCookie;
