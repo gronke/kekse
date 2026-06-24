@@ -489,6 +489,35 @@ mod tests {
     }
 
     #[test]
+    fn replace_then_render_uses_the_argument_encoding_not_the_stored_one() {
+        let mut jar = CookieJar::parse("pref=old; pref=stale");
+        // Replace the duplicates with one value that needs escaping, built with a
+        // DIFFERENT stored encoding (Auto) than the render calls will request.
+        jar.replace(Cookie::new("pref", "a b").with_encoding(ValueEncoding::Auto));
+        assert_eq!(
+            jar.get_all("pref").map(|c| c.value()).collect::<Vec<_>>(),
+            vec!["a b"] // replace collapsed the stale duplicates to the new value
+        );
+        // The jar re-encodes every pair under the ARGUMENT to to_header_value,
+        // ignoring the cookie's stored Auto: Percent → a%20b.
+        assert_eq!(
+            jar.to_header_value(ValueEncoding::Percent)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "pref=a%20b"
+        );
+        // Auto argument → whitespace rides quoted.
+        assert_eq!(
+            jar.to_header_value(ValueEncoding::Auto)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "pref=\"a b\""
+        );
+    }
+
+    #[test]
     fn header_string_joins_pairs_and_round_trips() {
         let jar = CookieJar::parse_strict("a=1; b=2; c=3");
         let rendered = jar.to_header_string(ValueEncoding::Percent);

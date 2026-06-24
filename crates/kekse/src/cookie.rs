@@ -16,7 +16,7 @@ use crate::set_cookie::SetCookie;
 ///
 /// The value is the **decoded** form the application reads, held as a [`Cow`] so
 /// a value that parsed untouched stays borrowed and a decoded one is owned.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Cookie<'a> {
     name: &'a str,
     value: Cow<'a, str>,

@@ -530,6 +530,7 @@ name = "kekse"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "axum-core",
  "http",
  "percent-encoding",
  "tokio",

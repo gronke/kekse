@@ -12,7 +12,7 @@ use crate::same_site::SameSite;
 /// `Set-Cookie` line. The newtype makes the public [`CookieAttributes::path`]
 /// field **unforgeable**: the only way to obtain one is [`Path::new`], which
 /// validates. Read the inner string with [`as_str`](Path::as_str).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Path<'a>(&'a str);
 
 impl<'a> Path<'a> {
@@ -28,9 +28,16 @@ impl<'a> Path<'a> {
     }
 }
 
+impl AsRef<str> for Path<'_> {
+    /// Borrow the validated path as `&str`.
+    fn as_ref(&self) -> &str {
+        self.0
+    }
+}
+
 /// A validated `Domain` attribute value — the same av-octet guarantee as
 /// [`Path`], so the public [`CookieAttributes::domain`] field is unforgeable.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Domain<'a>(&'a str);
 
 impl<'a> Domain<'a> {
@@ -42,6 +49,13 @@ impl<'a> Domain<'a> {
 
     /// The validated domain value.
     pub fn as_str(&self) -> &'a str {
+        self.0
+    }
+}
+
+impl AsRef<str> for Domain<'_> {
+    /// Borrow the validated domain as `&str`.
+    fn as_ref(&self) -> &str {
         self.0
     }
 }
@@ -78,7 +92,7 @@ impl<'a> Domain<'a> {
 /// assert!(hardened.secure); // read a field
 /// assert_eq!(hardened.path, Path::new("/"));
 /// ```
-#[derive(Default, Clone, Debug, PartialEq, Eq)]
+#[derive(Default, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CookieAttributes<'a> {
     /// The `HttpOnly` flag.
     pub http_only: bool,
@@ -196,5 +210,36 @@ mod tests {
         assert_eq!(CookieAttributes::default().path("/a\0b").path, None);
         // A clean value round-trips.
         assert_eq!(Path::new("/ok").map(|p| p.as_str()), Some("/ok"));
+    }
+
+    #[test]
+    fn as_ref_matches_as_str() {
+        fn borrow(s: impl AsRef<str>) -> String {
+            s.as_ref().to_owned()
+        }
+        let p = Path::new("/app").unwrap();
+        assert_eq!(p.as_ref(), p.as_str());
+        assert_eq!(borrow(p), "/app");
+        let d = Domain::new("example.test").unwrap();
+        assert_eq!(d.as_ref(), d.as_str());
+        assert_eq!(borrow(d), "example.test");
+    }
+
+    #[test]
+    fn path_domain_av_octet_edge_cases() {
+        // av-octet = 0x20..=0x3a | 0x3c..=0x7e: SP and digits are in; HTAB, `;`,
+        // controls, and non-ASCII are out (the rejections are pinned above).
+        // Empty: every byte is an av-octet (vacuously) → accepted.
+        assert_eq!(Path::new("").map(|p| p.as_str()), Some(""));
+        assert_eq!(Domain::new("").map(|d| d.as_str()), Some(""));
+        // SP (0x20) is an av-octet → space-only paths are valid.
+        assert!(Path::new(" ").is_some());
+        assert!(Path::new("   ").is_some());
+        // HTAB (0x09) is a control, not an av-octet → rejected.
+        assert!(Path::new("\t").is_none());
+        assert!(Path::new("a\tb").is_none());
+        // Digits (0x30..=0x39) are av-octets.
+        assert!(Path::new("12345").is_some());
+        assert!(Domain::new("123").is_some());
     }
 }

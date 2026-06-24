@@ -64,6 +64,20 @@ jobs:
           cargo clippy --workspace --all-targets --all-features -- -D warnings
           cargo test --workspace --all-features
 
+      # docs.rs builds with all features; mirror that here with -D warnings so a
+      # broken intra-doc link (the crate has many) fails CI, not the publish.
+      - name: doc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --all-features
+
+      # The crates are feature-light by default; prove they still build with no
+      # features at all, so nothing silently leans on an optional one.
+      - name: build (no default features)
+        run: |
+          cargo build -p kekse --no-default-features
+          cargo build -p keksbruch --no-default-features
+
       # Warm the shared cache from main only. An unchanged Cargo.lock hits the
       # exact key and this save is a no-op.
       - name: Save cargo cache
@@ -76,3 +90,35 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+  # kekse pins MSRV 1.77.2 (workspace Cargo.toml). The guarantee covers the core
+  # crate with its `default` and `tracing` features only: the optional `axum`
+  # feature needs Rust >= 1.78 (axum-core 0.5), and keksbruch' differential
+  # deps (cookie/biscotti) need 1.85 — so neither is built here. `--locked` pins
+  # the MSRV-verified dependency versions, so a lock bump that raises the floor
+  # fails this leg rather than slipping through.
+  msrv:
+    name: build (MSRV 1.77.2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust 1.77.2
+        run: rustup toolchain install 1.77.2 --profile minimal
+      - name: Build core (default features)
+        run: cargo +1.77.2 build -p kekse --locked
+      - name: Build core (+ tracing)
+        run: cargo +1.77.2 build -p kekse --features tracing --locked
+
+  # OPTIONAL advisory job: flags RustSec advisories in the dependency tree. It is
+  # non-blocking (continue-on-error) and needs no config file — delete this whole
+  # job to drop the supply-chain check.
+  audit:
+    name: cargo audit (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit
+        run: cargo audit

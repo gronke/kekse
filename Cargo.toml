@@ -10,7 +10,10 @@ repository = "https://github.com/gronke/kekse"
 license = "MIT"
 edition = "2021"
 publish = false
-# MSRV. `OnceLock` (1.70) is used deliberately over `LazyLock` (1.80).
+# MSRV. `OnceLock` (1.70) is used deliberately over `LazyLock` (1.80). Covers the
+# core `kekse` crate with its `default`/`tracing` features — CI's `msrv` leg
+# builds exactly that. The optional `axum` feature needs Rust >= 1.78 (axum-core
+# 0.5) and is intentionally outside the MSRV guarantee.
 rust-version = "1.77.2"
 
 # Shared dependency versions for the workspace's crates.
@@ -22,6 +25,9 @@ percent-encoding = "2"
 http = "1"
 # Fail-soft parse logs a skipped pair at debug level.
 tracing = "0.1"
+# `FromRequestParts` for the optional `axum` extractor — the light core `axum`
+# (0.8) builds on and re-exports, not the whole framework.
+axum-core = "0.5"
 # Dev-only: the integration tests drive kekse through real axum request /
 # response types. `oneshot` is in-memory, so tokio needs only a basic runtime.
 axum = { version = "0.8", features = ["macros"] }

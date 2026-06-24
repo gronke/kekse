@@ -10,7 +10,7 @@ use crate::grammar::{is_cookie_octet, is_ws, is_ws_char, ENCODE_FULL, ENCODE_IN_
 
 /// How [`SetCookie`](crate::SetCookie) escapes a value for the wire. See the
 /// [crate docs](crate).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ValueEncoding {
     /// Bare when possible, quoted to carry whitespace, percent-encoded
     /// otherwise. "Quotes where necessary" — opt in when you want it.
@@ -128,6 +128,15 @@ mod tests {
     #[test]
     fn raw_is_verbatim() {
         assert_eq!(encode_value("a b;c\"\\", ValueEncoding::Raw), "a b;c\"\\");
+    }
+
+    #[test]
+    fn raw_passes_non_ascii_verbatim() {
+        // Raw is verbatim even for non-ASCII (raw_is_verbatim covers ASCII only).
+        // The bytes survive the codec untouched; HeaderValue construction then
+        // accepts them as obs-text (>= 0x80), so a Raw non-ASCII value reaches the
+        // wire unescaped — the caller owns wire-correctness.
+        assert_eq!(encode_value("café", ValueEncoding::Raw), "café");
     }
 
     #[test]
