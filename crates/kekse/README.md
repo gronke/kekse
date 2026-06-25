@@ -2,10 +2,10 @@
 
 A strict, dependency-light cookie codec.
 It builds `Set-Cookie` response values from a `SetCookie`, reads *and writes* a `Cookie` request header through a `CookieJar` of typed `Cookie`s, and converts either straight into an `http::HeaderValue` — directly on the RFC 6265 §4.1.1 grammar.
-There is no cookie *store* (no persistence, eviction, or domain/path send-matching), no signing or encryption, and no date handling — a lifetime is `Max-Age` seconds (a `u64`), never an `Expires` date — so the crate pulls in no `time`/`chrono`.
+There is no cookie *store* (no persistence, eviction, or domain/path send-matching) and no signing or encryption, but dates are handled: a lifetime is `Max-Age` seconds (a `u64`) or an `Expires` timestamp, parsed and rendered through the `time` crate.
 It never panics on untrusted input, and a malformed pair in a header is skipped rather than aborting the parse, so attacker-appended junk can never evict a later valid cookie.
 
-It depends only on `percent-encoding` (the value codec) and `http` (the RFC 7230 token grammar for cookie-names, borrowed rather than re-implemented as a homemade table).
+It depends on `percent-encoding` (the value codec), `http` (the RFC 7230 token grammar for cookie-names, borrowed rather than re-implemented as a homemade table), and `time` (`Expires` date parsing and formatting — RFC 6265 §5.1.1 and RFC 7231).
 
 ## Building a value
 
@@ -37,7 +37,7 @@ let header = SetCookie::new("SID", "deadbeef")
 assert_eq!(header, "SID=deadbeef; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age=3600");
 ```
 
-Attributes are emitted in a fixed order: `HttpOnly`, `SameSite`, `Secure`, `Path`, `Domain`, `Max-Age`, each only when set.
+Attributes are emitted in a fixed order: `HttpOnly`, `SameSite`, `Secure`, `Path`, `Domain`, `Expires`, `Max-Age`, each only when set.
 
 To hand the cookie straight to `http`, use `HeaderValue::try_from(set_cookie)` (or `&set_cookie`) instead of `.to_set_cookie()`: the managed encodings are always valid header bytes, so it fails only for a `Raw` value the caller deliberately built with non-header bytes.
 
@@ -63,7 +63,7 @@ assert_eq!(value.as_deref(), Some("deadbeef"));
 
 `parse_pairs` yields `(name, value)` tuples; `CookieJar` is the typed view over it.
 A `Cookie` is the request `Cookie:` cookie — the `name=value` a request carries (plus its wire encoding), with no attributes; it is the shared kernel a `SetCookie` composes.
-A `SetCookie` is the response `Set-Cookie:` cookie — a `Cookie` kernel plus `CookieAttributes` (`HttpOnly`, `Secure`, `SameSite`, `Path`, `Domain`, `Max-Age`), with plain-`bool` flags.
+A `SetCookie` is the response `Set-Cookie:` cookie — a `Cookie` kernel plus `CookieAttributes` (`HttpOnly`, `Secure`, `SameSite`, `Path`, `Domain`, `Expires`, `Max-Age`), with plain-`bool` flags.
 Set attributes with the fluent verbs — the valueless flags `http_only()` / `secure()` are nullary, the rest take a value (`same_site(..)`, `path(..)`, …) — and read them back as fields via `set_cookie.attributes()` (e.g. `sc.attributes().secure`). The same verbs build a `CookieAttributes` on its own, so a hardened policy can be defined once and reused across cookies.
 `Cookie::into_set_cookie()` (default attributes) or `Cookie::with_attributes(..)` (a prebuilt set) completes a request cookie into a `SetCookie` to emit; `SetCookie::into_cookie()` / `cookie()` drop back to the kernel.
 

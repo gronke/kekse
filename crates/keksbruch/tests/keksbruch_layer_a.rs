@@ -122,6 +122,24 @@ fn each_scenario_matches_its_pinned_expectation() {
                     assert_eq!(sc.attributes().secure, *secure, "{id} {mode} secure");
                 }
             }
+            Expect::ResponseDated {
+                value,
+                lenient_dated,
+                strict_dated,
+            } => {
+                for (mode, parsed, want_dated) in [
+                    ("strict", SetCookie::parse_strict(&wire), *strict_dated),
+                    ("default", SetCookie::parse(&wire), *lenient_dated),
+                ] {
+                    let sc = parsed.unwrap_or_else(|| panic!("{id} {mode} must keep the cookie"));
+                    assert_eq!(sc.value(), *value, "{id} {mode} value");
+                    assert_eq!(
+                        sc.attributes().expires.is_some(),
+                        want_dated,
+                        "{id} {mode} expires presence"
+                    );
+                }
+            }
             Expect::ResponseNone => {
                 assert!(SetCookie::parse_strict(&wire).is_none(), "{id} strict");
                 assert!(SetCookie::parse(&wire).is_none(), "{id} default");

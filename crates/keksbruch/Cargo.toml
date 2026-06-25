@@ -7,7 +7,9 @@ homepage.workspace = true
 repository.workspace = true
 license.workspace = true
 edition.workspace = true
-publish.workspace = true
+# Explicitly unpublishable: keksbruch is the differential test harness (it path-deps
+# kekse and pulls edition-2024 differential crates), never a crates.io artifact.
+publish = false
 rust-version.workspace = true
 
 [dependencies]

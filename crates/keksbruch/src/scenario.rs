@@ -29,6 +29,14 @@ pub enum Expect {
         http_only: bool,
         secure: bool,
     },
+    /// Response: both modes keep a cookie with `value`; the `Expires` date parses
+    /// (`expires.is_some()`) in lenient mode iff `lenient_dated` and in strict mode
+    /// iff `strict_dated` (strict ⊆ lenient — obsolete forms parse only leniently).
+    ResponseDated {
+        value: &'static str,
+        lenient_dated: bool,
+        strict_dated: bool,
+    },
     /// Response: both modes reject (`None`).
     ResponseNone,
     /// The wire is not valid UTF-8, so it can never reach a `&str` parser.
@@ -329,6 +337,72 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+            },
+        ),
+        // ── Expires dates (Response) ────────────────────────────────────────
+        // Lenient parse = RFC 6265 §5.1.1 cookie-date (accepts the IMF-fixdate, the
+        // obsolete RFC 850 / asctime() forms, and real-world slop); strict parse =
+        // RFC 7231 IMF-fixdate only. A bad date is dropped, never fatal, so the
+        // cookie always survives. These also feed the differential matrix, where
+        // other parsers' date handling is compared.
+        s(
+            "date-imf-fixdate",
+            "the canonical RFC 7231 IMF-fixdate parses in both modes",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun, 06 Nov 1994 08:49:37 GMT"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: true,
+                strict_dated: true,
+            },
+        ),
+        s(
+            "date-rfc850",
+            "the obsolete RFC 850 form parses leniently; strict refuses it",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sunday, 06-Nov-94 08:49:37 GMT"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: true,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-asctime",
+            "the asctime() form parses leniently; strict refuses it",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun Nov  6 08:49:37 1994"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: true,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-garbage",
+            "an unparseable date is dropped in both modes; the cookie survives",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("not-a-date"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: false,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-impossible-day",
+            "a well-formed but impossible day (31 Feb) is rejected by both modes",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun, 31 Feb 1994 00:00:00 GMT"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: false,
+                strict_dated: false,
             },
         ),
         s(
