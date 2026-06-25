@@ -521,6 +521,7 @@ dependencies = [
  "html-escape",
  "http",
  "kekse",
+ "rfc_6265",
  "serde",
  "serde_json",
 ]
@@ -533,6 +534,7 @@ dependencies = [
  "axum-core",
  "http",
  "percent-encoding",
+ "rfc_6265",
  "time",
  "tokio",
  "tower",
@@ -712,6 +714,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
 dependencies = [
  "getrandom 0.3.4",
+]
+
+[[package]]
+name = "rfc_6265"
+version = "0.1.0"
+dependencies = [
+ "time",
 ]
 
 [[package]]

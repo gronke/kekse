@@ -7,7 +7,7 @@
 //! all on the RFC 6265 §4.1.1 grammar. It carries no cookie *store* (no
 //! persistence, eviction, or domain/path send-matching) and no signing or
 //! encryption, but it does parse and render dates: a lifetime is `Max-Age`
-//! seconds (`u64`) or an `Expires` timestamp (a `time::OffsetDateTime`). It never
+//! seconds (`u64`) or an `Expires` timestamp (an `OffsetDateTime`). It never
 //! panics on untrusted input.
 //!
 //! ## Three types, two headers
@@ -85,8 +85,8 @@
 //! case-insensitively). Per §5.2 an **unrecognised attribute is ignored** and the
 //! cookie kept (so a newer attribute like `Partitioned` never costs the cookie);
 //! [`SetCookie::parse_strict`] rejects on an unknown attribute instead. `Expires`
-//! is parsed into a `time::OffsetDateTime` — the lenient [`parse`](SetCookie::parse)
-//! accepts the RFC 6265 §5.1.1 cookie-date, the strict
+//! is parsed into an `OffsetDateTime` by the `rfc_6265` crate — the lenient
+//! [`parse`](SetCookie::parse) accepts the RFC 6265 §5.1.1 cookie-date, the strict
 //! [`parse_strict`](SetCookie::parse_strict) only the RFC 7231 IMF-fixdate.
 //!
 //! ## An axum extractor (optional)
@@ -100,16 +100,15 @@
 //!
 //! ## A single source of truth for the grammar
 //!
-//! Cookie *names* are RFC 6265 cookie-names, i.e. RFC 7230 tokens — exactly what
-//! the [`http`] crate's [`HeaderName`](http::header::HeaderName) parses, so
-//! [`is_cookie_name`] borrows that definition rather than keep a homemade table.
-//! Cookie-octet membership ([`is_cookie_octet`]) is derived once from the
-//! percent-encode set, so the writer and the reader can never drift.
+//! Cookie *names* are RFC 6265 cookie-names (RFC 7230 tokens), and cookie-name / cookie-octet /
+//! av-octet membership all come from the `rfc_6265` crate, where each predicate is a `const fn`
+//! pinned by an exhaustive byte sweep. kekse's percent-encode set is tested to stay the exact
+//! complement of [`is_cookie_octet`], so the writer and the reader can never drift.
 //!
 //! ## Module layout
 //!
-//! One concept per module — `grammar` (name/octet predicates and the encode
-//! sets), `encoding` (the value codec), `same_site`, `cookie` (the request
+//! One concept per module — `grammar` (the value codec's percent-encode sets, on top of
+//! `rfc_6265`'s byte classes), `encoding` (the value codec), `same_site`, `cookie` (the request
 //! [`Cookie`] kernel), `attributes` (the response [`CookieAttributes`]),
 //! `set_cookie` (the response [`SetCookie`] = kernel + attributes, with its
 //! `Set-Cookie` parse/serialize), and `jar` (the request-`Cookie:` reader *and*
@@ -123,7 +122,6 @@ mod attributes;
 #[cfg(feature = "axum")]
 mod axum;
 mod cookie;
-mod date;
 mod encoding;
 mod grammar;
 mod jar;
@@ -135,11 +133,11 @@ pub use attributes::{CookieAttributes, Domain, Path};
 pub use axum::CookieJarBuf;
 pub use cookie::Cookie;
 pub use encoding::{encode_value, ValueEncoding};
-pub use grammar::{is_cookie_name, is_cookie_octet};
 pub use jar::{parse_pairs, parse_pairs_strict, CookieJar};
+pub use rfc_6265::grammar::{is_cookie_name, is_cookie_octet};
 pub use same_site::{ParseSameSiteError, SameSite};
 pub use set_cookie::SetCookie;
 
-/// The timestamp type used by the `Expires` attribute, re-exported from the
-/// `time` crate so callers can name it without importing `time` directly.
-pub use time::OffsetDateTime;
+/// The timestamp type used by the `Expires` attribute, re-exported from `rfc_6265` (itself the
+/// `time` crate's `OffsetDateTime`) so callers can name it without depending on `time` directly.
+pub use rfc_6265::OffsetDateTime;

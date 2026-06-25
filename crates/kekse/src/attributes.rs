@@ -4,9 +4,9 @@
 //! `CookieAttributes`. The `Path` and `Domain` values are validated [`Path`] /
 //! [`Domain`] newtypes, so the public fields cannot carry an injection byte.
 
-use time::OffsetDateTime;
+use rfc_6265::grammar::is_av_octet;
+use rfc_6265::OffsetDateTime;
 
-use crate::grammar::is_av_octet;
 use crate::same_site::SameSite;
 
 /// A validated `Path` attribute value: RFC 6265 §4.1.1 av-octets only — no

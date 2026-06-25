@@ -5,8 +5,9 @@ use std::borrow::Cow;
 
 use crate::cookie::Cookie;
 use crate::encoding::{decode_cookie_value, ValueEncoding};
-use crate::grammar::{is_cookie_name, is_ws_char};
+use crate::grammar::is_ws_char;
 use http::header::{HeaderValue, InvalidHeaderValue};
+use rfc_6265::grammar::is_cookie_name;
 
 /// Parse a request `Cookie` header into `(name, decoded value)` pairs, in order,
 /// yielding every well-formed pair. Lenient: tolerates raw whitespace and the

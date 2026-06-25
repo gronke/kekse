@@ -1,0 +1,29 @@
+[package]
+name = "rfc_6265"
+description = "Reusable, exhaustively-tested primitives from RFC 6265 (HTTP State Management): grammar byte-classes, cookie-date parsing, and domain/path matching."
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["rfc6265", "cookie", "http", "date", "grammar"]
+categories = ["web-programming", "parser-implementations", "date-and-time"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = []
+# §5.1.1 cookie-date / RFC 7231 IMF-fixdate parsing and formatting, built on `time`.
+date = ["dep:time"]
+# §5.1.3 domain-match.
+domain = []
+# §5.1.4 path-match and default-path.
+path = []
+
+[dependencies]
+# Only pulled in by the `date` feature; the date module never hand-rolls parsing.
+time = { workspace = true, optional = true }

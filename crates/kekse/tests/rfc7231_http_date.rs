@@ -48,13 +48,14 @@ fn strict_accepts_only_the_imf_fixdate() {
 
 #[test]
 fn two_digit_year_pivots_and_out_of_range_is_rejected() {
-    // RFC 6265 §5.1.1: 70..=99 -> 1900+, 0..=69 -> 2000+.
+    // RFC 6265 §5.1.1: 70..=99 -> 1900+, 0..=69 -> 2000+. The two-digit year is the RFC 850 form
+    // (long weekday, dashes); the weekday name is not cross-checked against the date.
     assert_eq!(
-        lenient("n=v; Expires=Mon, 01 Jan 70 00:00:00 GMT").map(|d| d.year()),
+        lenient("n=v; Expires=Thursday, 01-Jan-70 00:00:00 GMT").map(|d| d.year()),
         Some(1970)
     );
     assert_eq!(
-        lenient("n=v; Expires=Fri, 01 Jan 69 00:00:00 GMT").map(|d| d.year()),
+        lenient("n=v; Expires=Wednesday, 01-Jan-69 00:00:00 GMT").map(|d| d.year()),
         Some(2069)
     );
     assert_eq!(lenient("n=v; Expires=Sun, 06 Nov 1994 25:00:00 GMT"), None); // hour > 23

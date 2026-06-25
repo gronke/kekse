@@ -15,6 +15,9 @@ rust-version.workspace = true
 [dependencies]
 # The system under test. Path dep so keksbruch always exercises the local tree.
 kekse = { path = "../kekse" }
+# RFC 6265 byte-class constants (e.g. `is_ctl`) for the universal invariants — one shared
+# definition rather than an ad-hoc inline pool of control bytes.
+rfc_6265 = { path = "../rfc_6265" }
 
 # --- differential harness (opt-in; never built on the default / MSRV CI legs) ---
 # All optional and gated behind `differential`. cookie + biscotti are edition

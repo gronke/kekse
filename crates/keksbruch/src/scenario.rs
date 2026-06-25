@@ -405,6 +405,68 @@ pub fn scenarios() -> Vec<Scenario> {
                 strict_dated: false,
             },
         ),
+        // Non-RFC date formats keksbruch probes to characterise the matrix: kekse is RFC-bounded
+        // and rejects them all in both modes; other parsers may accept some.
+        s(
+            "date-iso8601",
+            "an ISO 8601 timestamp is not an RFC 6265 cookie-date",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("1994-11-06T08:49:37Z"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: false,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-unix",
+            "the Unix `date` form (zone before the year) is not a cookie-date",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun Nov  6 08:49:37 UTC 1994"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: false,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-us-slash",
+            "a US M/D/Y numeric date is not a cookie-date",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("11/06/1994 08:49:37"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: false,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-eu-dotted",
+            "a European D.M.Y numeric date is not a cookie-date",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("06.11.1994 08:49:37"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: false,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-epoch",
+            "a bare Unix epoch-seconds integer is not a cookie-date",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("784108177"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: false,
+                strict_dated: false,
+            },
+        ),
         s(
             "resp-crlf",
             "a CR/LF in the Set-Cookie value is refused outright",
