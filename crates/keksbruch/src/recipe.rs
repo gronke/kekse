@@ -208,6 +208,14 @@ impl<'a> KeksbruchRecipe<'a> {
             (Keksbruch::DomainValue(val), Direction::Response) => {
                 format!("{}; Domain={val}", self.base.baseline(Direction::Response)).into_bytes()
             }
+            (Keksbruch::PathValue(val), Direction::Response) => {
+                format!("{}; Path={val}", self.base.baseline(Direction::Response)).into_bytes()
+            }
+            (Keksbruch::AllAttributes, Direction::Response) => format!(
+                "{}; Path=/p; Domain=example.com; Max-Age=60; Secure; HttpOnly; SameSite=Lax",
+                self.base.baseline(Direction::Response)
+            )
+            .into_bytes(),
             (Keksbruch::DuplicateDomain { first, second }, Direction::Response) => format!(
                 "{}; Domain={first}; Domain={second}",
                 self.base.baseline(Direction::Response)
@@ -237,6 +245,8 @@ impl<'a> KeksbruchRecipe<'a> {
                 | Keksbruch::DuplicateAttribute(_)
                 | Keksbruch::ExpiresDate(_)
                 | Keksbruch::DomainValue(_)
+                | Keksbruch::PathValue(_)
+                | Keksbruch::AllAttributes
                 | Keksbruch::DuplicateDomain { .. }
                 | Keksbruch::NulInAttrName
                 | Keksbruch::NulInAttrValue

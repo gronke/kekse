@@ -1,6 +1,6 @@
 // keksbruch Java sidecar.
 //
-// Reads base64-JSONL payload records on stdin and parses each with four JVM cookie
+// Reads base64-JSONL payload records on stdin and parses each with six JVM cookie
 // parsers, emitting one normalized ParseOutcome per dependency. The columns:
 //   - "Tomcat RFC6265" / "Tomcat legacy": org.apache.tomcat.util.http's strict
 //     (RFC 6265) and lenient request-cookie processors. Request-only — the response
@@ -8,6 +8,9 @@
 //   - "Jakarta RESTEasy" / "Jakarta Jersey": the jakarta.ws.rs cookie API parsed by
 //     each provider (discovered via ServiceLoader and driven side by side), for both
 //     directions — Cookie for requests, NewCookie for Set-Cookie responses.
+//   - "java.net.HttpCookie": the JDK's built-in Set-Cookie parser. Response-only.
+//   - "Apache HttpClient5": HttpClient 5's RFC 6265 cookie spec. Response-only — the
+//     realistic redistributable stand-in for the (proprietary, unbundleable) Burp parser.
 // Keycloak is deliberately not a column: it does not parse cookies itself but reads
 // them through the JAX-RS layer (RESTEasy), so its parsing IS the "Jakarta RESTEasy"
 // column. `--selfcheck` reports availability + versions, then exits.
@@ -18,8 +21,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
+import java.net.HttpCookie;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.ServiceLoader;
@@ -44,11 +49,20 @@ import org.apache.tomcat.util.http.Rfc6265CookieProcessor;
 import org.apache.tomcat.util.http.ServerCookie;
 import org.apache.tomcat.util.http.ServerCookies;
 
+// Apache HttpClient 5 cookie API. Its Cookie type is referenced by its fully
+// qualified name in the parse method, to avoid clashing with jakarta.ws.rs.core.Cookie.
+import org.apache.hc.client5.http.cookie.CookieOrigin;
+import org.apache.hc.client5.http.cookie.CookieSpec;
+import org.apache.hc.client5.http.impl.cookie.RFC6265CookieSpecFactory;
+import org.apache.hc.core5.http.message.BasicHeader;
+
 public final class Sidecar {
     static final String TOMCAT_RFC = "Tomcat RFC6265";
     static final String TOMCAT_LEGACY = "Tomcat legacy";
     static final String JAKARTA_RESTEASY = "Jakarta RESTEasy";
     static final String JAKARTA_JERSEY = "Jakarta Jersey";
+    static final String JDK_HTTPCOOKIE = "java.net.HttpCookie";
+    static final String APACHE_HC5 = "Apache HttpClient5";
 
     // disableHtmlEscaping: keep '=', '<' etc. literal (still decodes identically on
     // the Rust side, but reads cleanly). serializeNulls: emit explicit `null` for
@@ -59,6 +73,9 @@ public final class Sidecar {
     // Tomcat request-cookie processors; null if the class fails to load.
     static CookieProcessor rfc;
     static CookieProcessor legacy;
+
+    // Apache HttpClient 5's RFC 6265 cookie spec; null if the class fails to load.
+    static CookieSpec hc5;
 
     // Per-provider header delegates, discovered via ServiceLoader; null if absent.
     static HeaderDelegate<Cookie> resteasyCookie;
@@ -71,10 +88,12 @@ public final class Sidecar {
     static String tomcatVersion = "?";
     static String resteasyVersion = "?";
     static String jerseyVersion = "?";
+    static String hc5Version = "?";
 
     public static void main(String[] args) throws IOException {
         loadVersions();
         initTomcat();
+        initHc5();
         discoverProviders();
         for (String a : args) {
             if ("--selfcheck".equals(a)) {
@@ -93,6 +112,7 @@ public final class Sidecar {
                 tomcatVersion = p.getProperty("tomcat", "?");
                 resteasyVersion = p.getProperty("resteasy", "?");
                 jerseyVersion = p.getProperty("jersey", "?");
+                hc5Version = p.getProperty("httpclient5", "?");
             }
         } catch (Throwable t) {
             // keep the "?" defaults
@@ -109,6 +129,15 @@ public final class Sidecar {
             legacy = new LegacyCookieProcessor();
         } catch (Throwable t) {
             legacy = null;
+        }
+    }
+
+    static void initHc5() {
+        try {
+            // The default RFC6265 (lax) spec — a thread-safe, shareable parser.
+            hc5 = new RFC6265CookieSpecFactory().create(null);
+        } catch (Throwable t) {
+            hc5 = null;
         }
     }
 
@@ -172,6 +201,9 @@ public final class Sidecar {
                     resteasyCookie != null ? jakartaRequest(resteasyCookie, wire) : skipped());
                 byDep.add(JAKARTA_JERSEY,
                     jerseyCookie != null ? jakartaRequest(jerseyCookie, wire) : skipped());
+                // Both Set-Cookie parsers are response-only.
+                byDep.add(JDK_HTTPCOOKIE, notApplicable());
+                byDep.add(APACHE_HC5, notApplicable());
             } else {
                 byDep.add(TOMCAT_RFC, notApplicable());
                 byDep.add(TOMCAT_LEGACY, notApplicable());
@@ -179,6 +211,8 @@ public final class Sidecar {
                     resteasyNewCookie != null ? jakartaResponse(resteasyNewCookie, wire) : skipped());
                 byDep.add(JAKARTA_JERSEY,
                     jerseyNewCookie != null ? jakartaResponse(jerseyNewCookie, wire) : skipped());
+                byDep.add(JDK_HTTPCOOKIE, jdkHttpCookieResponse(wire));
+                byDep.add(APACHE_HC5, hc5 != null ? hc5Response(wire) : skipped());
             }
             JsonObject result = new JsonObject();
             result.addProperty("id", id);
@@ -285,12 +319,96 @@ public final class Sidecar {
         }
     }
 
+    /// Parse a Set-Cookie value with the JDK's java.net.HttpCookie. It folds an
+    /// Expires date into a clock-relative max-age (and exposes no SameSite), so to
+    /// stay deterministic and comparable to the other columns we report max-age only
+    /// when the wire actually carries a Max-Age attribute (else null).
+    static JsonObject jdkHttpCookieResponse(String wire) {
+        try {
+            List<HttpCookie> cookies = HttpCookie.parse(wire);
+            if (cookies.isEmpty()) {
+                return errorOutcome("SetCookieRejected", "no cookie parsed");
+            }
+            HttpCookie c = cookies.get(0);
+            JsonObject sc = new JsonObject();
+            sc.addProperty("name", c.getName());
+            sc.addProperty("value", c.getValue() == null ? "" : c.getValue());
+            sc.addProperty("http_only", c.isHttpOnly());
+            sc.addProperty("secure", c.getSecure());
+            // java.net.HttpCookie has no SameSite accessor — always null here.
+            sc.add("same_site", JsonNull.INSTANCE);
+            addOrNull(sc, "path", c.getPath());
+            addOrNull(sc, "domain", c.getDomain());
+            if (hasMaxAgeAttr(wire)) {
+                sc.addProperty("max_age", c.getMaxAge());
+            } else {
+                sc.add("max_age", JsonNull.INSTANCE);
+            }
+            JsonObject o = new JsonObject();
+            o.addProperty("outcome", "SetCookie");
+            o.add("set_cookie", sc);
+            return o;
+        } catch (Throwable t) {
+            return errorOutcome("SetCookieRejected", errorString(t));
+        }
+    }
+
+    /// Parse a Set-Cookie value with Apache HttpClient 5's RFC 6265 cookie spec. It
+    /// needs a CookieOrigin (the request context the cookie would attach to); a
+    /// neutral https origin lets domain/path attributes parse without being rejected
+    /// as out-of-scope. hc5 keeps the raw Max-Age attribute string, so we report that
+    /// integer directly (rather than its derived expiry Instant).
+    static JsonObject hc5Response(String wire) {
+        try {
+            CookieOrigin origin = new CookieOrigin("example.com", 443, "/", true);
+            List<org.apache.hc.client5.http.cookie.Cookie> cookies =
+                hc5.parse(new BasicHeader("Set-Cookie", wire), origin);
+            if (cookies.isEmpty()) {
+                return errorOutcome("SetCookieRejected", "no cookie parsed");
+            }
+            org.apache.hc.client5.http.cookie.Cookie c = cookies.get(0);
+            JsonObject sc = new JsonObject();
+            sc.addProperty("name", c.getName());
+            sc.addProperty("value", c.getValue() == null ? "" : c.getValue());
+            sc.addProperty("http_only", c.isHttpOnly());
+            sc.addProperty("secure", c.isSecure());
+            // hc5's RFC6265 spec has no SameSite handler; surface a raw attribute if present.
+            addOrNull(sc, "same_site", c.getAttribute("samesite"));
+            addOrNull(sc, "path", c.getPath());
+            addOrNull(sc, "domain", c.getDomain());
+            String rawMaxAge = c.getAttribute(org.apache.hc.client5.http.cookie.Cookie.MAX_AGE_ATTR);
+            if (rawMaxAge == null) {
+                sc.add("max_age", JsonNull.INSTANCE);
+            } else {
+                try {
+                    sc.addProperty("max_age", Long.parseLong(rawMaxAge.trim()));
+                } catch (NumberFormatException nfe) {
+                    sc.add("max_age", JsonNull.INSTANCE);
+                }
+            }
+            JsonObject o = new JsonObject();
+            o.addProperty("outcome", "SetCookie");
+            o.add("set_cookie", sc);
+            return o;
+        } catch (Throwable t) {
+            return errorOutcome("SetCookieRejected", errorString(t));
+        }
+    }
+
+    /// Whether the wire carries a `Max-Age` attribute (case-insensitive), so the
+    /// HttpCookie column reports an explicit Max-Age but not an Expires-derived one.
+    static boolean hasMaxAgeAttr(String wire) {
+        return wire.toLowerCase(Locale.ROOT).contains("max-age");
+    }
+
     static void printSelfcheck() {
         JsonObject available = new JsonObject();
         available.addProperty(TOMCAT_RFC, rfc != null);
         available.addProperty(TOMCAT_LEGACY, legacy != null);
         available.addProperty(JAKARTA_RESTEASY, resteasyCookie != null && resteasyNewCookie != null);
         available.addProperty(JAKARTA_JERSEY, jerseyCookie != null && jerseyNewCookie != null);
+        available.addProperty(JDK_HTTPCOOKIE, true); // JDK built-in, always present
+        available.addProperty(APACHE_HC5, hc5 != null);
 
         JsonObject versions = new JsonObject();
         versions.addProperty("runtime", "Java " + System.getProperty("java.version"));
@@ -298,6 +416,8 @@ public final class Sidecar {
         versions.addProperty(TOMCAT_LEGACY, tomcatVersion);
         versions.addProperty(JAKARTA_RESTEASY, resteasyVersion);
         versions.addProperty(JAKARTA_JERSEY, jerseyVersion);
+        versions.addProperty(JDK_HTTPCOOKIE, "JDK " + System.getProperty("java.version"));
+        versions.addProperty(APACHE_HC5, hc5Version);
 
         JsonObject root = new JsonObject();
         root.add("available", available);

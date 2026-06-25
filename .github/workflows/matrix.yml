@@ -1,9 +1,12 @@
 name: Differential matrix
 
-# Generate the cross-language parser divergence matrix in a clean environment
-# that has every toolchain installed (so no column degrades to SKIP), and publish
-# the Markdown + CSV as downloadable artifacts. Runs on demand and on main — in
-# its own workflow, separate from the gating CI, since it is informational.
+# Generate the cross-language parser divergence matrix and publish it. Every
+# third-party parser runs in its own `docker run --network=none` container — it parses
+# adversarial input with untrusted dependencies, so it gets NO network egress
+# (defence-in-depth against a compromised dependency). This `matrix` job also holds NO
+# push/deploy credentials (permissions: contents: read); only the separate
+# `deploy-pages` job — which runs no untrusted code — can publish. Runs on demand and
+# on main, in its own workflow, separate from the gating CI, since it is informational.
 on:
   workflow_dispatch:
     inputs:
@@ -25,6 +28,14 @@ on:
         type: string
       java_version:
         description: "eclipse-temurin JDK version, -jre flavor fixed (default 25)"
+        required: false
+        type: string
+      python_version:
+        description: "python image version (default 3.13, current stable)"
+        required: false
+        type: string
+      dotnet_version:
+        description: "dotnet SDK image version (default 8.0)"
         required: false
         type: string
   pull_request:
@@ -53,6 +64,8 @@ jobs:
       PHP_VERSION: ${{ inputs.php_version }}
       OPENRESTY_VERSION: ${{ inputs.openresty_version }}
       JAVA_VERSION: ${{ inputs.java_version }}
+      PYTHON_VERSION: ${{ inputs.python_version }}
+      DOTNET_VERSION: ${{ inputs.dotnet_version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -61,20 +74,10 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustc --version
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Python sidecar deps (Werkzeug; SimpleCookie is stdlib)
-        run: python -m pip install -r crates/keksbruch/fixtures/requirements.txt
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-
-      # Resolve the image tags once, honouring the optional *_VERSION overrides, so
-      # the pull, the npm ci, and the harness (which resolves the same env in Rust)
-      # all use one tag. Defaults here MUST match ImageSpec::default_version in
-      # src/differential/sidecar.rs.
+      # Resolve every sidecar's image tag once (honouring the optional *_VERSION
+      # overrides), so the pulls, the dependency-prep steps, and the harness (which
+      # resolves the same env in Rust) all agree on one tag. Defaults here MUST match
+      # ImageSpec::default_version in src/differential/sidecar.rs.
       - name: Resolve sidecar image tags
         run: |
           echo "NODE_IMAGE=node:${NODE_VERSION:-24}" >> "$GITHUB_ENV"
@@ -85,73 +88,111 @@ jobs:
           # matching ImageSpec); a matching maven image (same JDK) only builds the jar.
           echo "JAVA_IMAGE=eclipse-temurin:${JAVA_VERSION:-25}-jre" >> "$GITHUB_ENV"
           echo "MAVEN_IMAGE=maven:3.9-eclipse-temurin-${JAVA_VERSION:-25}" >> "$GITHUB_ENV"
+          echo "PYTHON_IMAGE=python:${PYTHON_VERSION:-3.13}" >> "$GITHUB_ENV"
+          echo "DOTNET_IMAGE=mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION:-8.0}" >> "$GITHUB_ENV"
+          echo "BUILDPACK_DEPS_IMAGE=buildpack-deps:${BUILDPACK_DEPS_VERSION:-trixie}" >> "$GITHUB_ENV"
+          echo "CLIENTS_IMAGE=keksbruch-clients:local" >> "$GITHUB_ENV"
 
-      # The PHP, Go, Node, nginx and Java sidecars run containerized: the harness shells
-      # out to `docker run` against these images (Docker is preinstalled on
-      # ubuntu-latest), so the runner needs none of those toolchains. Pre-pull so the
-      # harness's runs are fast and a pull failure surfaces as its own step. (Locally,
-      # with no Docker, the harness falls back to host `php`/`go`/`node`/`resty`/`java`.)
-      # MAVEN_IMAGE builds the Java jar (next step); JAVA_IMAGE runs it.
+      # Every sidecar runs containerized: the harness shells out to `docker run
+      # --network=none` against these images (Docker is preinstalled on ubuntu-latest),
+      # so the runner needs no language toolchains AND an untrusted parser has no network.
+      # Pre-pull every official image with network ON — a `--network=none` run cannot
+      # pull, so the image must already be local. (Locally, with no Docker, the harness
+      # falls back to the host toolchains.) The openresty + curl/wget-client images are
+      # *built* below, not pulled; MAVEN_IMAGE builds the Java jar, JAVA_IMAGE runs it.
       - name: Pull the containerized sidecar images
         run: |
-          docker pull "$PHP_IMAGE"
-          docker pull "$GO_IMAGE"
-          docker pull "$NODE_IMAGE"
-          docker pull "$JAVA_IMAGE"
-          docker pull "$MAVEN_IMAGE"
+          for img in "$PHP_IMAGE" "$GO_IMAGE" "$NODE_IMAGE" "$JAVA_IMAGE" "$MAVEN_IMAGE" \
+                     "$PYTHON_IMAGE" "$DOTNET_IMAGE" "$BUILDPACK_DEPS_IMAGE"; do
+            docker pull "$img"
+          done
 
-      # The official openresty image installs openresty with --no-install-recommends,
-      # so it ships *without* the `resty` CLI (which lives in the recommended
-      # openresty-resty package). The nginx sidecar's driver runs under `resty`, so
-      # derive an image that adds it — the base already carries the openresty apt repo
-      # and key, so it is a single install. Re-tag as the same ref the harness resolves
-      # from ImageSpec (openresty/openresty:<ver>-bookworm) so `docker run` uses it.
+      # openresty ships without the `resty` CLI (a recommended package); derive an image
+      # that adds it, re-tagged as the ref the harness resolves from ImageSpec.
       - name: Add the resty CLI to the openresty image
         run: |
-          printf 'FROM %s\nRUN apt-get update && apt-get install -y --no-install-recommends openresty-resty && rm -rf /var/lib/apt/lists/*\n' "$OPENRESTY_IMAGE" \
-            | docker build -t "$OPENRESTY_IMAGE" -
+          docker build -t "$OPENRESTY_IMAGE" - <<DOCKERFILE
+          FROM $OPENRESTY_IMAGE
+          RUN apt-get update \
+              && apt-get install -y --no-install-recommends openresty-resty \
+              && rm -rf /var/lib/apt/lists/*
+          DOCKERFILE
 
-      # Surface the nginx sidecar's selfcheck (the harness runs the same line but
-      # discards its output): it boots nginx in the image and probes all three deps,
-      # so the printed JSON shows availability + versions — making an nginx SKIP in the
-      # matrix diagnosable from the log rather than silent.
-      - name: Smoke-test the nginx sidecar
+      # The curl + wget client sidecar needs both CLIs plus python3 (its driver) in one
+      # image, so its loopback server and clients live inside a single --network=none
+      # container. No official image carries all three, so build a tiny one.
+      - name: Build the curl/wget client image
         run: |
-          fix="$PWD/crates/keksbruch/fixtures"
-          docker run --rm -v "$fix:$fix" -w "$fix" "$OPENRESTY_IMAGE" \
-            resty "$fix/parse_cookies_nginx.lua" --selfcheck
+          docker build -t "$CLIENTS_IMAGE" - <<'DOCKERFILE'
+          FROM debian:trixie-slim
+          RUN apt-get update \
+              && apt-get install -y --no-install-recommends curl wget python3 ca-certificates \
+              && rm -rf /var/lib/apt/lists/*
+          DOCKERFILE
 
-      # Node alone has dependencies (cookie, tough-cookie): install them into the
-      # bind-mounted fixtures with the image's own npm, so the runner still needs no
-      # Node toolchain. The harness then runs the sidecar from the same node image.
+      # ── Prepare each sidecar's dependencies with network ON, baked into the
+      # bind-mounted fixtures (or the image), so the harness can then run every sidecar
+      # OFFLINE under --network=none. Each install runs in the SAME image the harness
+      # uses, so binaries/wheels match.
+
+      # Node: cookie + tough-cookie + set-cookie-parser + universal-cookie + js-cookie.
       - name: Install Node sidecar deps in the node image
         run: |
           fix="$PWD/crates/keksbruch/fixtures"
           docker run --rm -v "$fix:$fix" -w "$fix" "$NODE_IMAGE" npm ci
 
-      # The Java sidecar's four parser columns (Tomcat ×2; the jakarta.ws.rs API via
-      # RESTEasy + Jersey) live in a shaded jar. Build it once with the maven image into
-      # the bind-mounted fixtures (deps resolve into the container's ephemeral ~/.m2);
-      # the harness then runs the self-contained jar from JAVA_IMAGE — offline, no
-      # rebuild. The same JDK builds and runs (JAVA_VERSION drives both image tags).
+      # Python: Werkzeug + mitmproxy into a bind-mounted `.pydeps` (the sidecar prepends
+      # it to sys.path); SimpleCookie is stdlib.
+      - name: Install Python sidecar deps in the python image
+        run: |
+          fix="$PWD/crates/keksbruch/fixtures"
+          docker run --rm -v "$fix:$fix" -w "$fix" "$PYTHON_IMAGE" \
+            pip install --no-cache-dir --target .pydeps -r requirements.txt
+
+      # Java: shade the six-parser jar (Tomcat ×2; jakarta.ws.rs via RESTEasy + Jersey;
+      # java.net.HttpCookie + Apache HttpClient5) with maven into the bind-mount.
       - name: Build the Java sidecar jar
         run: |
           fix="$PWD/crates/keksbruch/fixtures"
           docker run --rm -v "$fix:$fix" -w "$fix/java" "$MAVEN_IMAGE" \
             mvn -q -B -DskipTests package
 
-      # Surface the Java sidecar's selfcheck (the harness runs the same line but
-      # discards it): it loads all four parsers and prints availability + versions, so a
-      # Java SKIP in the matrix is diagnosable from the log rather than silent.
-      - name: Smoke-test the Java sidecar
+      # .NET: publish a framework-dependent folder (restores Microsoft.Net.Http.Headers
+      # now), so the harness runs the published DLL offline with no restore.
+      - name: Publish the .NET sidecar
         run: |
           fix="$PWD/crates/keksbruch/fixtures"
-          docker run --rm -v "$fix:$fix" -w "$fix" "$JAVA_IMAGE" \
-            java -jar "$fix/java/target/sidecar.jar" --selfcheck
+          docker run --rm -v "$fix:$fix" -w "$fix/dotnet" "$DOTNET_IMAGE" \
+            dotnet publish -c Release -o publish
 
-      # The matrix test is #[ignore]d, so --ignored runs exactly it. It writes
-      # COOKIE_MATRIX.md and COOKIE_MATRIX.csv next to the crate; a sidecar
-      # whose toolchain is somehow missing degrades to SKIP rather than failing.
+      # C: compile the libcurl program INSIDE buildpack-deps (gcc + libcurl), so the
+      # binary's ABI matches the image the harness runs it in. The compile needs no network.
+      - name: Build the C/libcurl sidecar in its image
+        run: |
+          fix="$PWD/crates/keksbruch/fixtures"
+          docker run --rm -v "$fix:$fix" -w "$fix" "$BUILDPACK_DEPS_IMAGE" \
+            sh -c 'cc -O2 -Wall parse_cookies.c -o parse_cookies $(pkg-config --cflags --libs libcurl)'
+
+      # Offline smoke-test: run every sidecar's `--selfcheck` with `--network=none` — the
+      # exact isolation the harness uses — so a broken offline setup fails here, loudly,
+      # rather than as a silent SKIP in the matrix. Each prints availability + versions.
+      - name: Smoke-test every sidecar offline (--network=none)
+        run: |
+          fix="$PWD/crates/keksbruch/fixtures"
+          run() { docker run --rm --network=none -v "$fix:$fix" -w "$fix" "$@"; }
+          run "$PHP_IMAGE" php "$fix/parse_cookies.php" --selfcheck
+          run "$GO_IMAGE" go run "$fix/parse_cookies.go" --selfcheck
+          run "$NODE_IMAGE" node "$fix/parse_cookies.js" --selfcheck
+          run "$OPENRESTY_IMAGE" resty "$fix/parse_cookies_nginx.lua" --selfcheck
+          run "$JAVA_IMAGE" java -jar "$fix/java/target/sidecar.jar" --selfcheck
+          run "$PYTHON_IMAGE" python3 "$fix/parse_cookies.py" --selfcheck
+          run "$DOTNET_IMAGE" dotnet "$fix/dotnet/publish/parse_cookies.dll" --selfcheck
+          run "$BUILDPACK_DEPS_IMAGE" sh "$fix/parse_cookies_c.sh" --selfcheck
+          run "$CLIENTS_IMAGE" python3 "$fix/parse_setcookie_clients.py" --selfcheck
+
+      # The matrix test is #[ignore]d, so --ignored runs exactly it. The harness runs
+      # each sidecar in its image with `--network=none`; a sidecar whose offline setup is
+      # somehow missing degrades to SKIP rather than failing.
       - name: Generate the matrix
         run: cargo test -p keksbruch --features differential -- --ignored --nocapture
 

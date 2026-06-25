@@ -167,6 +167,22 @@ fn each_scenario_matches_its_pinned_expectation() {
                     );
                 }
             }
+            Expect::ResponsePath { value, path } => {
+                // A path-av is just av-octets, so kekse stores it verbatim in both modes,
+                // independent of the hardened feature (Path has no psl/idna policy).
+                for (mode, parsed) in [
+                    ("strict", SetCookie::parse_strict(&wire)),
+                    ("default", SetCookie::parse(&wire)),
+                ] {
+                    let sc = parsed.unwrap_or_else(|| panic!("{id} {mode} must keep the cookie"));
+                    assert_eq!(sc.value(), *value, "{id} {mode} value");
+                    assert_eq!(
+                        sc.attributes().path.map(|p| p.as_str()),
+                        *path,
+                        "{id} {mode} path"
+                    );
+                }
+            }
             Expect::ResponseNone => {
                 assert!(SetCookie::parse_strict(&wire).is_none(), "{id} strict");
                 assert!(SetCookie::parse(&wire).is_none(), "{id} default");

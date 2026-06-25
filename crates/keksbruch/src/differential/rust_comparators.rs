@@ -32,6 +32,7 @@ pub fn rust_comparators() -> Vec<Box<dyn RustComparator>> {
         Box::new(KekseLenient),
         Box::new(KekseStrict),
         Box::new(CookieCrate),
+        Box::new(CookieStore),
         Box::new(Biscotti),
         Box::new(AxumExtra),
     ]
@@ -40,6 +41,7 @@ pub fn rust_comparators() -> Vec<Box<dyn RustComparator>> {
 pub struct KekseLenient;
 pub struct KekseStrict;
 pub struct CookieCrate;
+pub struct CookieStore;
 pub struct Biscotti;
 pub struct AxumExtra;
 
@@ -134,6 +136,60 @@ impl RustComparator for CookieCrate {
 }
 
 fn cookie_view(c: &cookie::Cookie) -> SetCookieView {
+    SetCookieView {
+        name: c.name().to_string(),
+        value: c.value().to_string(),
+        http_only: c.http_only().unwrap_or(false),
+        secure: c.secure().unwrap_or(false),
+        same_site: c.same_site().map(|s| format!("{s:?}")),
+        path: c.path().map(str::to_string),
+        domain: c.domain().map(str::to_string),
+        max_age: c.max_age().map(|d| d.whole_seconds()),
+    }
+}
+
+impl RustComparator for CookieStore {
+    fn id(&self) -> (&'static str, &'static str) {
+        ("rust", "cookie_store")
+    }
+    fn parse_request(&self, _wire: &str) -> ParseOutcome {
+        // cookie_store is a client Set-Cookie jar; it does not parse request headers.
+        ParseOutcome::NotApplicable
+    }
+    fn parse_response(&self, wire: &str) -> ParseOutcome {
+        // Parse the Set-Cookie as a browser would — against a request URL — so cookie_store
+        // applies RFC 6265 domain-match: a `Domain` that does not match example.com (or a
+        // public suffix) is refused. The Rust "client store" view, like tough-cookie, as
+        // opposed to the pure `cookie` crate parse.
+        let url = match url::Url::parse("https://example.com/") {
+            Ok(u) => u,
+            Err(_) => {
+                return ParseOutcome::SetCookieRejected {
+                    error: "bad base url".to_string(),
+                }
+            }
+        };
+        let mut store = cookie_store::CookieStore::new();
+        match store.parse(wire, &url) {
+            Ok(_) => match store.iter_any().next() {
+                Some(c) => ParseOutcome::SetCookie {
+                    set_cookie: cookie_store_view(c),
+                },
+                None => ParseOutcome::SetCookieRejected {
+                    error: "stored no cookie".to_string(),
+                },
+            },
+            Err(e) => ParseOutcome::SetCookieRejected {
+                error: e.to_string(),
+            },
+        }
+    }
+}
+
+/// cookie_store's `Cookie` derefs to the `cookie` crate's, exposing the *parsed*
+/// attributes (the Domain attribute as written, not cookie_store's computed effective
+/// host), so the column compares like the others.
+fn cookie_store_view(c: &cookie_store::Cookie<'_>) -> SetCookieView {
     SetCookieView {
         name: c.name().to_string(),
         value: c.value().to_string(),

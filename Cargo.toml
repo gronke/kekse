@@ -49,6 +49,11 @@ biscotti = "0.4"
 # axum's standard cookie extractor (itself a thin layer over the `cookie` crate),
 # fed through a real `HeaderValue` so the matrix shows the HTTP-layer boundary.
 axum-extra = { version = "0.10", features = ["cookie"] }
+# cookie_store: a client-side RFC 6265 cookie jar (on top of the `cookie` crate) — a
+# Rust "store" view of Set-Cookie that validates domain-match against a request URL,
+# like a browser. `url` supplies that request URL (cookie_store does not re-export it).
+cookie_store = "0.22"
+url = "2"
 # Render the matrix's CSV companion with a real CSV writer (quoting, escaping).
 csv = "1.3"
 # Entity-encode untrusted cell content (`&`/`<`/`>`) for the matrix's HTML report,

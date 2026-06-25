@@ -3,12 +3,20 @@
 //! dependency on stdout. base64 keeps the protocol control-char-safe (the wire
 //! carries CR/LF/NUL and even raw non-UTF-8). A missing interpreter or dependency
 //! degrades to `Skipped` — a dev without python/node still gets the Rust columns.
+//!
+//! A sidecar that *crashes* (a native parser segfaults, aborts, or hangs on a
+//! single payload) is not swallowed: `run_sidecar` attributes the crash to the
+//! exact payload (`☠️`, [`ParseOutcome::Crashed`]) and replays the rest in a fresh
+//! process, so one bad input no longer voids the whole column.
 
 use std::collections::BTreeMap;
 use std::env;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use base64::prelude::{Engine as _, BASE64_STANDARD};
 use serde::{Deserialize, Serialize};
@@ -95,17 +103,30 @@ const SIDECARS: &[SidecarSpec] = &[
     SidecarSpec {
         lang: "python",
         command: "python3",
-        image: None,
+        // SimpleCookie is stdlib; Werkzeug + mitmproxy are installed (network on) into
+        // a bind-mounted `.pydeps` by CI (`pip install --target`, in this same image so
+        // the wheels match), which the sidecar adds to sys.path — so the harness runs it
+        // with `--network=none` and imports resolve offline. Locally, with no docker, it
+        // falls back to host `python3` (resolve_command prefers a crate-local .venv).
+        image: Some(ImageSpec {
+            repo: "python",
+            default_version: "3.13",
+            tag_suffix: "",
+            version_env: "PYTHON_VERSION",
+        }),
         args: &[],
         post_args: &[],
         script: "parse_cookies.py",
-        deps: &["SimpleCookie", "Werkzeug"],
+        deps: &["SimpleCookie", "http.cookiejar", "Werkzeug", "mitmproxy"],
     },
     SidecarSpec {
         lang: "node",
         command: "node",
-        // cookie + tough-cookie deps; CI installs them into the bind-mounted fixtures
-        // with the image's npm (see matrix.yml), then runs the sidecar from the image.
+        // Five npm columns: `cookie` (request) + `tough-cookie` (response), plus
+        // `set-cookie-parser` (response), `universal-cookie` (request — the parser
+        // behind react-cookie), and `js-cookie` (request — the browser library, via a
+        // document.cookie stub). CI installs them into the bind-mounted fixtures with
+        // the image's npm (see matrix.yml), then runs the sidecar from the image.
         // Override the version with NODE_VERSION (Docker path only); locally, with no
         // docker, it falls back to host `node` + host node_modules.
         image: Some(ImageSpec {
@@ -117,7 +138,13 @@ const SIDECARS: &[SidecarSpec] = &[
         args: &[],
         post_args: &[],
         script: "parse_cookies.js",
-        deps: &["cookie", "tough-cookie"],
+        deps: &[
+            "cookie",
+            "tough-cookie",
+            "set-cookie-parser",
+            "universal-cookie",
+            "js-cookie",
+        ],
     },
     SidecarSpec {
         lang: "go",
@@ -138,11 +165,22 @@ const SIDECARS: &[SidecarSpec] = &[
     },
     SidecarSpec {
         lang: "dotnet",
+        // ASP.NET Core's header parser (Cookie/SetCookieHeaderValue). CI `dotnet
+        // publish`es it (network on) to a self-contained folder in the bind-mount, so
+        // the harness runs the published DLL from the SDK image with `--network=none`
+        // (no runtime restore, no network). Override the SDK with DOTNET_VERSION.
+        // Locally, with no docker, it falls back to host `dotnet <dll>` (SKIP until the
+        // project is published).
         command: "dotnet",
-        image: None,
-        args: &["run", "-v", "q", "--project"],
-        post_args: &["--"],
-        script: "dotnet",
+        image: Some(ImageSpec {
+            repo: "mcr.microsoft.com/dotnet/sdk",
+            default_version: "8.0",
+            tag_suffix: "",
+            version_env: "DOTNET_VERSION",
+        }),
+        args: &[],
+        post_args: &[],
+        script: "dotnet/publish/parse_cookies.dll",
         deps: &["Microsoft.Net.Http.Headers"],
     },
     SidecarSpec {
@@ -171,7 +209,10 @@ const SIDECARS: &[SidecarSpec] = &[
         // ports and replays each request wire to it over an ngx cosocket — so nginx's
         // *native* Cookie handling is tested: $cookie_<name> (a by-name lookup),
         // lua-resty-cookie (a Lua-library parser), and proxy forwarding fidelity.
-        // PHP-like and request-only (no Set-Cookie parser → n/a). CI runs it in the
+        // The three request columns are PHP-like and request-only; a fourth,
+        // `proxy (Set-Cookie)`, is response-only — the forwarding-fidelity verdict for
+        // an upstream Set-Cookie a proxy_pass relays back (nginx exposes no parsed
+        // Set-Cookie to Lua, so it is fidelity, not a parse). CI runs it in the
         // openresty image; OPENRESTY_VERSION overrides the version (the -bookworm
         // flavor is fixed). Locally, with no docker, it falls back to host `resty`;
         // absent → SKIP.
@@ -185,7 +226,12 @@ const SIDECARS: &[SidecarSpec] = &[
         args: &[],
         post_args: &[],
         script: "parse_cookies_nginx.lua",
-        deps: &["$cookie_<name>", "lua-resty-cookie", "proxy"],
+        deps: &[
+            "$cookie_<name>",
+            "lua-resty-cookie",
+            "proxy",
+            "proxy (Set-Cookie)",
+        ],
     },
     SidecarSpec {
         lang: "java",
@@ -198,6 +244,8 @@ const SIDECARS: &[SidecarSpec] = &[
         // request parsing to the JAX-RS layer (RESTEasy), so its parsing *is* the
         // `Jakarta RESTEasy` column (see matrix.rs prose). The two Jakarta columns
         // parse both directions; the two Tomcat columns are request-only (→ n/a).
+        // It also adds two response-only Set-Cookie columns: the JDK's
+        // `java.net.HttpCookie` and Apache HttpClient 5's RFC 6265 cookie spec.
         // Override the JDK with JAVA_VERSION (the -jre flavor is fixed). Locally, with
         // no docker, it falls back to host `java` (needs a host-built jar); absent → SKIP.
         command: "java",
@@ -215,7 +263,50 @@ const SIDECARS: &[SidecarSpec] = &[
             "Tomcat legacy",
             "Jakarta RESTEasy",
             "Jakarta Jersey",
+            "java.net.HttpCookie",
+            "Apache HttpClient5",
         ],
+    },
+    SidecarSpec {
+        lang: "c",
+        // A compiled libcurl program — the matrix's only native-C column, and a
+        // Set-Cookie parser (libcurl's cookie engine, exercised offline). `sh` runs a
+        // wrapper that execs the `parse_cookies` binary CI compiles *inside* this image
+        // (`cc … -lcurl`; see matrix.yml), so it runs with `--network=none`. buildpack-deps
+        // carries gcc + libcurl. Locally, with no docker, it falls back to host `sh` +
+        // a host-compiled binary; absent/uncompiled → the exec fails → SKIP.
+        command: "sh",
+        image: Some(ImageSpec {
+            repo: "buildpack-deps",
+            default_version: "trixie",
+            tag_suffix: "",
+            version_env: "BUILDPACK_DEPS_VERSION",
+        }),
+        args: &[],
+        post_args: &[],
+        script: "parse_cookies_c.sh",
+        deps: &["libcurl"],
+    },
+    SidecarSpec {
+        lang: "client",
+        // curl and wget as real HTTP clients: a Python driver boots a loopback server
+        // that replies with `Set-Cookie: <wire>`, runs each client against it, and reads
+        // the cookie back from the saved Netscape jar — the *transfer* view (the request
+        // host supplies the domain, so host-only cookies parse, unlike c/libcurl's
+        // offline injection). Runs in a small CI-built image (curl + wget + python3) with
+        // `--network=none`; the loopback server/client live inside that one container.
+        // Locally, with no docker, it falls back to host `python3` + host curl/wget.
+        command: "python3",
+        image: Some(ImageSpec {
+            repo: "keksbruch-clients",
+            default_version: "local",
+            tag_suffix: "",
+            version_env: "CLIENTS_IMAGE_VERSION",
+        }),
+        args: &[],
+        post_args: &[],
+        script: "parse_setcookie_clients.py",
+        deps: &["curl", "wget"],
     },
 ];
 
@@ -327,7 +418,15 @@ fn launch(spec: &SidecarSpec, script: &Path, interactive: bool) -> Command {
                 .to_string_lossy()
                 .into_owned();
             let mut cmd = Command::new("docker");
-            cmd.arg("run").arg("--rm");
+            // `--network=none`: a sidecar runs untrusted third-party parsers against
+            // untrusted input, so it gets NO network — defence-in-depth against a
+            // compromised dependency exfiltrating or phoning home. The container keeps
+            // its loopback interface, which is all any sidecar needs (nginx and the
+            // curl/wget client boot servers on 127.0.0.1 inside their own container).
+            // The image must be pre-pulled/built (CI does this with network on) since a
+            // no-network `docker run` cannot pull. The matrix job itself also holds no
+            // push/deploy credentials — only the separate deploy-pages job does.
+            cmd.arg("run").arg("--rm").arg("--network=none");
             if interactive {
                 cmd.arg("-i");
             }
@@ -368,21 +467,122 @@ fn selfcheck(spec: &SidecarSpec, script: &Path) -> Option<SelfcheckLine> {
         .find_map(|line| serde_json::from_str::<SelfcheckLine>(line).ok())
 }
 
+/// How long to wait for the *next* result line before declaring a sidecar hung.
+/// Inactivity-based (it resets on every line received), so a slow cold start — a
+/// `go run` compile, a docker image, a booted server — is fine, while an infinite
+/// loop or quadratic blow-up on one payload is caught. A hang is recorded as a
+/// `☠️` crash, exactly like a terminating signal or a non-zero exit.
+const SIDECAR_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// What one run of a sidecar process produced.
+struct BatchOutcome {
+    /// `id → {dep → outcome}` for the records this run answered.
+    answers: BTreeMap<String, BTreeMap<String, ParseOutcome>>,
+    /// `None` if the process exited 0; `Some(reason)` if it died on a signal,
+    /// exited non-zero, or was killed for hanging — the crash diagnosis.
+    death: Option<String>,
+}
+
 /// Send the whole corpus to a sidecar and collect `id → {dep → outcome}`.
+///
+/// The happy path is one process for the whole corpus, exactly as before. But a
+/// sidecar can *crash* — segfault, abort, or hang — on a specific payload (the new
+/// native C/curl/wget columns genuinely can, and that is a finding worth keeping).
+/// So when a run dies with records still unanswered, the offending payload is
+/// marked [`ParseOutcome::Crashed`] (`☠️`) and the **rest are replayed in a fresh
+/// process**, so one crash no longer voids the whole column — the old behaviour
+/// turned every cell to `SKIP`, hiding both the crash and the survivors.
 fn run_sidecar(
     spec: &SidecarSpec,
     script: &Path,
     scenarios: &[Scenario],
 ) -> Option<BTreeMap<String, BTreeMap<String, ParseOutcome>>> {
+    let mut answered: BTreeMap<String, BTreeMap<String, ParseOutcome>> = BTreeMap::new();
+    let mut remaining: Vec<&Scenario> = scenarios.iter().collect();
+
+    // Each iteration runs the pending records in one process; it either answers
+    // some (progress) or pins exactly one crasher (also progress), so `remaining`
+    // strictly shrinks and the loop terminates.
+    while !remaining.is_empty() {
+        let batch = run_batch(spec, script, &remaining)?;
+        let made_progress = !batch.answers.is_empty();
+        for (id, by_dep) in batch.answers {
+            answered.insert(id, by_dep);
+        }
+        let next: Vec<&Scenario> = remaining
+            .iter()
+            .copied()
+            .filter(|s| !answered.contains_key(s.id))
+            .collect();
+        if next.is_empty() {
+            return Some(answered);
+        }
+        let Some(reason) = batch.death else {
+            // Exited cleanly yet left records unanswered: a sidecar that simply did
+            // not emit them, not a crash. Leave them to default to SKIP.
+            return Some(answered);
+        };
+
+        // The process died with `next` unanswered; its first record is the prime
+        // suspect. When the run produced *no* output at all, the suspect is a guess
+        // (a sidecar that block-buffers stdout dies before flushing any line), so
+        // confirm by re-running it alone before blaming it.
+        let crasher = next[0];
+        let crash_reason = if !made_progress && next.len() > 1 {
+            let solo = run_batch(spec, script, &[crasher])?;
+            if let Some(by_dep) = solo.answers.get(crasher.id) {
+                // Parses fine alone — the true crasher is later in the batch.
+                answered.insert(crasher.id.to_string(), by_dep.clone());
+                remaining = next[1..].to_vec();
+                continue;
+            }
+            solo.death.unwrap_or(reason)
+        } else {
+            reason
+        };
+        answered.insert(crasher.id.to_string(), crash_map(spec, &crash_reason));
+        remaining = next[1..].to_vec();
+    }
+    Some(answered)
+}
+
+/// Run one batch of records in a fresh sidecar process: stream the input on stdin,
+/// read result lines off stdout with an inactivity timeout (a reader thread feeds
+/// a channel, so a full stdout pipe can never deadlock the writer), and classify
+/// how the process ended.
+fn run_batch(spec: &SidecarSpec, script: &Path, batch: &[&Scenario]) -> Option<BatchOutcome> {
     let mut child = launch(spec, script, true)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        // stderr is discarded: draining it would need a second thread, and the exit
+        // status/signal already names the crash. The cell only ever shows `☠️`.
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
+
+    // Drain stdout on a thread *before* writing stdin, so the child can never block
+    // on a full stdout pipe while we are still feeding its stdin (a pipe deadlock).
+    let stdout = child.stdout.take()?;
+    let (tx, rx) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            // A read error means the child died mid-line; a send error means the
+            // receiver is gone. Either way, stop draining.
+            match line {
+                Ok(l) => {
+                    if tx.send(l).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        // `tx` drops here → the receiver sees `Disconnected`, our stdout-EOF signal.
+    });
+
     {
         let mut stdin = child.stdin.take()?;
-        for s in scenarios {
+        for s in batch {
             let record = InputRecord {
                 id: s.id,
                 direction: match s.direction {
@@ -391,22 +591,80 @@ fn run_sidecar(
                 },
                 wire_b64: BASE64_STANDARD.encode(s.recipe.render()),
             };
-            let line = serde_json::to_string(&record).ok()?;
-            writeln!(stdin, "{line}").ok()?;
+            if let Ok(line) = serde_json::to_string(&record) {
+                // A write error (EPIPE) means the child already died — Rust ignores
+                // SIGPIPE, so this returns rather than killing us. Stop feeding it
+                // and let the read loop below observe the death.
+                if writeln!(stdin, "{line}").is_err() {
+                    break;
+                }
+            }
         }
-        // stdin dropped here → EOF; the corpus is small, so no deadlock.
+        // stdin dropped here → EOF.
     }
-    let output = child.wait_with_output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let mut map = BTreeMap::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if let Ok(result) = serde_json::from_str::<ResultLine>(line) {
-            map.insert(result.id, result.by_dep);
+
+    let mut answers: BTreeMap<String, BTreeMap<String, ParseOutcome>> = BTreeMap::new();
+    let mut timed_out = false;
+    loop {
+        match rx.recv_timeout(SIDECAR_INACTIVITY_TIMEOUT) {
+            Ok(line) => {
+                if let Ok(result) = serde_json::from_str::<ResultLine>(&line) {
+                    answers.insert(result.id, result.by_dep);
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                timed_out = true;
+                let _ = child.kill();
+                break;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break, // stdout reached EOF
         }
     }
-    Some(map)
+    let status = child.wait().ok();
+    let _ = reader.join();
+
+    let death = if timed_out {
+        Some("timeout".to_string())
+    } else {
+        match status {
+            Some(s) if s.success() => None,
+            Some(s) => Some(death_reason(s)),
+            None => Some("abnormal exit".to_string()),
+        }
+    };
+    Some(BatchOutcome { answers, death })
+}
+
+/// Mark every dependency column of a sidecar `Crashed` for the payload that killed
+/// the process — one crash takes the whole process down, hence every dep with it.
+fn crash_map(spec: &SidecarSpec, reason: &str) -> BTreeMap<String, ParseOutcome> {
+    spec.deps
+        .iter()
+        .map(|d| {
+            (
+                d.to_string(),
+                ParseOutcome::Crashed {
+                    reason: reason.to_string(),
+                },
+            )
+        })
+        .collect()
+}
+
+/// A human reason for an abnormal exit: the terminating signal where there is one
+/// (a segfault is `signal 11`), else the non-zero exit code.
+fn death_reason(status: ExitStatus) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(sig) = status.signal() {
+            return format!("signal {sig}");
+        }
+    }
+    match status.code() {
+        Some(code) => format!("exit {code}"),
+        None => "abnormal exit".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -420,6 +678,90 @@ mod tests {
             .find(|s| s.lang == lang)
             .and_then(|s| s.image.as_ref())
             .expect("sidecar has a declared image")
+    }
+
+    /// A throwaway python sidecar that answers every record `NotApplicable` but
+    /// kills itself the instant it sees one id — modelling a native parser that
+    /// crashes on a specific payload. `__CRASH_ID__` is substituted per test.
+    /// SIGKILL (not `abort()`) so the test never litters the tree with core dumps,
+    /// while still exercising the signal branch of `death_reason`.
+    const FAUX_CRASHING_SIDECAR: &str = r#"
+import sys, json, os, signal
+CRASH = "__CRASH_ID__"
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    rec = json.loads(line)
+    if rec["id"] == CRASH:
+        os.kill(os.getpid(), signal.SIGKILL)
+    print(json.dumps({"id": rec["id"], "by_dep": {"faux": {"outcome": "NotApplicable"}}}), flush=True)
+"#;
+
+    /// A sidecar that dies mid-stream must not void the whole column: the crashing
+    /// payload is pinned as `Crashed` (☠️) and the records after it are replayed in
+    /// a fresh process, so the survivors still report.
+    #[test]
+    fn a_crashing_sidecar_is_isolated_and_the_rest_replays() {
+        use crate::differential::result::ParseOutcome;
+
+        // The differential harness assumes python3; skip cleanly if absent rather
+        // than fail spuriously on a host without it.
+        let have_py = std::process::Command::new("python3")
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !have_py {
+            return;
+        }
+
+        let all = crate::scenario::scenarios();
+        assert!(all.len() >= 6, "corpus should have at least 6 scenarios");
+        let batch = &all[..6];
+        let crash_id = batch[2].id; // crash on the 3rd record
+        let earlier_id = batch[0].id; // answered before the crash
+        let later_id = batch[5].id; // answered only if the replay runs
+
+        let path = std::env::temp_dir().join(format!("keksbruch_faux_{}.py", std::process::id()));
+        std::fs::write(
+            &path,
+            FAUX_CRASHING_SIDECAR.replace("__CRASH_ID__", crash_id),
+        )
+        .expect("write the faux sidecar script");
+
+        let spec = SidecarSpec {
+            lang: "faux",
+            command: "python3",
+            image: None,
+            args: &[],
+            post_args: &[],
+            script: "unused", // run_sidecar takes the script path explicitly
+            deps: &["faux"],
+        };
+        let result = run_sidecar(&spec, &path, batch);
+        let _ = std::fs::remove_file(&path);
+        let result = result.expect("run_sidecar returns Some even when a payload crashes");
+
+        let faux = |id: &str| result.get(id).and_then(|by_dep| by_dep.get("faux"));
+        assert!(
+            matches!(faux(crash_id), Some(ParseOutcome::Crashed { .. })),
+            "the crashing payload should be pinned Crashed, got {:?}",
+            faux(crash_id)
+        );
+        assert!(
+            matches!(faux(earlier_id), Some(ParseOutcome::NotApplicable)),
+            "a record before the crash should still be answered, got {:?}",
+            faux(earlier_id)
+        );
+        assert!(
+            matches!(faux(later_id), Some(ParseOutcome::NotApplicable)),
+            "a record after the crash should be answered by the replay, got {:?}",
+            faux(later_id)
+        );
     }
 
     #[test]

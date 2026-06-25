@@ -28,6 +28,10 @@ base64 = { workspace = true, optional = true }
 cookie = { workspace = true, optional = true }
 biscotti = { workspace = true, optional = true }
 axum-extra = { workspace = true, optional = true }
+# cookie_store: a Rust client cookie-jar comparator; url builds the request URL it
+# validates Set-Cookie domain-match against.
+cookie_store = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
 csv = { workspace = true, optional = true }
 # Entity-encode untrusted cell content for the matrix's HTML report.
 html-escape = { workspace = true, optional = true }
@@ -46,6 +50,8 @@ differential = [
     "dep:cookie",
     "dep:biscotti",
     "dep:axum-extra",
+    "dep:cookie_store",
+    "dep:url",
     "dep:http",
     "dep:csv",
     "dep:html-escape",

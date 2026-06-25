@@ -3,10 +3,12 @@
   keksbruch Java sidecar.
 
   Builds a single self-contained (shaded) jar — target/sidecar.jar — that parses
-  cookies with four JVM parsers: Tomcat's Rfc6265 + Legacy cookie processors and
-  the jakarta.ws.rs cookie API via two providers (RESTEasy + Jersey). The harness
-  runs it with `java -jar target/sidecar.jar` from a JRE image; this jar carries
-  every dependency, which is why the harness can bind-mount just target/.
+  cookies with six JVM parsers: Tomcat's Rfc6265 + Legacy cookie processors and the
+  jakarta.ws.rs cookie API via two providers (RESTEasy + Jersey) for requests, plus
+  two Set-Cookie (response) parsers — the JDK's java.net.HttpCookie and Apache
+  HttpClient 5's RFC 6265 cookie spec. The harness runs it with `java -jar
+  target/sidecar.jar` from a JRE image; this jar carries every dependency, which is
+  why the harness can bind-mount just target/.
 
   Built in CI by a maven image (see .github/workflows/matrix.yml). The compiler
   release is pinned to 17 — a comfortable floor above every dependency's minimum
@@ -39,6 +41,7 @@
     <resteasy.version>6.2.16.Final</resteasy.version>
     <jersey.version>3.1.11</jersey.version>
     <gson.version>2.14.0</gson.version>
+    <hc5.version>5.6.1</hc5.version>
   </properties>
 
   <dependencies>
@@ -70,6 +73,15 @@
       <groupId>org.glassfish.jersey.core</groupId>
       <artifactId>jersey-common</artifactId>
       <version>${jersey.version}</version>
+    </dependency>
+
+    <!-- Apache HttpClient 5's RFC 6265 cookie spec (RFC6265CookieSpecFactory) — a
+         widely-used JVM Set-Cookie parser. Pulls httpcore5 transitively; both are
+         shaded into the jar. Needs Java 8+, comfortably under the release-17 floor. -->
+    <dependency>
+      <groupId>org.apache.httpcomponents.client5</groupId>
+      <artifactId>httpclient5</artifactId>
+      <version>${hc5.version}</version>
     </dependency>
 
     <!-- Protocol JSON. Gson is tiny and independent of any JSON lib the providers
