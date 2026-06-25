@@ -37,6 +37,15 @@ pub enum Expect {
         lenient_dated: bool,
         strict_dated: bool,
     },
+    /// Response: both modes keep a cookie with `value`; its resolved `Domain` is `default_domain`
+    /// in the pure-codec build and `hardened_domain` under the `hardened` feature (where `psl` /
+    /// `idna` may refuse a public-suffix or malformed value, leaving it `None`). For a single
+    /// `Domain` (no duplicate) strict and lenient agree, so both are asserted.
+    ResponseDomain {
+        value: &'static str,
+        default_domain: Option<&'static str>,
+        hardened_domain: Option<&'static str>,
+    },
     /// Response: both modes reject (`None`).
     ResponseNone,
     /// The wire is not valid UTF-8, so it can never reach a `&str` parser.
@@ -328,16 +337,11 @@ pub fn scenarios() -> Vec<Scenario> {
         ),
         s(
             "attr-duplicate",
-            "a duplicated known attribute is accepted (last wins)",
+            "a duplicated known attribute: lenient keeps it (last wins), strict rejects the cookie",
             Response,
             "SID",
             Keksbruch::DuplicateAttribute("Path"),
-            Expect::ResponseValue {
-                value: "abc",
-                max_age: None,
-                http_only: false,
-                secure: false,
-            },
+            Expect::ResponseStrictRejectsLenientKeeps { value: "abc" },
         ),
         // ── Expires dates (Response) ────────────────────────────────────────
         // Lenient parse = RFC 6265 §5.1.1 cookie-date (accepts the IMF-fixdate, the
@@ -466,6 +470,108 @@ pub fn scenarios() -> Vec<Scenario> {
                 lenient_dated: false,
                 strict_dated: false,
             },
+        ),
+        // ── domain: supercookie defense + IDN notation (Response) ───────────
+        // Default kekse is a pure codec: it stores any av-octet `Domain` verbatim (it does not even
+        // strip the leading dot — the matrix shows which parsers do). The `psl` / `idna` features
+        // (the `hardened` build) turn it into policy: a public-suffix `Domain` (the supercookie) and
+        // malformed punycode are refused, leaving the cookie host-only. The matrix compares how
+        // other parsers strip the dot and read IDNs.
+        s(
+            "domain-supercookie-tld",
+            "Domain=.com is a supercookie: stored verbatim by the pure codec, refused under `psl`",
+            Response,
+            "SID",
+            Keksbruch::DomainValue(".com"),
+            Expect::ResponseDomain {
+                value: "abc",
+                default_domain: Some(".com"),
+                hardened_domain: None,
+            },
+        ),
+        s(
+            "domain-supercookie-icann",
+            "Domain=co.uk is a multi-label public suffix: stored by the pure codec, refused under `psl`",
+            Response,
+            "SID",
+            Keksbruch::DomainValue("co.uk"),
+            Expect::ResponseDomain {
+                value: "abc",
+                default_domain: Some("co.uk"),
+                hardened_domain: None,
+            },
+        ),
+        s(
+            "domain-registrable",
+            "a real registrable Domain (eTLD+1) survives in every build",
+            Response,
+            "SID",
+            Keksbruch::DomainValue("example.co.uk"),
+            Expect::ResponseDomain {
+                value: "abc",
+                default_domain: Some("example.co.uk"),
+                hardened_domain: Some("example.co.uk"),
+            },
+        ),
+        s(
+            "domain-punycode",
+            "a punycode A-label IDN (xn--mnchen-3ya.de = münchen.de) is valid in every build",
+            Response,
+            "SID",
+            Keksbruch::DomainValue("xn--mnchen-3ya.de"),
+            Expect::ResponseDomain {
+                value: "abc",
+                default_domain: Some("xn--mnchen-3ya.de"),
+                hardened_domain: Some("xn--mnchen-3ya.de"),
+            },
+        ),
+        s(
+            "domain-utf8",
+            "a raw UTF-8 (U-label) Domain is non-ASCII, so the av-octet rule drops it in every build",
+            Response,
+            "SID",
+            Keksbruch::DomainValue("münchen.de"),
+            Expect::ResponseDomain {
+                value: "abc",
+                default_domain: None,
+                hardened_domain: None,
+            },
+        ),
+        s(
+            "domain-malformed-punycode",
+            "malformed punycode is av-octet-clean, so the pure codec stores it; the hardened build refuses it",
+            Response,
+            "SID",
+            Keksbruch::DomainValue("xn--"),
+            Expect::ResponseDomain {
+                value: "abc",
+                default_domain: Some("xn--"),
+                hardened_domain: None,
+            },
+        ),
+        // Multiple Domain= on one cookie — kekse never emits this (a `SetCookie` holds one
+        // `Domain`); keksbruch hand-builds it to characterise the duplicate-attribute split.
+        s(
+            "domain-dup-last-wins",
+            "two valid Domains: lenient takes the last, strict rejects the duplicate",
+            Response,
+            "SID",
+            Keksbruch::DuplicateDomain {
+                first: "a.example.com",
+                second: "b.example.com",
+            },
+            Expect::ResponseStrictRejectsLenientKeeps { value: "abc" },
+        ),
+        s(
+            "domain-dup-valid-then-invalid",
+            "a valid then an invalid Domain: lenient ends host-only (last wins, then dropped), strict rejects",
+            Response,
+            "SID",
+            Keksbruch::DuplicateDomain {
+                first: "valid.example.com",
+                second: "café",
+            },
+            Expect::ResponseStrictRejectsLenientKeeps { value: "abc" },
         ),
         s(
             "resp-crlf",

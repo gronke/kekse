@@ -43,10 +43,25 @@ impl AsRef<str> for Path<'_> {
 pub struct Domain<'a>(&'a str);
 
 impl<'a> Domain<'a> {
-    /// `Some(Domain)` iff every byte is an av-octet (no control byte, `;`, or
-    /// non-ASCII).
+    /// `Some(Domain)` iff every byte is an av-octet (no control byte, `;`, or non-ASCII). With the
+    /// `psl` feature a public-suffix value (a supercookie `Domain` such as `com` / `.co.uk`) is also
+    /// refused; with the `idna` feature, malformed punycode is refused too.
     pub fn new(value: &'a str) -> Option<Self> {
-        value.bytes().all(is_av_octet).then_some(Self(value))
+        if !value.bytes().all(is_av_octet) {
+            return None;
+        }
+        // Supercookie defense (`psl`): a `Domain` that is itself a public suffix can never be set,
+        // so a cookie cannot escape its registrable domain.
+        #[cfg(feature = "psl")]
+        if rfc_6265::domain::is_public_suffix(value) {
+            return None;
+        }
+        // IDN validation (`idna`): reject an av-octet-clean but malformed punycode label.
+        #[cfg(feature = "idna")]
+        if !rfc_6265::domain::is_valid_domain(value) {
+            return None;
+        }
+        Some(Self(value))
     }
 
     /// The validated domain value.
@@ -244,9 +259,13 @@ mod tests {
     fn path_domain_av_octet_edge_cases() {
         // av-octet = 0x20..=0x3a | 0x3c..=0x7e: SP and digits are in; HTAB, `;`,
         // controls, and non-ASCII are out (the rejections are pinned above).
-        // Empty: every byte is an av-octet (vacuously) → accepted.
+        // Empty: every byte is an av-octet (vacuously). `Path` always accepts it; `Domain` accepts
+        // it by default, but the `idna` feature rejects an empty string as not a valid domain.
         assert_eq!(Path::new("").map(|p| p.as_str()), Some(""));
+        #[cfg(not(feature = "idna"))]
         assert_eq!(Domain::new("").map(|d| d.as_str()), Some(""));
+        #[cfg(feature = "idna")]
+        assert!(Domain::new("").is_none());
         // SP (0x20) is an av-octet → space-only paths are valid.
         assert!(Path::new(" ").is_some());
         assert!(Path::new("   ").is_some());
@@ -255,6 +274,30 @@ mod tests {
         assert!(Path::new("a\tb").is_none());
         // Digits (0x30..=0x39) are av-octets.
         assert!(Path::new("12345").is_some());
+        // A bare single label is a public suffix under the `psl` rule, so only assert the default
+        // (av-octet-only) acceptance here; `psl` Domain behaviour is pinned separately.
+        #[cfg(not(feature = "psl"))]
         assert!(Domain::new("123").is_some());
+    }
+
+    #[cfg(feature = "psl")]
+    #[test]
+    fn psl_feature_rejects_public_suffix_domains() {
+        // Supercookie defense: a public-suffix value can never become a `Domain`.
+        assert!(Domain::new("com").is_none());
+        assert!(Domain::new("co.uk").is_none());
+        // The leading dot is stripped before the check, so `.com` is refused too.
+        assert!(Domain::new(".com").is_none());
+        // A registrable domain is still accepted.
+        assert!(Domain::new("example.com").is_some());
+        assert!(Domain::new("example.co.uk").is_some());
+    }
+
+    #[cfg(feature = "idna")]
+    #[test]
+    fn idna_feature_rejects_malformed_punycode() {
+        assert!(Domain::new("xn--").is_none()); // malformed punycode
+        assert!(Domain::new("xn--mnchen-3ya.de").is_some()); // valid punycode IDN
+        assert!(Domain::new("example.com").is_some());
     }
 }

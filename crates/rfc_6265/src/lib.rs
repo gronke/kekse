@@ -10,6 +10,8 @@
 //!   the `time` crate. Date parsing is never hand-rolled.
 //! - `domain` (feature `domain`) — §5.1.3 domain matching.
 //! - `path` (feature `path`) — §5.1.4 path matching and default-path.
+//! - `idna` (feature `idna`) — §5.1.2 IDN ↔ punycode canonicalization (implies `domain`).
+//! - `psl` (feature `psl`) — §4.1.2.3 / §5.3 public-suffix (supercookie) checks (implies `domain`).
 //!
 //! It is deliberately *not* a cookie store (§5.3) nor a `Set-Cookie`/`Cookie` codec (§5.2/§5.4) —
 //! those belong to a higher layer (e.g. the `kekse` crate).

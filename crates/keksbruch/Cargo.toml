@@ -50,6 +50,9 @@ differential = [
     "dep:csv",
     "dep:html-escape",
 ]
+# Build the system under test (kekse) with its Domain-hardening suite, so Layer A asserts the
+# enforced behaviour (public-suffix / malformed-IDN `Domain`s refused) rather than the pure codec.
+hardened = ["kekse/hardened"]
 
 [dev-dependencies]
 # Layer A asserts the Set-Cookie HeaderValue gate rejects injection that a raw
