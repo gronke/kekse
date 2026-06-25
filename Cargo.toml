@@ -9,12 +9,12 @@ homepage = "https://github.com/gronke/kekse"
 repository = "https://github.com/gronke/kekse"
 license = "MIT"
 edition = "2021"
-publish = false
-# MSRV. `OnceLock` (1.70) is used deliberately over `LazyLock` (1.80). Covers the
-# core `kekse` crate with its `default`/`tracing` features — CI's `msrv` leg
-# builds exactly that. The optional `axum` feature needs Rust >= 1.78 (axum-core
-# 0.5) and is intentionally outside the MSRV guarantee.
-rust-version = "1.77.2"
+# MSRV. The floor is the `time` crate (used to parse and format `Expires`
+# dates), which requires Rust 1.88 / edition 2024; CI's `msrv` leg builds the
+# workspace at exactly this version. At 1.88 the optional `axum` feature
+# (axum-core 0.5, which needs 1.78) is comfortably within the guarantee, so every
+# feature builds on MSRV.
+rust-version = "1.88.0"
 
 # Shared dependency versions for the workspace's crates.
 [workspace.dependencies]
@@ -23,6 +23,10 @@ percent-encoding = "2"
 # RFC 7230 token grammar for cookie-names (via `http`'s `HeaderName`), borrowed
 # rather than re-implemented as a homemade table.
 http = "1"
+# `Expires` dates: parse the RFC 6265 §5.1.1 cookie-date (lenient) and the
+# RFC 7231 IMF-fixdate (strict), and format the canonical IMF-fixdate on write.
+# This is what pulls kekse's MSRV to 1.88 (see `rust-version` above).
+time = { version = "0.3", features = ["std", "parsing", "formatting", "macros"] }
 # Fail-soft parse logs a skipped pair at debug level.
 tracing = "0.1"
 # `FromRequestParts` for the optional `axum` extractor — the light core `axum`

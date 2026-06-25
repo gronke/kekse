@@ -94,6 +94,10 @@ pub enum Keksbruch {
     ValuedFlag(&'static str),
     /// A duplicated attribute: `; Path=/a; Path=/b`.
     DuplicateAttribute(&'static str),
+    /// An `Expires` date in some format: `; Expires=<val>` (Response). Probes the
+    /// lenient RFC 6265 §5.1.1 cookie-date vs strict RFC 7231 IMF-fixdate split,
+    /// and how other parsers read the obsolete RFC 850 / asctime() forms.
+    ExpiresDate(&'static str),
 
     // ── extra coverage: NUL positions, HTAB, multibyte UTF-8 ─────────────────
     /// A NUL byte in the cookie *name*: `n\0x=v`.

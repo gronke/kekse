@@ -4,6 +4,8 @@
 //! `CookieAttributes`. The `Path` and `Domain` values are validated [`Path`] /
 //! [`Domain`] newtypes, so the public fields cannot carry an injection byte.
 
+use time::OffsetDateTime;
+
 use crate::grammar::is_av_octet;
 use crate::same_site::SameSite;
 
@@ -107,6 +109,11 @@ pub struct CookieAttributes<'a> {
     pub domain: Option<Domain<'a>>,
     /// The `Max-Age` attribute in seconds, if set. `0` deletes the cookie.
     pub max_age: Option<u64>,
+    /// The `Expires` attribute, if set — an absolute expiry instant. Stored
+    /// independently of [`max_age`](Self::max_age); when a client is given both,
+    /// RFC 6265 §5.3 lets `Max-Age` win, but that precedence is a cookie-*store*
+    /// concern and is out of scope here.
+    pub expires: Option<OffsetDateTime>,
 }
 
 impl<'a> CookieAttributes<'a> {
@@ -155,6 +162,14 @@ impl<'a> CookieAttributes<'a> {
     #[must_use]
     pub fn max_age(mut self, seconds: u64) -> Self {
         self.max_age = Some(seconds);
+        self
+    }
+
+    /// Set the `Expires` attribute — an absolute expiry instant, rendered as the
+    /// RFC 7231 IMF-fixdate (always in GMT).
+    #[must_use]
+    pub fn expires(mut self, when: OffsetDateTime) -> Self {
+        self.expires = Some(when);
         self
     }
 }

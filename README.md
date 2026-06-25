@@ -8,7 +8,7 @@ This repository is a Cargo workspace.
 
 [`kekse`](crates/kekse) is the library: a strict, dependency-light cookie codec.
 It reads a `Cookie:` request header into a `CookieJar` of `Cookie`s, builds and parses `Set-Cookie:` response values through the `SetCookie` type, and converts one straight into an `http::HeaderValue` — directly on the RFC 6265 §4.1.1 grammar.
-There is no cookie *store* (no persistence, eviction, or domain/path send-matching), no signing or encryption, and no date handling — a lifetime is `Max-Age` seconds, never an `Expires` date — so it pulls in neither `time` nor `chrono`.
+There is no cookie *store* (no persistence, eviction, or domain/path send-matching) and no signing or encryption, but dates are handled: a lifetime is `Max-Age` seconds or an `Expires` timestamp, parsed and rendered through the `time` crate.
 It never panics on untrusted input, and a malformed pair in a header is skipped rather than aborting the parse, so attacker-appended junk can never evict a later valid cookie.
 See its [README](crates/kekse/README.md) for the builder's encoding modes and the lenient and strict parsers.
 
@@ -19,8 +19,8 @@ A later, opt-in differential layer feeds the same payloads to cookie parsers in 
 
 ## Dependencies and support
 
-The library depends only on `percent-encoding` (the value codec) and `http` (the RFC 7230 token grammar for cookie-names).
-It targets Rust 1.77.2.
+The library depends on `percent-encoding` (the value codec), `http` (the RFC 7230 token grammar for cookie-names), and `time` (`Expires` date parsing and formatting).
+It targets Rust 1.88.0.
 
 ## License & Disclaimer
 

@@ -5,10 +5,10 @@
 //! [`parse_pairs`] iterators), builds and parses response `Set-Cookie:` values through the
 //! [`SetCookie`] type, and converts one straight into an `http` `HeaderValue` —
 //! all on the RFC 6265 §4.1.1 grammar. It carries no cookie *store* (no
-//! persistence, eviction, or domain/path send-matching), no signing or
-//! encryption, and no date handling — a lifetime is `Max-Age` seconds (`u64`),
-//! never an `Expires` date — so it pulls in no `time`/`chrono`. It never panics
-//! on untrusted input.
+//! persistence, eviction, or domain/path send-matching) and no signing or
+//! encryption, but it does parse and render dates: a lifetime is `Max-Age`
+//! seconds (`u64`) or an `Expires` timestamp (a `time::OffsetDateTime`). It never
+//! panics on untrusted input.
 //!
 //! ## Three types, two headers
 //!
@@ -16,7 +16,8 @@
 //! wire [`ValueEncoding`]) with no attributes, because a `Cookie:` header carries
 //! only pairs. A [`SetCookie`] is the response `Set-Cookie:` cookie — a [`Cookie`]
 //! kernel plus [`CookieAttributes`] (`HttpOnly`, `Secure`, `SameSite`, `Path`,
-//! `Domain`, `Max-Age`). A `Set-Cookie` line is fully observed, so the flags are
+//! `Domain`, `Expires`, `Max-Age`). A `Set-Cookie` line is fully observed, so the
+//! flags are
 //! plain `bool` — whether an attribute is *known* is answered by which type you
 //! hold, not by an `Option`.
 //!
@@ -83,8 +84,10 @@
 //! back into a [`SetCookie`] (RFC 6265 §5.2, attributes matched
 //! case-insensitively). Per §5.2 an **unrecognised attribute is ignored** and the
 //! cookie kept (so a newer attribute like `Partitioned` never costs the cookie);
-//! [`SetCookie::parse_strict`] rejects on an unknown attribute instead.
-//! (`Expires` is recognised; date handling is a planned follow-up.)
+//! [`SetCookie::parse_strict`] rejects on an unknown attribute instead. `Expires`
+//! is parsed into a `time::OffsetDateTime` — the lenient [`parse`](SetCookie::parse)
+//! accepts the RFC 6265 §5.1.1 cookie-date, the strict
+//! [`parse_strict`](SetCookie::parse_strict) only the RFC 7231 IMF-fixdate.
 //!
 //! ## An axum extractor (optional)
 //!
@@ -120,6 +123,7 @@ mod attributes;
 #[cfg(feature = "axum")]
 mod axum;
 mod cookie;
+mod date;
 mod encoding;
 mod grammar;
 mod jar;
@@ -135,3 +139,7 @@ pub use grammar::{is_cookie_name, is_cookie_octet};
 pub use jar::{parse_pairs, parse_pairs_strict, CookieJar};
 pub use same_site::{ParseSameSiteError, SameSite};
 pub use set_cookie::SetCookie;
+
+/// The timestamp type used by the `Expires` attribute, re-exported from the
+/// `time` crate so callers can name it without importing `time` directly.
+pub use time::OffsetDateTime;

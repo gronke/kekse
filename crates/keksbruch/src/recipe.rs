@@ -202,6 +202,9 @@ impl<'a> KeksbruchRecipe<'a> {
                 self.base.baseline(Direction::Response)
             )
             .into_bytes(),
+            (Keksbruch::ExpiresDate(val), Direction::Response) => {
+                format!("{}; Expires={val}", self.base.baseline(Direction::Response)).into_bytes()
+            }
             (Keksbruch::NulInAttrName, Direction::Response) => {
                 let mut w = format!("{}; Pa", self.base.baseline(Direction::Response)).into_bytes();
                 w.push(0);
@@ -224,6 +227,7 @@ impl<'a> KeksbruchRecipe<'a> {
                 | Keksbruch::GarbageSameSite(_)
                 | Keksbruch::ValuedFlag(_)
                 | Keksbruch::DuplicateAttribute(_)
+                | Keksbruch::ExpiresDate(_)
                 | Keksbruch::NulInAttrName
                 | Keksbruch::NulInAttrValue
                 | Keksbruch::QuotedPairWithFlag,

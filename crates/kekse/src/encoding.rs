@@ -69,10 +69,13 @@ fn quote(value: &str) -> String {
 /// because [`encode_value`] always escapes `%`, so a value kekse produced
 /// never carries an ambiguous escape.
 pub(crate) fn decode_cookie_value(raw_value: &str, allow_ws: bool) -> Option<Cow<'_, str>> {
-    let mut value = raw_value.trim_matches(is_ws_char);
-    if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
-        value = &value[1..value.len() - 1];
-    }
+    let value = raw_value.trim_matches(is_ws_char);
+    // Strip one wrapping `DQUOTE` pair when both are present; a lone or unmatched
+    // quote is left for the cookie-octet check below to reject.
+    let value = value
+        .strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+        .unwrap_or(value);
     if !value
         .bytes()
         .all(|b| is_cookie_octet(b) || (allow_ws && is_ws(b)))

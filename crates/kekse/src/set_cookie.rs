@@ -5,15 +5,19 @@
 use std::borrow::Cow;
 use std::fmt;
 
+use time::OffsetDateTime;
+
 use crate::attributes::{CookieAttributes, Domain, Path};
 use crate::cookie::Cookie;
+use crate::date::{format_imf_fixdate, parse_lenient, parse_strict};
 use crate::encoding::{decode_cookie_value, ValueEncoding};
 use crate::grammar::{is_cookie_name, is_ws_char};
 use crate::same_site::SameSite;
 
 /// A `Set-Cookie:` response cookie: a [`Cookie`] kernel (name, value, wire
 /// encoding) plus [`CookieAttributes`] (`HttpOnly`, `SameSite`, `Secure`,
-/// `Path`, `Domain`, `Max-Age`). A `Set-Cookie` line is *fully observed*, so the
+/// `Path`, `Domain`, `Expires`, `Max-Age`). A `Set-Cookie` line is *fully
+/// observed*, so the
 /// flags are plain `bool` — present or absent on the line — never an `Option`.
 ///
 /// Build one from a request [`Cookie`] with
@@ -27,8 +31,8 @@ use crate::same_site::SameSite;
 /// fields (`sc.attributes().secure`, `sc.attributes().max_age`). Render with
 /// [`to_set_cookie`](SetCookie::to_set_cookie) or convert straight into an
 /// `http::HeaderValue` with `HeaderValue::try_from`. Attributes emit in a fixed
-/// order — `HttpOnly`, `SameSite`, `Secure`, `Path`, `Domain`, `Max-Age` — each
-/// only when set. The builder does **not** validate the name (check
+/// order — `HttpOnly`, `SameSite`, `Secure`, `Path`, `Domain`, `Expires`,
+/// `Max-Age` — each only when set. The builder does **not** validate the name (check
 /// [`is_cookie_name`](crate::is_cookie_name) at the call site if it is
 /// untrusted); [`parse`](SetCookie::parse) does.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -67,9 +71,11 @@ impl<'a> SetCookie<'a> {
     /// [`parse_pairs`](crate::parse_pairs) (one wrapping quote pair stripped,
     /// cookie-octets plus whitespace, percent-decoded). Attributes are matched
     /// ASCII-case-insensitively: `HttpOnly`, `Secure`, `SameSite`
-    /// (`Strict`/`Lax`/`None`), `Path`, `Domain`, and `Max-Age` (a `u64`; a
-    /// negative or non-numeric delta is dropped). `Expires` is recognised but its
-    /// value is not acted on yet — date handling is a planned follow-up. Returns
+    /// (`Strict`/`Lax`/`None`), `Path`, `Domain`, `Max-Age` (a `u64`; a negative
+    /// or non-numeric delta is dropped), and `Expires` (the lenient RFC 6265
+    /// §5.1.1 cookie-date here; [`parse_strict`](SetCookie::parse_strict) takes
+    /// only the RFC 7231 IMF-fixdate — an unparseable date is dropped, cookie
+    /// kept). Returns
     /// `None` when there is no usable pair — no `=`, an empty or non-token name,
     /// or a value outside the accepted set / with escapes that are not valid
     /// UTF-8. Never panics.
@@ -124,8 +130,14 @@ impl<'a> SetCookie<'a> {
             } else if attr.eq_ignore_ascii_case(attr_name::MAX_AGE) {
                 set_cookie.attributes.max_age = val.parse::<u64>().ok();
             } else if attr.eq_ignore_ascii_case(attr_name::EXPIRES) {
-                // Recognised, but date handling is deferred to a follow-up; the
-                // value is not acted on yet.
+                // RFC 6265 §5.1.1 (lenient) / RFC 7231 IMF-fixdate (strict). An
+                // unparseable date is dropped like any malformed known attribute —
+                // the cookie survives.
+                set_cookie.attributes.expires = if strict {
+                    parse_strict(val)
+                } else {
+                    parse_lenient(val)
+                };
             } else if strict {
                 // Strict (opt-in): an unrecognised attribute rejects the cookie.
                 return None;
@@ -197,6 +209,16 @@ impl<'a> SetCookie<'a> {
         self
     }
 
+    /// Set the `Expires` attribute — an absolute expiry instant, rendered as the
+    /// RFC 7231 IMF-fixdate (always in GMT). Independent of
+    /// [`max_age`](SetCookie::max_age); a client given both lets `Max-Age` win
+    /// (RFC 6265 §5.3), but that is the client's concern, not the codec's.
+    #[must_use]
+    pub fn expires(mut self, when: OffsetDateTime) -> Self {
+        self.attributes.expires = Some(when);
+        self
+    }
+
     /// The cookie-name.
     pub fn name(&self) -> &str {
         self.cookie.name()
@@ -245,7 +267,8 @@ impl<'a> SetCookie<'a> {
 
     /// Render the response `Set-Cookie:` value — `name=value` plus the set
     /// attributes, in the fixed order `HttpOnly`, `SameSite`, `Secure`, `Path`,
-    /// `Domain`, `Max-Age` (each only when set; a flag only when `true`).
+    /// `Domain`, `Expires`, `Max-Age` (each only when set; a flag only when
+    /// `true`).
     ///
     /// The pair and each rendered attribute are joined with `"; "` exactly once.
     /// Each attribute is a typed value that renders itself, and its name comes
@@ -270,6 +293,7 @@ impl<'a> SetCookie<'a> {
             a.secure.then_some(SetCookieAttribute::Secure),
             a.path.map(|p| SetCookieAttribute::Path(p.as_str())),
             a.domain.map(|d| SetCookieAttribute::Domain(d.as_str())),
+            a.expires.map(SetCookieAttribute::Expires),
             a.max_age.map(SetCookieAttribute::MaxAge),
         ]
         .into_iter()
@@ -313,6 +337,7 @@ enum SetCookieAttribute<'a> {
     Secure,
     Path(&'a str),
     Domain(&'a str),
+    Expires(OffsetDateTime),
     MaxAge(u64),
 }
 
@@ -328,6 +353,9 @@ impl fmt::Display for SetCookieAttribute<'_> {
             Self::Secure => f.write_str(attr_name::SECURE),
             Self::Path(path) => write!(f, "{}={}", attr_name::PATH, path),
             Self::Domain(domain) => write!(f, "{}={}", attr_name::DOMAIN, domain),
+            Self::Expires(when) => {
+                write!(f, "{}={}", attr_name::EXPIRES, format_imf_fixdate(when))
+            }
             Self::MaxAge(seconds) => write!(f, "{}={}", attr_name::MAX_AGE, seconds),
         }
     }
@@ -667,15 +695,23 @@ mod tests {
     }
 
     #[test]
-    fn parse_recognises_expires_without_acting_on_it() {
-        // `Expires` is a known attribute (not "unknown"), so strict keeps the
-        // cookie; its value is not acted on yet (date handling is a follow-up).
+    fn parse_reads_expires_as_a_date() {
+        use time::macros::datetime;
+        // `Expires` is a known attribute, parsed into an `OffsetDateTime` (lenient
+        // RFC 6265 §5.1.1 here); the cookie and a coexisting `Max-Age` are kept.
         let p =
             SetCookie::parse("SID=x; Expires=Wed, 09 Jun 2021 10:18:14 GMT; Max-Age=60").unwrap();
         assert_eq!(p.value(), "x");
+        assert_eq!(
+            p.attributes().expires,
+            Some(datetime!(2021-06-09 10:18:14 UTC))
+        );
         assert_eq!(p.attributes().max_age, Some(60));
-        let no_max = SetCookie::parse("SID=x; Expires=Wed, 09 Jun 2021 10:18:14 GMT").unwrap();
-        assert_eq!(no_max.attributes().max_age, None);
+        // An unparseable date is dropped like any malformed known attribute; the
+        // cookie survives.
+        let bad = SetCookie::parse("SID=x; Expires=not-a-date").unwrap();
+        assert_eq!(bad.attributes().expires, None);
+        assert_eq!(bad.value(), "x");
     }
 
     #[test]
