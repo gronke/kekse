@@ -20,12 +20,14 @@ categories = ["web-programming", "encoding", "network-programming"]
 all-features = true
 
 [dependencies]
-# RFC 7230 token grammar for cookie-names (no homemade table).
+# RFC 6265 primitives — the grammar byte-classes (cookie-octet / av-octet / token) and the
+# `Expires` date codec. The single, exhaustively-tested source of truth for the bits and bytes;
+# its `date` feature pulls `time`, so kekse never depends on `time` directly.
+rfc_6265 = { path = "../rfc_6265", version = "0.1", features = ["date"] }
+# `http::HeaderValue` for the typed-header conversions.
 http.workspace = true
-# Percent-encoding primitive; the RFC 6265 cookie-value set is defined on top.
+# Percent-encoding primitive; the RFC 6265 cookie-value codec is defined on top.
 percent-encoding.workspace = true
-# `Expires` dates: RFC 6265 §5.1.1 / RFC 7231 IMF-fixdate parsing and formatting.
-time.workspace = true
 # Optional debug-level logging of skipped/ignored pieces, behind the `tracing`
 # feature so the core stays dependency-light (no logging facade by default).
 tracing = { workspace = true, optional = true }
@@ -47,6 +49,6 @@ axum = ["dep:axum-core"]
 axum.workspace = true
 tower = { workspace = true, features = ["util"] }
 tokio = { workspace = true }
-# `time` is also a normal dependency; repeated here so the integration date suite
-# can construct `OffsetDateTime`s with the `datetime!` macro.
+# `time` (pulled transitively via rfc_6265's `date` feature) so the integration date suite can
+# construct `OffsetDateTime`s with the `datetime!` macro.
 time.workspace = true

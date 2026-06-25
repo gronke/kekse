@@ -5,13 +5,14 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use time::OffsetDateTime;
+use rfc_6265::date::{format_imf_fixdate, parse_cookie_date, parse_imf_fixdate};
+use rfc_6265::grammar::is_cookie_name;
+use rfc_6265::OffsetDateTime;
 
 use crate::attributes::{CookieAttributes, Domain, Path};
 use crate::cookie::Cookie;
-use crate::date::{format_imf_fixdate, parse_lenient, parse_strict};
 use crate::encoding::{decode_cookie_value, ValueEncoding};
-use crate::grammar::{is_cookie_name, is_ws_char};
+use crate::grammar::is_ws_char;
 use crate::same_site::SameSite;
 
 /// A `Set-Cookie:` response cookie: a [`Cookie`] kernel (name, value, wire
@@ -134,9 +135,9 @@ impl<'a> SetCookie<'a> {
                 // unparseable date is dropped like any malformed known attribute —
                 // the cookie survives.
                 set_cookie.attributes.expires = if strict {
-                    parse_strict(val)
+                    parse_imf_fixdate(val)
                 } else {
-                    parse_lenient(val)
+                    parse_cookie_date(val)
                 };
             } else if strict {
                 // Strict (opt-in): an unrecognised attribute rejects the cookie.

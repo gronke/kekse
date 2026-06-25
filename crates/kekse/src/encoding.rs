@@ -6,7 +6,9 @@ use std::borrow::Cow;
 
 use percent_encoding::{percent_decode_str, utf8_percent_encode};
 
-use crate::grammar::{is_cookie_octet, is_ws, is_ws_char, ENCODE_FULL, ENCODE_IN_QUOTES};
+use rfc_6265::grammar::{is_cookie_octet, is_ws};
+
+use crate::grammar::{is_ws_char, ENCODE_FULL, ENCODE_IN_QUOTES};
 
 /// How [`SetCookie`](crate::SetCookie) escapes a value for the wire. See the
 /// [crate docs](crate).
