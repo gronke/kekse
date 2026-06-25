@@ -18,7 +18,12 @@ deps }` and runs it as:
 If the spec names a Docker `image` and `docker` is on PATH (i.e. CI), the harness runs that command
 line *inside* the image, bind-mounting the `fixtures/` dir at its own absolute path (`-v dir:dir -w
 dir`); otherwise it runs on the host toolchain. Either way the sidecar sees the same argv and the same
-files. One process handles the whole run (it is **not** re-spawned per scenario).
+files. One process normally handles the whole run; the harness only **re-spawns** it to recover from a
+*crash* — if the process dies (a signal, a non-zero exit, or no output for ~60 s), the harness blames the
+payload in flight (`☠️`, `Crashed`) and replays the rest in a fresh process. So a single bad input cannot
+void the whole column. For that blame to land on the right payload, **flush stdout after each result line**
+(see §2) — a sidecar that block-buffers its output and then crashes gives the harness no way to see which
+record it had reached.
 
 ## 1. Selfcheck (`--selfcheck`)
 
@@ -65,7 +70,9 @@ For each input record print **one** result line to stdout:
 ```
 
 `by_dep` carries one `ParseOutcome` per declared dep. Order of output lines is irrelevant (the harness
-keys by `id`). Exit 0 at EOF.
+keys by `id`). Exit 0 at EOF. **Flush stdout after each line** (e.g. `print(flush=True)`, `fflush(stdout)`)
+so that, if a later record crashes the process, the harness can tell which records were already handled and
+blame the right one — a fully buffered sidecar that dies looks like it crashed on its *first* record.
 
 ## ParseOutcome
 
@@ -78,7 +85,8 @@ Internally tagged by `"outcome"`. Matrix rendering shown in parentheses.
 | `SetCookie` | `set_cookie: {…}` (below) | a `Set-Cookie` parsed | `name=value ;Attr;…` |
 | `SetCookieRejected` | `error: string` | `Set-Cookie` parser rejected the input | `❌` |
 | `NotApplicable` | — | this dep doesn't handle this direction | `n/a` |
-| `Panicked` | `message: string` | the adapter panicked (a finding, not a crash) | `PANIC` |
+| `Panicked` | `message: string` | an unexpected in-language failure (a finding, not a clean reject) | `☠️` |
+| `Crashed` | `reason: string` | the parser **crashed** on this payload (signal / non-zero exit / hang) — usually synthesized by the harness on process death, but a sidecar may emit it too | `☠️` |
 | `Skipped` | — | comparator unavailable (dep/interpreter missing) | `SKIP` |
 | `ForwardedVerbatim` | — | *proxy* target forwarded the Cookie byte-for-byte | `≡` |
 | `ForwardedAltered` | `forwarded: string` | proxy forwarded a Cookie, but altered it | `≠ …` |
@@ -92,11 +100,12 @@ that builds a *rich type* from a bracketed name — only PHP's `$_COOKIE`, via `
 it and puts the JSON-encoded structure in `value`; the matrix then displays the type name
 (`⟨array⟩`/`⟨object⟩`). Every other sidecar omits `shape`, and the harness defaults a missing `shape` to scalar.
 
-The `error` (and `Panicked` `message`) strings are free-form, human-facing debug text — they are
-**not** rendered in the matrix (a rejection always shows `❌`), so they never affect a cell or the
-consensus vote. Give the best available reason, consistently: `<kind>: <detail>` where the parser
-provides one (an exception type + message, or a library error string), or a clear `<what failed>`
-where the API is opaque (e.g. a bool `TryParse` that yields no reason).
+The `error`, `Panicked` `message`, and `Crashed` `reason` strings are free-form, human-facing debug text
+— they are **not** rendered in the matrix (a rejection always shows `❌`, a crash always `☠️`), so they
+never affect a cell or the consensus vote. Give the best available reason, consistently: `<kind>: <detail>`
+where the parser provides one (an exception type + message, or a library error string), or a clear
+`<what failed>` where the API is opaque (e.g. a bool `TryParse` that yields no reason). Like `NotApplicable`
+and `Skipped`, both crash outcomes (`Panicked`/`Crashed`) are excluded from the cross-parser consensus vote.
 
 The three `Forwarded*` outcomes are a **forwarding-fidelity** axis (currently only the `nginx/proxy`
 column), not a parse, so the harness excludes them from the cross-parser consensus vote.

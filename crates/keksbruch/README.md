@@ -40,7 +40,7 @@ The library under test is [`kekse`](../kekse); depend on that instead.
 
 ## Third-party fixtures
 
-`fixtures/` vendors third-party parser source for the differential matrix (e.g. CloudFlare's BSD-licensed `lua-resty-cookie`) and drives others through their own build-time dependencies (Go, Node, PHP, Python, .NET, Java).
+`fixtures/` vendors third-party parser source for the differential matrix (e.g. CloudFlare's BSD-licensed `lua-resty-cookie`) and drives others through their own build-time dependencies (Go, C, Node, PHP, Python, .NET, Java).
 Vendored files remain under their respective upstream licenses; see [`NOTICE`](NOTICE) and each file's header.
 
 ## License

@@ -103,6 +103,12 @@ pub enum Keksbruch {
     /// stores the raw av-octet value; under the `psl`/`idna` features it enforces policy (a
     /// public-suffix or malformed-IDN value is refused, leaving the cookie host-only).
     DomainValue(&'static str),
+    /// A `Path` attribute carrying a specific value: `; Path=<v>` (Response). Probes how
+    /// parsers treat a path that is empty, a bare/relative `.`/`./`, or a non-path URI
+    /// (`file:///etc/passwd`). RFC 6265 §4.1.1 path-av is just av-octets with no
+    /// semantics, so kekse stores the value verbatim; the matrix shows who normalises,
+    /// rejects, or applies default-path logic at parse time.
+    PathValue(&'static str),
     /// Two `Domain=` attributes on one cookie: `; Domain=<first>; Domain=<second>` (Response).
     /// kekse never *emits* this (a `SetCookie` holds one `Domain`), so keksbruch hand-builds it:
     /// lenient parse takes the last value, strict parse rejects the duplicate outright.
@@ -110,6 +116,11 @@ pub enum Keksbruch {
         first: &'static str,
         second: &'static str,
     },
+    /// A "kitchen-sink" Set-Cookie that sets **all six** attributes at once
+    /// (`; Path=…; Domain=…; Max-Age=…; Secure; HttpOnly; SameSite=…`) (Response). Probes
+    /// attribute *fidelity*: which parsers surface every attribute vs silently drop one —
+    /// the matrix renders this as an explicit per-attribute grid.
+    AllAttributes,
 
     // ── extra coverage: NUL positions, HTAB, multibyte UTF-8 ─────────────────
     /// A NUL byte in the cookie *name*: `n\0x=v`.

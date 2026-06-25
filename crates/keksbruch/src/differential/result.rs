@@ -30,8 +30,16 @@ pub enum ParseOutcome {
     /// This parser does not handle this direction (e.g. biscotti has no
     /// `Set-Cookie` parser; a request-only library asked for a response).
     NotApplicable,
-    /// The adapter panicked — a finding about the parser, not a harness crash.
+    /// An in-process adapter panicked — a finding about the parser. Rendered
+    /// `☠️`, the same crash marker as [`Crashed`](ParseOutcome::Crashed).
     Panicked { message: String },
+    /// A sidecar subprocess **crashed** on this payload — it died on a signal
+    /// (e.g. a segfault), exited non-zero, or hung past the timeout. `reason`
+    /// carries the diagnosis (`signal 11`, `exit 134`, `timeout`); the cell shows
+    /// `☠️`. Distinct from [`Skipped`](ParseOutcome::Skipped) (the tool was never
+    /// available) and from an empty/`❌` parse — a crash is its own finding,
+    /// attributed to the exact payload that triggered it.
+    Crashed { reason: String },
     /// The comparator was unavailable (interpreter or dependency missing) — SKIP.
     Skipped,
 }
@@ -131,7 +139,9 @@ impl ParseOutcome {
             ParseOutcome::ForwardedAltered { forwarded } => format!("≠ {}", short(forwarded)),
             ParseOutcome::ForwardedRejected => "❌".to_string(),
             ParseOutcome::NotApplicable => "n/a".to_string(),
-            ParseOutcome::Panicked { .. } => "PANIC".to_string(),
+            // Both crash flavours render the same marker: an in-process panic and a
+            // sidecar subprocess death are both "the parser blew up on this input".
+            ParseOutcome::Panicked { .. } | ParseOutcome::Crashed { .. } => "☠️".to_string(),
             ParseOutcome::Skipped => "SKIP".to_string(),
         }
     }

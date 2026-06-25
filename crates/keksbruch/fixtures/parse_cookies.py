@@ -2,17 +2,26 @@
 """keksbruch Python sidecar.
 
 Reads base64-JSONL payload records on stdin, parses each with the stdlib
-``http.cookies.SimpleCookie`` and (when available) Werkzeug, and emits one
-normalized JSONL result per line. ``--selfcheck`` reports which comparators
-can be loaded, then exits.
+``http.cookies.SimpleCookie``, the stdlib client jar ``http.cookiejar.CookieJar``
+(Set-Cookie only), Werkzeug (request only), and mitmproxy's
+``mitmproxy.net.http.cookies`` (both directions — the proxy's own Set-Cookie
+parser), and emits one normalized JSONL result per line. ``--selfcheck`` reports
+which comparators can be loaded, then exits.
 
 Protocol in:  {"id","direction":"request"|"response","wire_b64"}
 Protocol out: {"id","by_dep":{"<dep>":{"outcome":...}}}
 Full contract: ./PROTOCOL.md.
 """
 import sys
+import os
 import json
 import base64
+
+# CI installs Werkzeug + mitmproxy into a bind-mounted `.pydeps` next to this script
+# (`pip install --target`, in the same python image), so the sidecar can run under
+# `--network=none` and still import them. Prepend it to the path; harmless when absent
+# (local runs resolve from the host interpreter / a crate-local .venv instead).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".pydeps"))
 
 
 def have_werkzeug():
@@ -31,8 +40,37 @@ def werkzeug_version():
         return None
 
 
+def have_mitmproxy():
+    try:
+        from mitmproxy.net.http import cookies  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def mitmproxy_version():
+    try:
+        from importlib.metadata import version
+        return version("mitmproxy")
+    except Exception:
+        return None
+
+
+def have_cookiejar():
+    try:
+        import http.cookiejar  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 def selfcheck():
-    available = {"SimpleCookie": True, "Werkzeug": have_werkzeug()}
+    available = {
+        "SimpleCookie": True,
+        "http.cookiejar": have_cookiejar(),
+        "Werkzeug": have_werkzeug(),
+        "mitmproxy": have_mitmproxy(),
+    }
     runtime = "Python %d.%d.%d" % (
         sys.version_info.major,
         sys.version_info.minor,
@@ -41,7 +79,9 @@ def selfcheck():
     versions = {
         "runtime": runtime,
         "SimpleCookie": "stdlib",
+        "http.cookiejar": "stdlib",
         "Werkzeug": werkzeug_version() or "?",
+        "mitmproxy": mitmproxy_version() or "?",
     }
     print(json.dumps({"available": available, "versions": versions}))
 
@@ -96,6 +136,45 @@ def simplecookie_response(wire):
         return {"outcome": "SetCookieRejected", "error": type(e).__name__ + ": " + str(e)}
 
 
+def cookiejar_response(wire):
+    # http.cookiejar is a client jar: extract_cookies(response, request) needs response- and
+    # request-like objects, so build a fake response carrying the Set-Cookie header and parse
+    # it against https://example.com/. The jar then applies its domain-match policy (a
+    # public-suffix or mismatched Domain is refused, like a browser). Report the Domain/Path
+    # *attributes* (domain_specified/path_specified) — not the effective host — to compare
+    # with the other columns. It keeps an absolute expiry, not a raw Max-Age, so max_age=null.
+    try:
+        import http.cookiejar
+        import urllib.request
+        import email.message
+        jar = http.cookiejar.CookieJar()
+        req = urllib.request.Request("https://example.com/")
+        msg = email.message.Message()
+        msg["Set-Cookie"] = wire.decode("latin-1")
+
+        class FakeResponse:
+            def info(self_inner):
+                return msg
+
+        jar.extract_cookies(FakeResponse(), req)
+        cookies = list(jar)
+        if not cookies:
+            return {"outcome": "SetCookieRejected", "error": "no cookie accepted"}
+        c = cookies[0]
+        return {"outcome": "SetCookie", "set_cookie": {
+            "name": c.name,
+            "value": c.value if c.value is not None else "",
+            "http_only": bool(c.has_nonstandard_attr("HttpOnly") or c.has_nonstandard_attr("httponly")),
+            "secure": bool(c.secure),
+            "same_site": c.get_nonstandard_attr("SameSite") or c.get_nonstandard_attr("samesite"),
+            "path": c.path if c.path_specified else None,
+            "domain": c.domain if c.domain_specified else None,
+            "max_age": None,
+        }}
+    except Exception as e:
+        return {"outcome": "SetCookieRejected", "error": type(e).__name__ + ": " + str(e)}
+
+
 def werkzeug_request(wire):
     try:
         from werkzeug.http import parse_cookie
@@ -110,11 +189,55 @@ def werkzeug_request(wire):
         return {"outcome": "Rejected", "error": type(e).__name__ + ": " + str(e)}
 
 
+def mitmproxy_request(wire):
+    # mitmproxy.net.http.cookies.parse_cookie_header(str) -> [(name, value|None), ...]
+    try:
+        from mitmproxy.net.http import cookies
+        pairs = cookies.parse_cookie_header(wire.decode("latin-1"))
+        return {"outcome": "Cookies",
+                "cookies": [{"name": n, "value": v or ""} for (n, v) in pairs]}
+    except Exception as e:
+        return {"outcome": "Rejected", "error": type(e).__name__ + ": " + str(e)}
+
+
+def mitmproxy_response(wire):
+    # parse_set_cookie_header(str) -> [(name, value|None, CookieAttrs)] (a list; one
+    # entry per cookie). CookieAttrs is a case-insensitive multidict: valueless flags
+    # (Secure/HttpOnly) are present with a None value, valued attrs carry a string.
+    try:
+        from mitmproxy.net.http import cookies
+        parsed = cookies.parse_set_cookie_header(wire.decode("latin-1"))
+        if isinstance(parsed, list):
+            parsed = parsed[0] if parsed else None
+        if parsed is None:
+            return {"outcome": "SetCookieRejected", "error": "no cookie parsed"}
+        name, value, attrs = parsed
+        raw_max_age = attrs.get("max-age")
+        try:
+            max_age = int(raw_max_age) if raw_max_age is not None else None
+        except (TypeError, ValueError):
+            max_age = None
+        return {"outcome": "SetCookie", "set_cookie": {
+            "name": name,
+            "value": value or "",
+            "http_only": "httponly" in attrs,
+            "secure": "secure" in attrs,
+            "same_site": attrs.get("samesite"),
+            "path": attrs.get("path"),
+            "domain": attrs.get("domain"),
+            "max_age": max_age,
+        }}
+    except Exception as e:
+        return {"outcome": "SetCookieRejected", "error": type(e).__name__ + ": " + str(e)}
+
+
 def main():
     if "--selfcheck" in sys.argv:
         selfcheck()
         return
     werkzeug = have_werkzeug()
+    mitmproxy = have_mitmproxy()
+    cookiejar = have_cookiejar()
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -124,12 +247,16 @@ def main():
         if record["direction"] == "request":
             by_dep = {
                 "SimpleCookie": simplecookie_request(wire),
+                "http.cookiejar": {"outcome": "NotApplicable"},
                 "Werkzeug": werkzeug_request(wire) if werkzeug else {"outcome": "Skipped"},
+                "mitmproxy": mitmproxy_request(wire) if mitmproxy else {"outcome": "Skipped"},
             }
         else:
             by_dep = {
                 "SimpleCookie": simplecookie_response(wire),
+                "http.cookiejar": cookiejar_response(wire) if cookiejar else {"outcome": "Skipped"},
                 "Werkzeug": {"outcome": "NotApplicable"},
+                "mitmproxy": mitmproxy_response(wire) if mitmproxy else {"outcome": "Skipped"},
             }
         print(json.dumps({"id": record["id"], "by_dep": by_dep}))
         sys.stdout.flush()

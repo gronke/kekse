@@ -5,6 +5,9 @@
   "description": "Node cookie-parser dependencies for the keksbruch differential matrix sidecar.",
   "dependencies": {
     "cookie": "^0.7.0",
-    "tough-cookie": "^5.1.0"
+    "js-cookie": "^3.0.8",
+    "set-cookie-parser": "^3.1.1",
+    "tough-cookie": "^5.1.0",
+    "universal-cookie": "^8.1.2"
   }
 }

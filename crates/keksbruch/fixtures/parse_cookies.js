@@ -1,10 +1,16 @@
 #!/usr/bin/env node
 // keksbruch Node sidecar.
 //
-// Reads base64-JSONL payload records on stdin, parses each request header with
-// the `cookie` package and each Set-Cookie with `tough-cookie`, and emits one
-// normalized JSONL result per line. `--selfcheck` reports which comparators can
-// be required, then exits.
+// Reads base64-JSONL payload records on stdin and parses each with five npm cookie
+// libraries, emitting one normalized JSONL result per line. The columns:
+//   - cookie (request): jshttp's `cookie` — request Cookie-header parsing.
+//   - tough-cookie (response): RFC 6265 client Set-Cookie parsing.
+//   - set-cookie-parser (response): a dedicated Set-Cookie parser.
+//   - universal-cookie (request): the parser behind react-cookie (SPA stacks); a
+//     header string in, `getAll` out (doNotParse, so values stay raw strings).
+//   - js-cookie (request): the popular browser library, driven headless via a
+//     `document.cookie` stub.
+// `--selfcheck` reports which comparators can be required, then exits.
 //
 // Protocol in:  {"id","direction":"request"|"response","wire_b64"}
 // Protocol out: {"id","by_dep":{"<dep>":{"outcome":...}}}
@@ -26,17 +32,40 @@ function ver(mod) {
   try {
     return require(mod + "/package.json").version;
   } catch (e) {
+    // Some packages' `exports` map blocks the `./package.json` subpath (e.g.
+    // set-cookie-parser v3); fall back to locating the package's own package.json
+    // by walking up from its resolved entry point.
+    try {
+      const fs = require("fs");
+      const path = require("path");
+      let dir = path.dirname(require.resolve(mod));
+      for (let i = 0; i < 10; i++) {
+        const pj = path.join(dir, "package.json");
+        if (fs.existsSync(pj)) {
+          const meta = JSON.parse(fs.readFileSync(pj, "utf8"));
+          if (meta.name === mod) return meta.version;
+        }
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+      }
+    } catch (e2) {
+      // fall through
+    }
     return null;
   }
 }
 
+// Column order matches the SidecarSpec deps in src/differential/sidecar.rs.
+const DEPS = ["cookie", "tough-cookie", "set-cookie-parser", "universal-cookie", "js-cookie"];
+
 function selfcheck() {
-  const available = { cookie: have("cookie"), "tough-cookie": have("tough-cookie") };
-  const versions = {
-    runtime: "Node " + process.version.replace(/^v/, ""),
-    cookie: ver("cookie") || "?",
-    "tough-cookie": ver("tough-cookie") || "?",
-  };
+  const available = {};
+  const versions = { runtime: "Node " + process.version.replace(/^v/, "") };
+  for (const d of DEPS) {
+    available[d] = have(d);
+    versions[d] = ver(d) || "?";
+  }
   process.stdout.write(JSON.stringify({ available, versions }) + "\n");
 }
 
@@ -76,13 +105,70 @@ function toughResponse(wire) {
   }
 }
 
+// `set-cookie-parser` parses one Set-Cookie string; absent attributes are omitted.
+function setCookieParserResponse(wire) {
+  try {
+    const scp = require("set-cookie-parser");
+    const c = scp.parseString(wire.toString("latin1"));
+    if (!c || !c.name) {
+      return { outcome: "SetCookieRejected", error: "no cookie parsed" };
+    }
+    return {
+      outcome: "SetCookie",
+      set_cookie: {
+        name: c.name,
+        value: c.value == null ? "" : c.value,
+        http_only: !!c.httpOnly,
+        secure: !!c.secure,
+        same_site: c.sameSite || null,
+        path: c.path || null,
+        domain: c.domain || null,
+        max_age: typeof c.maxAge === "number" && isFinite(c.maxAge) ? c.maxAge : null,
+      },
+    };
+  } catch (e) {
+    return { outcome: "SetCookieRejected", error: String((e && e.message) || e) };
+  }
+}
+
+// `universal-cookie` (the engine behind react-cookie) parses a request Cookie
+// header string. doNotParse keeps values as raw strings (it otherwise JSON-decodes
+// `a=1` to the number 1), so the column is comparable to the others.
+function universalCookieRequest(wire) {
+  try {
+    const UniversalCookie = require("universal-cookie");
+    const uc = new UniversalCookie(wire.toString("latin1"));
+    const all = uc.getAll({ doNotParse: true });
+    const cookies = Object.keys(all).map((k) => ({ name: k, value: String(all[k]) }));
+    return { outcome: "Cookies", cookies };
+  } catch (e) {
+    return { outcome: "Rejected", error: String((e && e.message) || e) };
+  }
+}
+
+// `js-cookie` is a browser library that reads `document.cookie`; drive it headless
+// by stubbing that global with the request wire, then reading all cookies back.
+function jsCookieRequest(wire) {
+  try {
+    global.document = { cookie: wire.toString("latin1") };
+    const Cookies = require("js-cookie");
+    const obj = Cookies.get();
+    const cookies = Object.keys(obj).map((k) => ({ name: k, value: obj[k] }));
+    return { outcome: "Cookies", cookies };
+  } catch (e) {
+    return { outcome: "Rejected", error: String((e && e.message) || e) };
+  }
+}
+
 function main() {
   if (process.argv.includes("--selfcheck")) {
     selfcheck();
     return;
   }
-  const haveCookie = have("cookie");
-  const haveTough = have("tough-cookie");
+  const avail = {};
+  for (const d of DEPS) avail[d] = have(d);
+  const skip = { outcome: "Skipped" };
+  const na = { outcome: "NotApplicable" };
   const rl = readline.createInterface({ input: process.stdin, terminal: false });
   rl.on("line", (line) => {
     line = line.trim();
@@ -92,13 +178,19 @@ function main() {
     let by_dep;
     if (record.direction === "request") {
       by_dep = {
-        cookie: haveCookie ? cookieRequest(wire) : { outcome: "Skipped" },
-        "tough-cookie": { outcome: "NotApplicable" },
+        cookie: avail["cookie"] ? cookieRequest(wire) : skip,
+        "tough-cookie": na,
+        "set-cookie-parser": na,
+        "universal-cookie": avail["universal-cookie"] ? universalCookieRequest(wire) : skip,
+        "js-cookie": avail["js-cookie"] ? jsCookieRequest(wire) : skip,
       };
     } else {
       by_dep = {
-        cookie: { outcome: "NotApplicable" },
-        "tough-cookie": haveTough ? toughResponse(wire) : { outcome: "Skipped" },
+        cookie: na,
+        "tough-cookie": avail["tough-cookie"] ? toughResponse(wire) : skip,
+        "set-cookie-parser": avail["set-cookie-parser"] ? setCookieParserResponse(wire) : skip,
+        "universal-cookie": na,
+        "js-cookie": na,
       };
     }
     process.stdout.write(JSON.stringify({ id: record.id, by_dep }) + "\n");

@@ -1,3 +1,6 @@
-# Python cookie-parser dependency for the keksbruch differential matrix
+# Python cookie-parser dependencies for the keksbruch differential matrix
 # sidecar. SimpleCookie is stdlib and needs nothing here.
 Werkzeug>=3.0
+# mitmproxy ships its own Set-Cookie parser (mitmproxy.net.http.cookies) — a
+# response-direction column, and the proxy's real-world view of a cookie wire.
+mitmproxy>=11

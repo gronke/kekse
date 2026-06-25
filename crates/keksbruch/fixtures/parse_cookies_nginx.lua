@@ -1,19 +1,22 @@
 -- keksbruch nginx sidecar (run by the OpenResty `resty` CLI).
 --
 -- Mirrors parse_cookies.php: it boots a real server — here one openresty nginx on
--- two loopback ports — and replays each request wire to it over a raw cosocket, so
--- nginx's *native* Cookie handling is what is tested. Three columns, request-only
--- (nginx has no inbound Set-Cookie parser, so the response direction is n/a):
---   $cookie_<name>   nginx's native by-name lookup (ngx.var.cookie_<name>).
---   lua-resty-cookie the vendored Lua library's parse (resty.cookie:get_all()).
---   proxy            forwarding fidelity: did `proxy_pass` forward the Cookie
+-- two loopback ports — and replays each wire to it over a raw cosocket, so nginx's
+-- *native* handling is what is tested. Four columns:
+--   $cookie_<name>   (request) nginx's native by-name lookup (ngx.var.cookie_<name>).
+--   lua-resty-cookie (request) the vendored Lua library's parse (resty.cookie:get_all()).
+--   proxy            (request) forwarding fidelity: did `proxy_pass` forward the Cookie
 --                    verbatim (≡), altered (≠), or refuse it (❌)?
+--   proxy (Set-Cookie) (response) the same fidelity question for an upstream Set-Cookie
+--                    a proxy_pass forwards back — nginx exposes no *parsed* Set-Cookie to
+--                    Lua, so this is a forwarding verdict, not a parse. The first three
+--                    are request-only (→ n/a on responses); this one is response-only.
 --
 -- This is a driver: it speaks the sidecar protocol on stdin/stdout, while the
 -- nginx it boots does the parsing/forwarding. See ./PROTOCOL.md for the contract.
 --
 -- Protocol in:  {"id","direction":"request"|"response","wire_b64"}
--- Protocol out: {"id","by_dep":{"$cookie_<name>":…,"lua-resty-cookie":…,"proxy":…}}
+-- Protocol out: {"id","by_dep":{"$cookie_<name>":…,"lua-resty-cookie":…,"proxy":…,"proxy (Set-Cookie)":…}}
 
 local cjson = require "cjson"
 -- cjson encodes an empty Lua table as `{}`; the `cookies` field must be a JSON
@@ -149,6 +152,9 @@ local function nginx_conf(port_p, port_u)
         "        location = /proxy {",
         "            proxy_pass http://127.0.0.1:" .. port_u .. "/reflect;",
         "        }",
+        "        location = /proxy-sc {",
+        "            proxy_pass http://127.0.0.1:" .. port_u .. "/emit-sc;",
+        "        }",
         "    }",
         "    server {",
         "        listen 127.0.0.1:" .. port_u .. ";",
@@ -156,6 +162,14 @@ local function nginx_conf(port_p, port_u)
         "            content_by_lua_block {",
         '                ngx.header["Content-Type"] = "text/plain"',
         '                ngx.print(ngx.encode_base64(ngx.var.http_cookie or ""))',
+        "            }",
+        "        }",
+        "        location = /emit-sc {",
+        "            content_by_lua_block {",
+        '                local wire = ngx.decode_base64(ngx.var.http_x_wire_b64 or "") or ""',
+        '                pcall(function() ngx.header["Set-Cookie"] = wire end)',
+        '                ngx.header["Content-Type"] = "text/plain"',
+        '                ngx.print("ok")',
         "            }",
         "        }",
         "    }",
@@ -206,6 +220,43 @@ local function http_get(port, path, cookie_bytes)
     local b, _, partial = sock:receive("*a")
     sock:close()
     return code, (b or partial or "")
+end
+
+-- One request that carries the Set-Cookie wire (base64) in X-Wire-B64; the proxied
+-- upstream emits it as a `Set-Cookie` response header, nginx forwards it, and we
+-- read back what the client received. Returns status_code, set_cookie_value (or nil
+-- if nginx forwarded none) — the forwarding-fidelity probe for the response path.
+local function http_get_setcookie(port, path, wire_b64)
+    local sock = ngx.socket.tcp()
+    sock:settimeout(3000)
+    local ok, cerr = sock:connect("127.0.0.1", port)
+    if not ok then
+        return nil, "connect: " .. tostring(cerr)
+    end
+    local req = "GET " .. path .. " HTTP/1.0\r\nHost: 127.0.0.1\r\n"
+        .. "X-Wire-B64: " .. wire_b64 .. "\r\nConnection: close\r\n\r\n"
+    local _, serr = sock:send(req)
+    if serr then
+        sock:close()
+        return nil, "send: " .. tostring(serr)
+    end
+    local status_line = sock:receive("*l")
+    if not status_line then
+        sock:close()
+        return nil, "no status line"
+    end
+    local code = tonumber(status_line:match("(%d%d%d)"))
+    local set_cookie = nil
+    while true do
+        local h = sock:receive("*l")
+        if not h or h == "" then break end
+        local name, val = h:match("^([^:]+):%s*(.*)$")
+        if name and name:lower() == "set-cookie" then
+            set_cookie = val
+        end
+    end
+    sock:close()
+    return code, set_cookie
 end
 
 local BOOTED = false
@@ -280,10 +331,30 @@ end
 
 local function parse_record(rec)
     if rec.direction ~= "request" then
-        return { ["$cookie_<name>"] = NA, ["lua-resty-cookie"] = NA, ["proxy"] = NA }
+        -- Response: only the Set-Cookie forwarding-fidelity column applies; the three
+        -- request columns are n/a. nginx exposes no *parsed* Set-Cookie to Lua, so this
+        -- measures whether a proxy_pass forwards the upstream's Set-Cookie verbatim (≡),
+        -- alters it (≠), or drops/refuses it (❌).
+        if not boot() then
+            return { ["$cookie_<name>"] = NA, ["lua-resty-cookie"] = NA, ["proxy"] = NA,
+                     ["proxy (Set-Cookie)"] = SKIP }
+        end
+        local want = ngx.decode_base64(rec.wire_b64) or ""
+        local code, set_cookie = http_get_setcookie(PORT_P, "/proxy-sc", rec.wire_b64)
+        local sc_out
+        if not code or set_cookie == nil or set_cookie == "" then
+            sc_out = { outcome = "ForwardedRejected" }
+        elseif set_cookie == want then
+            sc_out = { outcome = "ForwardedVerbatim" }
+        else
+            sc_out = { outcome = "ForwardedAltered", forwarded = l1_to_utf8(set_cookie) }
+        end
+        return { ["$cookie_<name>"] = NA, ["lua-resty-cookie"] = NA, ["proxy"] = NA,
+                 ["proxy (Set-Cookie)"] = sc_out }
     end
     if not boot() then
-        return { ["$cookie_<name>"] = SKIP, ["lua-resty-cookie"] = SKIP, ["proxy"] = SKIP }
+        return { ["$cookie_<name>"] = SKIP, ["lua-resty-cookie"] = SKIP, ["proxy"] = SKIP,
+                 ["proxy (Set-Cookie)"] = NA }
     end
     local wire = ngx.decode_base64(rec.wire_b64) or ""
 
@@ -322,14 +393,15 @@ local function parse_record(rec)
         prx_out = { outcome = "ForwardedRejected" }
     end
 
-    return { ["$cookie_<name>"] = nat_out, ["lua-resty-cookie"] = rst_out, ["proxy"] = prx_out }
+    return { ["$cookie_<name>"] = nat_out, ["lua-resty-cookie"] = rst_out, ["proxy"] = prx_out,
+             ["proxy (Set-Cookie)"] = NA }
 end
 
 -- --selfcheck: boot once, probe all three deps end-to-end with a known cookie, tear
 -- down, and report availability + versions. A dep that the round-trip can't confirm
 -- is reported false → that column degrades to SKIP.
 local function selfcheck()
-    local nat, rst, prx = false, false, false
+    local nat, rst, prx, sc = false, false, false, false
     if boot() then
         local s, b = http_get(PORT_P, "/parse", "probe=1")
         if s == 200 and b then
@@ -343,6 +415,10 @@ local function selfcheck()
         if ps == 200 and pb then
             prx = (ngx.decode_base64(pb) == "probe=1")
         end
+        local scode, sval = http_get_setcookie(PORT_P, "/proxy-sc", ngx.encode_base64("probe=1"))
+        if scode and sval == "probe=1" then
+            sc = true
+        end
     end
     stop()
     io.write(cjson.encode({
@@ -350,12 +426,14 @@ local function selfcheck()
             ["$cookie_<name>"] = nat,
             ["lua-resty-cookie"] = rst,
             ["proxy"] = prx,
+            ["proxy (Set-Cookie)"] = sc,
         },
         versions = {
             runtime = openresty_version(),
             ["$cookie_<name>"] = "ngx_http_variables",
             ["lua-resty-cookie"] = RESTY_VERSION,
             ["proxy"] = "ngx_http_proxy_module",
+            ["proxy (Set-Cookie)"] = "ngx_http_proxy_module",
         },
     }) .. "\n")
     io.flush()

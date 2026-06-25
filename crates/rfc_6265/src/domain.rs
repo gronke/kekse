@@ -206,6 +206,19 @@ mod tests {
         assert!(domain_matches(&host, "xn--mnchen-3ya.de"));
     }
 
+    #[cfg(feature = "idna")]
+    #[test]
+    fn idna_emoji_domain() {
+        // UTS-46 encodes an emoji label to its A-label, and the encoding is *valid* IDNA
+        // — even though a registry such as .eu would refuse the emoji. Registry policy and
+        // IDNA validity are different concerns, and only the latter is this layer's job.
+        assert_eq!(to_ascii("🍪.eu").as_deref(), Some("xn--hj8h.eu"));
+        assert!(is_valid_domain("🍪.eu"));
+        // Idempotent on the already-encoded A-label, which is also a valid domain.
+        assert_eq!(to_ascii("xn--hj8h.eu").as_deref(), Some("xn--hj8h.eu"));
+        assert!(is_valid_domain("xn--hj8h.eu"));
+    }
+
     #[cfg(feature = "psl")]
     #[test]
     fn psl_public_suffix_and_registrable() {

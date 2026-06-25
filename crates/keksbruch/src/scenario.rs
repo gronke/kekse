@@ -46,6 +46,13 @@ pub enum Expect {
         default_domain: Option<&'static str>,
         hardened_domain: Option<&'static str>,
     },
+    /// Response: both modes keep a cookie with `value` and this parsed `Path`. A path-av
+    /// is just av-octets (RFC 6265 §4.1.1) with no semantics, so kekse stores it verbatim
+    /// and the feature flags do not change it — strict and lenient agree.
+    ResponsePath {
+        value: &'static str,
+        path: Option<&'static str>,
+    },
     /// Response: both modes reject (`None`).
     ResponseNone,
     /// The wire is not valid UTF-8, so it can never reach a `&str` parser.
@@ -538,6 +545,30 @@ pub fn scenarios() -> Vec<Scenario> {
             },
         ),
         s(
+            "domain-emoji-utf8",
+            "a raw emoji-label Domain (🍪.eu) is non-ASCII U-label bytes — the av-octet rule drops it everywhere",
+            Response,
+            "SID",
+            Keksbruch::DomainValue("🍪.eu"),
+            Expect::ResponseDomain {
+                value: "abc",
+                default_domain: None,
+                hardened_domain: None,
+            },
+        ),
+        s(
+            "domain-emoji-punycode",
+            "the A-label of 🍪.eu (xn--hj8h.eu) is av-octet-clean and valid per UTS-46, so it survives every build — the .eu registry would refuse the emoji, but the IDNA encoding itself is valid",
+            Response,
+            "SID",
+            Keksbruch::DomainValue("xn--hj8h.eu"),
+            Expect::ResponseDomain {
+                value: "abc",
+                default_domain: Some("xn--hj8h.eu"),
+                hardened_domain: Some("xn--hj8h.eu"),
+            },
+        ),
+        s(
             "domain-malformed-punycode",
             "malformed punycode is av-octet-clean, so the pure codec stores it; the hardened build refuses it",
             Response,
@@ -572,6 +603,64 @@ pub fn scenarios() -> Vec<Scenario> {
                 second: "café",
             },
             Expect::ResponseStrictRejectsLenientKeeps { value: "abc" },
+        ),
+        // ── path: edge-case Path values (Response) ──────────────────────────
+        // RFC 6265 §4.1.1 path-av is any av-octet string with no semantics, so kekse
+        // stores whatever it is told — a non-path URI, an empty value, a bare relative
+        // `.`/`./`. (The "default to / unless it starts with /" rule is a client storage
+        // decision needing the request URI, not a parse-time one.) The matrix shows which
+        // parsers normalise, reject, or resolve a default path instead.
+        s(
+            "path-file-uri",
+            "a file:// URI as a Path is just av-octets to RFC 6265 — stored verbatim, no traversal meaning",
+            Response,
+            "SID",
+            Keksbruch::PathValue("file:///etc/passwd"),
+            Expect::ResponsePath {
+                value: "abc",
+                path: Some("file:///etc/passwd"),
+            },
+        ),
+        s(
+            "path-empty",
+            "an empty Path= value is av-octet-clean (zero octets) and kept as an empty path",
+            Response,
+            "SID",
+            Keksbruch::PathValue(""),
+            Expect::ResponsePath {
+                value: "abc",
+                path: Some(""),
+            },
+        ),
+        s(
+            "path-dot",
+            "a bare relative Path=. is stored verbatim (no default-path resolution at parse time; \
+             Path=./ behaves identically across every parser, so only the bare dot is kept here)",
+            Response,
+            "SID",
+            Keksbruch::PathValue("."),
+            Expect::ResponsePath {
+                value: "abc",
+                path: Some("."),
+            },
+        ),
+        // ── attribute fidelity (Response) ───────────────────────────────────
+        // A "kitchen-sink" cookie that sets all six attributes at once. kekse parses
+        // every one; the matrix renders an explicit per-attribute grid (the "Attribute
+        // fidelity" section) showing which parsers preserve vs silently drop each.
+        s(
+            "resp-all-attrs",
+            "a cookie setting all six attributes (Secure, HttpOnly, SameSite, Path, Domain, Max-Age) \
+             — the attribute-fidelity probe",
+            Response,
+            "SID",
+            Keksbruch::AllAttributes,
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: Some(60),
+                http_only: true,
+                secure: true,
+            },
         ),
         s(
             "resp-crlf",
