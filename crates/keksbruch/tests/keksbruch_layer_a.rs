@@ -140,6 +140,33 @@ fn each_scenario_matches_its_pinned_expectation() {
                     );
                 }
             }
+            Expect::ResponseDomain {
+                value,
+                default_domain,
+                hardened_domain,
+            } => {
+                // keksbruch's `hardened` feature forwards to `kekse/hardened`, so the resolved
+                // `Domain` depends on the build: the pure codec stores it, the hardened build may
+                // refuse a public-suffix / malformed value. A single `Domain` is no duplicate, so
+                // strict and lenient agree.
+                let want_domain = if cfg!(feature = "hardened") {
+                    *hardened_domain
+                } else {
+                    *default_domain
+                };
+                for (mode, parsed) in [
+                    ("strict", SetCookie::parse_strict(&wire)),
+                    ("default", SetCookie::parse(&wire)),
+                ] {
+                    let sc = parsed.unwrap_or_else(|| panic!("{id} {mode} must keep the cookie"));
+                    assert_eq!(sc.value(), *value, "{id} {mode} value");
+                    assert_eq!(
+                        sc.attributes().domain.map(|d| d.as_str()),
+                        want_domain,
+                        "{id} {mode} domain"
+                    );
+                }
+            }
             Expect::ResponseNone => {
                 assert!(SetCookie::parse_strict(&wire).is_none(), "{id} strict");
                 assert!(SetCookie::parse(&wire).is_none(), "{id} default");

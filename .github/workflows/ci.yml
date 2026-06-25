@@ -93,9 +93,10 @@ jobs:
 
   # kekse pins MSRV 1.88.0 (workspace Cargo.toml) — the floor is the `time` crate
   # used for `Expires` dates (time 0.3.x is edition 2024 / Rust 1.88). At 1.88
-  # every feature builds, including the optional `axum` extractor (axum-core 0.5,
-  # which needs 1.78). `--locked` pins the MSRV-verified dependency versions, so a
-  # lock bump that raises the floor fails this leg rather than slipping through.
+  # every feature builds: the optional `axum` extractor (axum-core 0.5, needs 1.78)
+  # and the `hardened` Domain suite (`idna` + `psl`, which pull the icu 2.x tree).
+  # `--locked` pins the MSRV-verified dependency versions, so a lock bump that
+  # raises the floor (e.g. a newer icu) fails this leg rather than slipping through.
   # (keksbruch's differential deps need newer toolchains and are not built here.)
   msrv:
     name: build (MSRV 1.88.0)

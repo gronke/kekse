@@ -7,12 +7,18 @@
 /// relative (no leading `/`), or contains only the leading `/`.
 #[must_use]
 pub fn default_path(uri_path: &str) -> &str {
+    // §5.1.4 steps 2–3: an empty or relative path (not starting with `/`) has default-path `/`.
+    // Requiring the leading `/` also means there is never any content *before* the first `/` to
+    // consider — the path is anchored at the root.
     if !uri_path.starts_with('/') {
         return "/";
     }
     match uri_path.rfind('/') {
-        // Only the leading `/` (or, unreachably, none) → no usable prefix.
+        // §5.1.4 step 4: "no more than one `/`". Given the leading `/` above, the right-most `/`
+        // landing at index 0 means it is the *only* `/`, so the default-path is `/`. (`None` is
+        // unreachable — there is always at least the leading `/` — but keeps the match total.)
         Some(0) | None => "/",
+        // §5.1.4 step 5: the characters from the start up to, but not including, the right-most `/`.
         Some(idx) => &uri_path[..idx],
     }
 }

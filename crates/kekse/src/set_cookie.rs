@@ -84,11 +84,12 @@ impl<'a> SetCookie<'a> {
         Self::parse_with(header_value, false)
     }
 
-    /// Like [`parse`](SetCookie::parse) but **strict**: an unrecognised attribute
-    /// rejects the whole cookie (`None`) instead of being ignored. A tripwire for
-    /// cookies you minted yourself, where an attribute you did not emit signals
-    /// something is wrong. A malformed *known* attribute (e.g. a non-numeric
-    /// `Max-Age`) is dropped, not fatal, in both modes.
+    /// Like [`parse`](SetCookie::parse) but **strict**: an unrecognised attribute — or a
+    /// **duplicate** of any attribute — rejects the whole cookie (`None`) instead of being ignored.
+    /// A tripwire for cookies you minted yourself, where an attribute you did not emit (or emitted
+    /// twice) signals something is wrong. A malformed *known* attribute (e.g. a non-numeric
+    /// `Max-Age`) is dropped, not fatal, in both modes; lenient [`parse`](SetCookie::parse)
+    /// tolerates duplicates (last-wins).
     pub fn parse_strict(header_value: &'a str) -> Option<Self> {
         Self::parse_with(header_value, true)
     }
@@ -106,6 +107,18 @@ impl<'a> SetCookie<'a> {
         let value = decode_cookie_value(raw_value, true)?;
         let mut set_cookie =
             Self::from_parts(Cookie::new(name, value), CookieAttributes::default());
+        // Bitmask of recognised attributes already seen, so strict mode can reject a duplicate
+        // (e.g. two `Domain=`). Lenient keeps last-wins, consistent across every attribute.
+        let mut seen: u8 = 0;
+        macro_rules! once {
+            ($bit:expr) => {{
+                let b: u8 = $bit;
+                if strict && seen & b != 0 {
+                    return None; // strict: a repeated attribute rejects the whole cookie
+                }
+                seen |= b;
+            }};
+        }
         for piece in attrs.into_iter().flat_map(|a| a.split(';')) {
             let (attr, val) = match piece.split_once('=') {
                 Some((a, v)) => (a.trim_matches(is_ws_char), v.trim_matches(is_ws_char)),
@@ -115,22 +128,29 @@ impl<'a> SetCookie<'a> {
                 continue; // a stray or trailing `;` — not an attribute
             }
             if attr.eq_ignore_ascii_case(attr_name::HTTP_ONLY) {
+                once!(0x01);
                 set_cookie.attributes.http_only = true;
             } else if attr.eq_ignore_ascii_case(attr_name::SECURE) {
+                once!(0x02);
                 set_cookie.attributes.secure = true;
             } else if attr.eq_ignore_ascii_case(attr_name::SAME_SITE) {
+                once!(0x04);
                 // `.ok()` drops an unrecognised token (keeping the cookie), same as
                 // a malformed Max-Age — see `SameSite`'s case-insensitive `FromStr`.
                 set_cookie.attributes.same_site = val.parse::<SameSite>().ok();
             } else if attr.eq_ignore_ascii_case(attr_name::PATH) {
+                once!(0x08);
                 // An invalid value (control byte, `;`, non-ASCII) is dropped like a
                 // malformed Max-Age — the cookie is kept, the attribute discarded.
                 set_cookie.attributes.path = Path::new(val);
             } else if attr.eq_ignore_ascii_case(attr_name::DOMAIN) {
+                once!(0x10);
                 set_cookie.attributes.domain = Domain::new(val);
             } else if attr.eq_ignore_ascii_case(attr_name::MAX_AGE) {
+                once!(0x20);
                 set_cookie.attributes.max_age = val.parse::<u64>().ok();
             } else if attr.eq_ignore_ascii_case(attr_name::EXPIRES) {
+                once!(0x40);
                 // RFC 6265 §5.1.1 (lenient) / RFC 7231 IMF-fixdate (strict). An
                 // unparseable date is dropped like any malformed known attribute —
                 // the cookie survives.

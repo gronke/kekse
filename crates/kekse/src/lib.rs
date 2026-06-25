@@ -98,6 +98,15 @@
 //! yields an empty jar — and it pulls in only `axum-core`, not the whole
 //! framework.
 //!
+//! ## Hardening (optional)
+//!
+//! By default kekse is a pure codec that stores whatever `Domain` the wire carries. The opt-in
+//! `hardened` feature (= `psl` + `idna`) makes it *enforce* policy on the `Domain` attribute: `psl`
+//! refuses a public-suffix value (`com`, `co.uk`, …) — the supercookie defense — and `idna` refuses
+//! malformed punycode. Both pull extra tables (the Public Suffix List / IDNA, via `rfc_6265`), so
+//! they are not in the default, dependency-light build. Independently,
+//! [`SetCookie::parse_strict`] rejects a `Set-Cookie` carrying a duplicate attribute.
+//!
 //! ## A single source of truth for the grammar
 //!
 //! Cookie *names* are RFC 6265 cookie-names (RFC 7230 tokens), and cookie-name / cookie-octet /

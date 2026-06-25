@@ -19,11 +19,19 @@ all-features = true
 default = []
 # §5.1.1 cookie-date / RFC 7231 IMF-fixdate parsing and formatting, built on `time`.
 date = ["dep:time"]
-# §5.1.3 domain-match.
+# §5.1.3 domain-match and §5.1.2 host canonicalization.
 domain = []
 # §5.1.4 path-match and default-path.
 path = []
+# §5.1.2 IDN ↔ punycode (UTS-46), via `idna`. Implies `domain`.
+idna = ["dep:idna", "domain"]
+# §4.1.2.3 / §5.3 public-suffix (supercookie) checks, via `psl`. Implies `domain`.
+psl = ["dep:psl", "domain"]
 
 [dependencies]
 # Only pulled in by the `date` feature; the date module never hand-rolls parsing.
 time = { workspace = true, optional = true }
+# IDN (UTS-46) ↔ punycode, behind the `idna` feature.
+idna = { version = "1", optional = true }
+# Public Suffix List (compiled in), behind the `psl` feature.
+psl = { version = "2", optional = true }

@@ -98,6 +98,18 @@ pub enum Keksbruch {
     /// lenient RFC 6265 §5.1.1 cookie-date vs strict RFC 7231 IMF-fixdate split,
     /// and how other parsers read the obsolete RFC 850 / asctime() forms.
     ExpiresDate(&'static str),
+    /// A `Domain` attribute carrying a specific value: `; Domain=<v>` (Response). Probes
+    /// supercookie (public-suffix) `Domain`s and punycode-vs-UTF-8 host notation. Default kekse
+    /// stores the raw av-octet value; under the `psl`/`idna` features it enforces policy (a
+    /// public-suffix or malformed-IDN value is refused, leaving the cookie host-only).
+    DomainValue(&'static str),
+    /// Two `Domain=` attributes on one cookie: `; Domain=<first>; Domain=<second>` (Response).
+    /// kekse never *emits* this (a `SetCookie` holds one `Domain`), so keksbruch hand-builds it:
+    /// lenient parse takes the last value, strict parse rejects the duplicate outright.
+    DuplicateDomain {
+        first: &'static str,
+        second: &'static str,
+    },
 
     // ── extra coverage: NUL positions, HTAB, multibyte UTF-8 ─────────────────
     /// A NUL byte in the cookie *name*: `n\0x=v`.

@@ -101,11 +101,23 @@ fn av_octet_boundary_governs_path_and_domain() {
             is_rfc_av_octet(b),
             "Path byte 0x{b:02x}"
         );
+        // For the pure codec the av-octet rule alone governs `Domain` acceptance.
+        #[cfg(not(any(feature = "psl", feature = "idna")))]
         assert_eq!(
             Domain::new(&s).is_some(),
             is_rfc_av_octet(b),
             "Domain byte 0x{b:02x}"
         );
+        // The `psl`/`idna` features only *narrow* this: the av-octet rule still gates (a non-octet
+        // is always refused), but an octet-clean value may be refused too (a bare single label is a
+        // public suffix, etc.). So under hardening only the rejection direction is an equivalence.
+        #[cfg(any(feature = "psl", feature = "idna"))]
+        if !is_rfc_av_octet(b) {
+            assert!(
+                Domain::new(&s).is_none(),
+                "Domain byte 0x{b:02x} must be refused"
+            );
+        }
     }
     // SP is an av-octet (allowed) though not a cookie-octet; `;` and non-ASCII not.
     assert!(Path::new("/a b").is_some());
