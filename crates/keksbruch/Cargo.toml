@@ -37,6 +37,12 @@ csv = { workspace = true, optional = true }
 html-escape = { workspace = true, optional = true }
 # Only to build the HeaderMap the axum-extra extractor reads from.
 http = { workspace = true, optional = true }
+# The matrix report's renderer: `tera` splices precompiled table/list fragments into the
+# one prose template, `pulldown-cmark` converts that template's prose to HTML for the HTML
+# report, and `maud` builds the table/list fragments as escape-by-default HTML.
+tera = { workspace = true, optional = true }
+pulldown-cmark = { workspace = true, optional = true }
+maud = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -55,6 +61,9 @@ differential = [
     "dep:http",
     "dep:csv",
     "dep:html-escape",
+    "dep:tera",
+    "dep:pulldown-cmark",
+    "dep:maud",
 ]
 # Build the system under test (kekse) with its Domain-hardening suite, so Layer A asserts the
 # enforced behaviour (public-suffix / malformed-IDN `Domain`s refused) rather than the pure codec.
