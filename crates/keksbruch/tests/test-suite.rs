@@ -18,8 +18,25 @@
 #[ignore = "differential matrix: needs the `differential` feature + python/node; run with --ignored"]
 fn render_parser_divergence_matrix() {
     let markdown = keksbruch::differential::run_matrix();
+    // The template wired up: the title and every section heading rendered, and the
+    // legend's typo fix landed (`unavailable`, once `unavailabfetle`).
+    for anchor in [
+        "parser divergence matrix",
+        "## Legend",
+        "## Request `Cookie:` parsers",
+        "## Attribute fidelity",
+        "## Divergences worth knowing",
+        "## Tested against",
+        "unavailable",
+    ] {
+        assert!(
+            markdown.contains(anchor),
+            "the matrix should render {anchor:?}"
+        );
+    }
+    // No fragment marker leaked: every `{{ … }}` was substituted by Tera.
     assert!(
-        markdown.contains("parser divergence matrix"),
-        "the matrix should render its heading"
+        !markdown.contains("{{"),
+        "an unsubstituted template marker leaked into the output"
     );
 }

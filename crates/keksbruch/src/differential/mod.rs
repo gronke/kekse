@@ -7,6 +7,7 @@ pub mod matrix;
 pub mod result;
 pub mod rust_comparators;
 pub mod sidecar;
+pub mod table;
 
 use std::path::Path;
 

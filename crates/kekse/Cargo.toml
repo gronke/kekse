@@ -59,3 +59,10 @@ tokio = { workspace = true }
 # `time` (pulled transitively via rfc_6265's `date` feature) so the integration date suite can
 # construct `OffsetDateTime`s with the `datetime!` macro.
 time.workspace = true
+
+# The `CookieJarBuf` extractor lives behind the `axum` feature, so its example only
+# builds with that feature on (the other examples are feature-free and auto-discovered).
+# `--all-targets --all-features` in CI compiles it; a default build skips it.
+[[example]]
+name = "axum_extractor"
+required-features = ["axum"]

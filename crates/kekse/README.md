@@ -81,6 +81,25 @@ assert_eq!(sid.as_deref(), Some("deadbeef"));
 
 `CookieJar` reads one `Cookie:` header in order, and is writable too — `add` / `replace` / `remove`, then `jar.to_header_value(encoding)` renders the whole header back, each value re-encoded canonically from its decoded form (no raw retention). It is a parsed-and-rebuildable view, not a stateful cookie store (persistence and domain/path send-matching are out of scope).
 
+## Examples
+
+Runnable programs live in [`examples/`](examples).
+Each prints its output and asserts the invariant it documents, so it doubles as a smoke test.
+
+| Example | Shows |
+| --- | --- |
+| `build_set_cookie` | The `SetCookie` builder, the `HeaderValue` conversion, a reusable `CookieAttributes` policy, and a parse round-trip. |
+| `parse_request` | Reading and rewriting a `Cookie:` request header through a `CookieJar`. |
+| `encodings` | How each `ValueEncoding` escapes one tricky value for the wire. |
+| `strict_vs_lenient` | The lenient and strict readers side by side on a quoted value. |
+| `fail_soft` | Fail-soft parsing and the never-panic guarantee on hostile input. |
+| `axum_extractor` | The `CookieJarBuf` axum extractor (needs `--features axum`). |
+
+```sh
+cargo run -p kekse --example build_set_cookie
+cargo run -p kekse --example axum_extractor --features axum
+```
+
 ## License & Disclaimer
 
 Copyright © 2026 Stefan Grönke.
