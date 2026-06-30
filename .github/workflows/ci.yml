@@ -5,120 +5,153 @@ on:
     branches: [main]
   pull_request:
 
-# Least privilege: the job only reads the repo and uses the cache service.
+# Least privilege: the jobs only read the repo. The sealed Docker pipeline needs
+# no registry/push credentials.
 permissions:
   contents: read
 
 env:
-  # Incremental compilation is counter-productive in CI: it bloats the cache
-  # and never pays off across the clean checkouts each run starts from.
-  CARGO_INCREMENTAL: 0
-  # No debug symbols in CI: nobody attaches a debugger to these artifacts.
-  CARGO_PROFILE_DEV_DEBUG: 0
+  # The ONE place the gronke/rust-ci version is pinned. Each job checks the repo
+  # out once at this ref, then uses its actions by local ./ path — GitHub does not
+  # allow an expression in a step's `uses:`, so this is how the ref stays single-
+  # sourced. Bump here only. Currently a main SHA (rust-ci is pre-v1); switch it to
+  # a tag (e.g. v1) once rust-ci cuts one.
+  RUST_CI_REF: 20d04cdfa016537dec1c8a68e520ac46052680f7
+  # Incremental compilation is counter-productive in CI: it bloats the cache and
+  # never pays off across the clean checkouts each run starts from. No debug symbols
+  # either — nobody attaches a debugger to CI artifacts. Both are CARGO_* so the
+  # sealed Docker actions forward them into the container build.
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  # Resilient crates.io downloads in the one networked step (cargo-fetch): more
+  # retries and HTTP/1.1, which sidesteps the intermittent curl "[16] HTTP2 framing
+  # layer" error. Forwarded into the container via CARGO_.* (see #26).
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
 
 jobs:
+  # The lint/test gate runs SEALED via gronke/rust-ci: every cargo invocation
+  # executes inside a pinned rust image — non-root, --cap-drop=ALL,
+  # --security-opt=no-new-privileges, repo mounted read-only, and --network=none
+  # against a cache that the single networked `cargo-fetch` step warms first. A
+  # dependency build.rs / proc-macro therefore compiles but cannot reach the network
+  # — the same isolation the differential matrix already applies to its sidecars,
+  # here extended to kekse's own build.
   ci:
-    name: fmt, clippy, test
+    name: fmt, clippy, test (sealed)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      # Restore on every run (main and PRs). The save step below runs only on
-      # main, so PRs consume a cache warmed by main read-only.
-      - name: Restore cargo cache
-        uses: actions/cache/restore@v5
+      # Check gronke/rust-ci out once at the pinned ref; the steps below use it by
+      # local ./ path. It is a public repo, so the default token can read it.
+      - name: Check out gronke/rust-ci
+        uses: actions/checkout@v7
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          repository: gronke/rust-ci
+          ref: ${{ env.RUST_CI_REF }}
+          path: .rust-ci
 
-      # rustfmt + clippy ship with the runner's stable toolchain; ensure they
-      # are present and record versions for debuggable logs.
-      - name: Toolchain
-        run: |
-          rustup component add rustfmt clippy
-          rustc --version && cargo --version
-          cargo fmt --version && cargo clippy --version
+      # Restore the cargo download cache (.cargo-cache = the sealed CARGO_HOME) and
+      # target/ across runs. rust-cache wraps the first-party actions/cache and
+      # auto-saves at job end. The workspace has a single root lockfile, so key on it
+      # (not the default **/Cargo.lock, which would also hash the .rust-ci checkout).
+      - name: Cargo cache
+        uses: ./.rust-ci/.github/actions/rust-cache
+        with:
+          prefix: ci
+          cache-target: "true"
+          cache-directories: .cargo-cache
+          lockfiles: Cargo.lock
 
-      - name: rustfmt
-        run: cargo fmt --all -- --check
+      # Build the pinned toolchain image (rust:latest + clippy/rustfmt/jq) and load
+      # it locally. cache:false keeps this off actions/github-script@v7 (Node 20).
+      - name: Build toolchain image
+        uses: ./.rust-ci/.github/actions/build-image
 
-      - name: clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      # The ONE networked step: populate .cargo-cache (cargo fetch --locked, the
+      # whole Cargo.lock) so every sealed leg below runs --offline --network=none.
+      - name: Cargo fetch
+        uses: ./.rust-ci/.github/actions/cargo-fetch
 
-      - name: test
-        run: cargo test --workspace
+      # fmt --check + clippy (--workspace --all-targets -D warnings) + test
+      # (--workspace), --offline --locked, sealed. Once per feature universe.
+      - name: Lint + test (default features)
+        uses: ./.rust-ci/.github/actions/lint-and-test-docker
 
-      # The all-features universe enables kekse's optional `tracing` (gated
-      # fail-soft logging) and keksbruch' `differential` harness. This is
-      # the compile-only leg for the harness: clippy type-checks it against
-      # cookie/biscotti, while `cargo test` skips the matrix itself (it is
-      # `#[ignore]`d and needs python/node), so no extra toolchains are required.
-      - name: clippy + test (all features)
-        run: |
-          cargo clippy --workspace --all-targets --all-features -- -D warnings
-          cargo test --workspace --all-features
-
-      # docs.rs builds with all features; mirror that here with -D warnings so a
-      # broken intra-doc link (the crate has many) fails CI, not the publish.
-      - name: doc
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --no-deps --all-features
+      # The all-features universe enables kekse's optional `tracing`/`axum` and
+      # keksbruch's `differential` harness. The matrix test is #[ignore]d, so this
+      # compiles the harness (clippy + test) without running it (no sidecars here).
+      - name: Lint + test (all features)
+        uses: ./.rust-ci/.github/actions/lint-and-test-docker
+        with:
+          features: --all-features
 
       # The crates are feature-light by default; prove they still build with no
       # features at all, so nothing silently leans on an optional one.
-      - name: build (no default features)
-        run: |
-          cargo build -p kekse --no-default-features
-          cargo build -p keksbruch --no-default-features
-
-      # Warm the shared cache from main only. An unchanged Cargo.lock hits the
-      # exact key and this save is a no-op.
-      - name: Save cargo cache
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        uses: actions/cache/save@v5
+      - name: Build (no default features)
+        uses: ./.rust-ci/.github/actions/cargo-docker
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          args: build -p kekse -p keksbruch --no-default-features --locked
+
+      # docs.rs builds with all features; mirror that with -D warnings so a broken
+      # intra-doc link (the crate has many) fails CI, not the publish. RUSTDOCFLAGS
+      # is not a CARGO_* var, so pass it via the action's literal `env` input.
+      - name: Doc (all features)
+        uses: ./.rust-ci/.github/actions/cargo-docker
+        with:
+          args: doc --workspace --no-deps --all-features --locked
+          env: |
+            RUSTDOCFLAGS=-D warnings
 
   # kekse pins MSRV 1.88.0 (workspace Cargo.toml) — the floor is the `time` crate
-  # used for `Expires` dates (time 0.3.x is edition 2024 / Rust 1.88). At 1.88
-  # every feature builds: the optional `axum` extractor (axum-core 0.5, needs 1.78)
-  # and the `hardened` Domain suite (`idna` + `psl`, which pull the icu 2.x tree).
-  # `--locked` pins the MSRV-verified dependency versions, so a lock bump that
-  # raises the floor (e.g. a newer icu) fails this leg rather than slipping through.
-  # (keksbruch's differential deps need newer toolchains and are not built here.)
+  # used for `Expires` dates. Build the core (default + all features) at exactly
+  # that toolchain, SEALED: build-image resolves `msrv` from Cargo.toml's
+  # rust-version, so the whole build runs on the support floor and a dependency
+  # that raises its MSRV fails here. `--locked` pins the MSRV-verified dependency
+  # versions. (keksbruch's differential deps need newer toolchains and are not
+  # built here.)
   msrv:
-    name: build (MSRV 1.88.0)
+    name: build (MSRV 1.88.0, sealed)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - name: Install Rust 1.88.0
-        run: rustup toolchain install 1.88.0 --profile minimal
+      - uses: actions/checkout@v7
+      - name: Check out gronke/rust-ci
+        uses: actions/checkout@v7
+        with:
+          repository: gronke/rust-ci
+          ref: ${{ env.RUST_CI_REF }}
+          path: .rust-ci
+
+      # rust-version: msrv → reads `rust-version` (1.88.0) from the root Cargo.toml,
+      # so the image IS the MSRV; the sealed builds below run on it.
+      - name: Build MSRV toolchain image
+        uses: ./.rust-ci/.github/actions/build-image
+        with:
+          rust-version: msrv
+
+      - name: Cargo fetch
+        uses: ./.rust-ci/.github/actions/cargo-fetch
+
       - name: Build core (default features)
-        run: cargo +1.88.0 build -p kekse --locked
+        uses: ./.rust-ci/.github/actions/cargo-docker
+        with:
+          args: build -p kekse --locked
+
       - name: Build all features
-        run: cargo +1.88.0 build -p kekse --all-features --locked
+        uses: ./.rust-ci/.github/actions/cargo-docker
+        with:
+          args: build -p kekse --all-features --locked
 
   # OPTIONAL advisory job: flags RustSec advisories in the dependency tree. It is
-  # non-blocking (continue-on-error) and needs no config file — delete this whole
-  # job to drop the supply-chain check.
+  # non-blocking (continue-on-error) and needs the network for the advisory DB, so
+  # it runs on the host (not sealed). Delete this whole job to drop the check.
   audit:
     name: cargo audit (advisory)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Audit

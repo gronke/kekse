@@ -66,8 +66,13 @@ jobs:
       JAVA_VERSION: ${{ inputs.java_version }}
       PYTHON_VERSION: ${{ inputs.python_version }}
       DOTNET_VERSION: ${{ inputs.dotnet_version }}
+      # Resilient crates.io downloads: more retries + HTTP/1.1, sidestepping the
+      # intermittent curl "[16] HTTP2 framing layer" error while `cargo` updates the
+      # index / downloads deps in the "Generate the matrix" step (see #26).
+      CARGO_NET_RETRY: "10"
+      CARGO_HTTP_MULTIPLEXING: "false"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Rust toolchain
         run: |
@@ -205,7 +210,7 @@ jobs:
           if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; fi
 
       - name: Upload matrix (Markdown + CSV + HTML)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: keksbruch-matrix
           path: |
@@ -239,18 +244,18 @@ jobs:
       # The matrix job uploaded the three files under a common ancestor, so they
       # land flat in site/ (site/COOKIE_MATRIX.{md,csv,html}).
       - name: Download the matrix artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: keksbruch-matrix
           path: site
       # Serve the files verbatim — no Jekyll build, no index synthesis.
       - name: Mark the site as static
         run: touch site/.nojekyll
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
       - name: Upload the Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
