@@ -1,0 +1,72 @@
+name: Release gate
+
+# A pre-publish GATE, not a publisher. On a v* tag (or a manual run) it checks each
+# publishable crate is release-ready via gronke/rust-ci's `publish-dry-run`, which
+# splits the work in two:
+#   1. a networked, build-free prep — `cargo fetch`, tag <-> Cargo.toml version,
+#      a not-already-published probe on crates.io, and `cargo publish --dry-run
+#      --no-verify` (publish checks, no dependency code runs); then
+#   2. a SEALED verify-build — `cargo package --offline` under --network=none, so a
+#      dependency build.rs / proc-macro that runs during packaging cannot reach the
+#      network.
+# Nothing is published here.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: # run by hand to exercise the gate without cutting a tag
+
+# Read-only: the probe hits the public crates.io API (no auth), and nothing is published.
+permissions:
+  contents: read
+
+env:
+  # The ONE place the gronke/rust-ci version is pinned (kept identical to ci.yml).
+  # The job checks the repo out once at this ref, then uses its actions by local ./
+  # path — GitHub does not allow an expression in a step's `uses:`. Bump here only.
+  # Currently a main SHA (rust-ci is pre-v1); switch it to a tag (e.g. v1) once
+  # rust-ci cuts one.
+  RUST_CI_REF: 20d04cdfa016537dec1c8a68e520ac46052680f7
+  # Resilient crates.io access in the networked prep (matches CI; see #26).
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+
+jobs:
+  publish-dry-run:
+    name: publish dry-run (sealed verify)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Check gronke/rust-ci out once at the pinned ref; the steps below use it by
+      # local ./ path. It is a public repo, so the default token can read it.
+      - name: Check out gronke/rust-ci
+        uses: actions/checkout@v7
+        with:
+          repository: gronke/rust-ci
+          ref: ${{ env.RUST_CI_REF }}
+          path: .rust-ci
+
+      # The toolchain image the sealed verify-build runs inside (rust:latest +
+      # clippy/rustfmt/jq). publish-dry-run does its own `cargo fetch` in the prep step.
+      - name: Build toolchain image
+        uses: ./.rust-ci/.github/actions/build-image
+
+      # rfc_6265 is the workspace leaf (no internal deps), so its dry-run + sealed
+      # verify-build stand on their own — a hard gate.
+      - name: Dry-run rfc_6265
+        uses: ./.rust-ci/.github/actions/publish-dry-run
+        with:
+          package: rfc_6265
+
+      # kekse path-depends on `rfc_6265 = { version = "0.1" }`. Until rfc_6265 0.1.x is
+      # actually on crates.io, kekse's `cargo package` verify-build can't resolve that
+      # dependency, so this step is advisory for now (classic workspace publish-order).
+      # Promote it to a hard gate (drop continue-on-error) after rfc_6265's first publish.
+      - name: Dry-run kekse (advisory until rfc_6265 is published)
+        continue-on-error: true
+        uses: ./.rust-ci/.github/actions/publish-dry-run
+        with:
+          package: kekse
+
+      # keksbruch is `publish = false` (the adversarial harness), so it is intentionally
+      # not gated here.

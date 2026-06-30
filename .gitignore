@@ -1,1 +1,5 @@
 /target
+# gronke/rust-ci checked out at $RUST_CI_REF by the CI workflows (single-sourced ref).
+/.rust-ci
+# Sealed CARGO_HOME the gronke/rust-ci Docker actions populate.
+/.cargo-cache
