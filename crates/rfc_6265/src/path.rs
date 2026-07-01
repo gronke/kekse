@@ -5,6 +5,12 @@
 /// The **default-path** for a cookie given the request-URI's path component, per RFC 6265 §5.1.4:
 /// the path up to (but not including) the right-most `/`, or `/` when the path is empty, is
 /// relative (no leading `/`), or contains only the leading `/`.
+///
+/// ```
+/// use rfc_6265::path::default_path;
+/// assert_eq!(default_path("/a/b/c"), "/a/b");
+/// assert_eq!(default_path("/foo"), "/");
+/// ```
 #[must_use]
 pub fn default_path(uri_path: &str) -> &str {
     // §5.1.4 steps 2–3: an empty or relative path (not starting with `/`) has default-path `/`.
@@ -26,6 +32,12 @@ pub fn default_path(uri_path: &str) -> &str {
 /// Whether `request_path` **path-matches** `cookie_path` per RFC 6265 §5.1.4: they are identical,
 /// or `cookie_path` is a prefix of `request_path` and either `cookie_path` ends with `/` or the
 /// first character of `request_path` not covered by `cookie_path` is `/`.
+///
+/// ```
+/// use rfc_6265::path::path_matches;
+/// assert!(path_matches("/a/b", "/a")); // prefix at a `/` boundary
+/// assert!(!path_matches("/ab", "/a")); // prefix, but not at a boundary
+/// ```
 #[must_use]
 pub fn path_matches(request_path: &str, cookie_path: &str) -> bool {
     if request_path == cookie_path {

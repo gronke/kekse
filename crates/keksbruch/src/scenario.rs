@@ -392,6 +392,82 @@ pub fn scenarios() -> Vec<Scenario> {
                 strict_dated: false,
             },
         ),
+        // §5.1.1 tolerance: the cookie-date scan is order-independent and ignores the weekday, the
+        // zone, the delimiter choice, and trailing tokens — so lenient parses these and strict (RFC
+        // 7231 IMF-fixdate) refuses each. (A pre-§5.1.1 three-fixed-formats parser wrongly rejected
+        // them leniently too; these pin the corrected behaviour, and characterise the matrix.)
+        s(
+            "date-no-weekday",
+            "a cookie-date without a weekday parses leniently; strict requires one",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("06 Nov 1994 08:49:37 GMT"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: true,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-no-timezone",
+            "a cookie-date without a zone parses leniently (§5.1.1 ignores it); strict requires GMT",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun, 06 Nov 1994 08:49:37"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: true,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-reordered",
+            "§5.1.1 is order-independent, so a reordered cookie-date parses leniently; strict does not",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("08:49:37 1994 Nov 06"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: true,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-2digit-year-imf-shape",
+            "an IMF-shaped date with a two-digit year pivots leniently; strict wants four digits",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun, 06 Nov 94 08:49:37 GMT"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: true,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-trailing-comment",
+            "trailing tokens after a complete cookie-date are ignored leniently; strict refuses them",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun, 06 Nov 1994 08:49:37 GMT (UTC)"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: true,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-unix",
+            "the Unix `date` form parses leniently — §5.1.1 ignores the stray zone token — but strict refuses it",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun Nov  6 08:49:37 UTC 1994"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: true,
+                strict_dated: false,
+            },
+        ),
         s(
             "date-garbage",
             "an unparseable date is dropped in both modes; the cookie survives",
@@ -416,6 +492,42 @@ pub fn scenarios() -> Vec<Scenario> {
                 strict_dated: false,
             },
         ),
+        s(
+            "date-year-pre-1601",
+            "§5.1.1 rejects a year before 1601 in both modes — the far-past footgun",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun, 06 Nov 1600 08:49:37 GMT"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: false,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-minute-out-of-range",
+            "a minute past 59 is rejected by both modes",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun, 06 Nov 1994 08:60:00 GMT"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: false,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-second-out-of-range",
+            "a second past 59 is rejected by both modes",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun, 06 Nov 1994 08:49:60 GMT"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: false,
+                strict_dated: false,
+            },
+        ),
         // Non-RFC date formats keksbruch probes to characterise the matrix: kekse is RFC-bounded
         // and rejects them all in both modes; other parsers may accept some.
         s(
@@ -424,18 +536,6 @@ pub fn scenarios() -> Vec<Scenario> {
             Response,
             "SID",
             Keksbruch::ExpiresDate("1994-11-06T08:49:37Z"),
-            Expect::ResponseDated {
-                value: "abc",
-                lenient_dated: false,
-                strict_dated: false,
-            },
-        ),
-        s(
-            "date-unix",
-            "the Unix `date` form (zone before the year) is not a cookie-date",
-            Response,
-            "SID",
-            Keksbruch::ExpiresDate("Sun Nov  6 08:49:37 UTC 1994"),
             Expect::ResponseDated {
                 value: "abc",
                 lenient_dated: false,

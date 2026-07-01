@@ -17,7 +17,8 @@
 //! those belong to a higher layer (e.g. the `kekse` crate).
 
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
+#![deny(missing_docs)]
+#![deny(rustdoc::broken_intra_doc_links)]
 
 pub mod grammar;
 

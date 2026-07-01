@@ -10,9 +10,14 @@
 
 use std::net::IpAddr;
 
-/// Canonicalize a host for comparison — RFC 6265 §5.1.2. Performs the ASCII lower-casing the
-/// algorithm requires; full IDNA/punycode conversion of non-ASCII labels is out of scope (a future
-/// feature), so such labels are only ASCII-case-folded.
+/// Canonicalize a host for comparison — RFC 6265 §5.1.2: the ASCII lower-casing the algorithm
+/// requires. Full IDNA/punycode (UTS-46 ToASCII) conversion of non-ASCII labels is provided by the
+/// `idna` feature (`to_ascii`); without it, non-ASCII labels are only ASCII-case-folded.
+///
+/// ```
+/// use rfc_6265::domain::canonicalize;
+/// assert_eq!(canonicalize("EXAMPLE.Com"), "example.com");
+/// ```
 #[must_use]
 pub fn canonicalize(host: &str) -> String {
     host.to_ascii_lowercase()
@@ -24,6 +29,12 @@ pub fn canonicalize(host: &str) -> String {
 /// leading or trailing dot. Internationalized names must already be punycode-encoded to ASCII (full
 /// IDNA, §5.1.2, is a future feature). An all-numeric string such as an IPv4 literal is LDH-valid;
 /// [`domain_matches`] handles IP hosts separately.
+///
+/// ```
+/// use rfc_6265::domain::is_host_name;
+/// assert!(is_host_name("sub.example.com") && is_host_name("192.168.0.1"));
+/// assert!(!is_host_name(".example.com") && !is_host_name("a..b") && !is_host_name("ex ample"));
+/// ```
 #[must_use]
 pub fn is_host_name(s: &str) -> bool {
     !s.is_empty()
@@ -45,6 +56,12 @@ pub fn is_host_name(s: &str) -> bool {
 /// `example.org:hack@attackercontrolled.example.com`) never matches. The label-boundary rule is
 /// what stops `hostileexample.org` from matching `example.org`: the character before the suffix
 /// would be `e`, not `.`.
+///
+/// ```
+/// use rfc_6265::domain::domain_matches;
+/// assert!(domain_matches("foo.example.com", "example.com")); // label-boundary suffix
+/// assert!(!domain_matches("badexample.com", "example.com")); // not a boundary
+/// ```
 #[must_use]
 pub fn domain_matches(host: &str, domain: &str) -> bool {
     if host == domain {
@@ -68,6 +85,12 @@ pub fn domain_matches(host: &str, domain: &str) -> bool {
 /// Convert `host` to its canonical ASCII form per RFC 6265 §5.1.2 — UTS-46 ToASCII (punycode
 /// A-labels) plus lower-casing. `None` if `host` is not a valid IDN / host name. After this,
 /// [`domain_matches`] / [`is_host_name`] operate on the ASCII form. (`idna` feature.)
+///
+/// ```
+/// use rfc_6265::domain::to_ascii;
+/// assert_eq!(to_ascii("münchen.de").as_deref(), Some("xn--mnchen-3ya.de"));
+/// assert_eq!(to_ascii("xn--").as_deref(), None); // malformed punycode
+/// ```
 #[cfg(feature = "idna")]
 #[must_use]
 pub fn to_ascii(host: &str) -> Option<String> {
@@ -77,6 +100,12 @@ pub fn to_ascii(host: &str) -> Option<String> {
 /// Whether `host` is a valid host name **or** internationalized domain name — i.e. it has a
 /// canonical ASCII form ([`to_ascii`]). Stricter than [`is_host_name`] (ASCII-LDH only): it accepts
 /// well-formed `xn--` punycode and rejects malformed punycode. (`idna` feature.)
+///
+/// ```
+/// use rfc_6265::domain::is_valid_domain;
+/// assert!(is_valid_domain("münchen.de") && is_valid_domain("xn--mnchen-3ya.de"));
+/// assert!(!is_valid_domain("xn--"));
+/// ```
 #[cfg(feature = "idna")]
 #[must_use]
 pub fn is_valid_domain(host: &str) -> bool {
@@ -88,6 +117,12 @@ pub fn is_valid_domain(host: &str) -> bool {
 /// Whether `domain` is itself a public suffix (e.g. `com`, `co.uk`, `github.io`) — a cookie must
 /// **not** set `Domain` to a public suffix (the supercookie defense, RFC 6265 §4.1.2.3 / §5.3). An
 /// optional leading dot is ignored. (`psl` feature.)
+///
+/// ```
+/// use rfc_6265::domain::is_public_suffix;
+/// assert!(is_public_suffix("co.uk") && is_public_suffix("com"));
+/// assert!(!is_public_suffix("example.com"));
+/// ```
 #[cfg(feature = "psl")]
 #[must_use]
 pub fn is_public_suffix(domain: &str) -> bool {
@@ -97,6 +132,12 @@ pub fn is_public_suffix(domain: &str) -> bool {
 
 /// The registrable domain (eTLD+1) of `host` — e.g. `example.com` for `a.b.example.com` — or `None`
 /// when `host` is itself a public suffix or otherwise not registrable. (`psl` feature.)
+///
+/// ```
+/// use rfc_6265::domain::registrable_domain;
+/// assert_eq!(registrable_domain("a.b.example.com"), Some("example.com"));
+/// assert_eq!(registrable_domain("com"), None); // a public suffix isn't registrable
+/// ```
 #[cfg(feature = "psl")]
 #[must_use]
 pub fn registrable_domain(host: &str) -> Option<&str> {
