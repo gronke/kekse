@@ -1,26 +1,69 @@
 # kekse
 
-A pure-Rust toolkit for cookies — parsing, building, manipulation, and testing.
+> **Kekse** /ˈkeːksə/ — German for "cookies" 
 
-This repository is a Cargo workspace.
+A strict, dependency-light cookie **codec** for Rust.
+
+## Highlights
+
+- **RFC 6265-compliant.** With RFC 7230 tokens, RFC 7231 dates, and RFC 6265bis `SameSite` — see [Standards](#standards).
+- **Strict mode.** Brutally strict — cookie-octets only.
+- **Lenient mode.** Compliant and tolerant — yet, like strict, refuses injection bytes (`;`, CR, LF, NUL, controls, raw non-ASCII).
+- **Strongly typed.** `Cookie`, `SetCookie`, `CookieJar`, `SameSite`, and typed attributes — never stringly-typed maps.
+- **No `unsafe`.**
+- **Fail-soft by design.** Extensively fuzzed and pinned by [`keksbruch`](crates/keksbruch), the differential test harness, and its 40+ parser matrix — designed not to panic on, or echo injection bytes from, malformed input.
+- **Both directions.** Reads a `Cookie:` request header into a `CookieJar` of typed `Cookie`s, builds and parses `Set-Cookie:` responses through `SetCookie`, and converts either straight into an `http::HeaderValue`.
+- **A codec, not a store.** No persistence, eviction, domain/path send-matching, signing, or encryption — just a correct, fail-soft wire codec.
+- **Lightweight.** Just three dependencies (`percent-encoding`, `http`, `time`) and no default features.
+- **Rust 1.88.0+.**
+
+## Quick start
+
+```rust
+use kekse::{CookieJar, SameSite, SetCookie};
+
+// WRITE — build a hardened `Set-Cookie` response value.
+let header = SetCookie::new("SID", "deadbeef")
+    .http_only()
+    .secure()
+    .same_site(SameSite::Strict)
+    .path("/")
+    .max_age(3600)
+    .to_set_cookie();
+assert_eq!(header, "SID=deadbeef; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age=3600");
+
+// READ — parse a `Cookie` header; take the first NON-EMPTY `SID`, so a planted
+// empty `SID=` can't shadow the real session id that follows it.
+let jar = CookieJar::parse_strict("SID=; SID=deadbeef; theme=dark");
+let sid = jar.get_all("SID").find(|c| !c.value().is_empty()).map(|c| c.value());
+assert_eq!(sid, Some("deadbeef"));
+```
+
+More runnable programs live in [`crates/kekse/examples/`](crates/kekse/examples), and the [crate README](crates/kekse/README.md) covers the encoding modes (`Auto`/`Percent`/`Quoted`/`Raw`) and the lenient versus strict parsers in full.
+
+## Standards
+
+| RFC | What kekse uses it for |
+| --- | --- |
+| **RFC 6265** | The core: §4.1.1 cookie grammar (the cookie-octet alphabet, the cookie-name token), §5.2 `Set-Cookie` parsing (unknown attributes are ignored, not fatal), §5.1.1 cookie-date, §5.4 the `Cookie` request header. |
+| **RFC 7230** §3.2.6 | The `token` grammar for cookie-names — borrowed from the `http` crate, not re-implemented as a homemade table. |
+| **RFC 7231** §7.1.1.1 | IMF-fixdate, the strict `Expires` format. |
+| **RFC 6265bis** (draft) | The `SameSite` attribute (`Strict` / `Lax` / `None`). |
+
+## Tested hard — keksbruch & the parser matrix
+
+[`keksbruch`](crates/keksbruch) /ˈkeːksˌbʁʊx/ ("broken biscuits") is kekse's *chaos monkey*: it feeds a broad corpus of malformed and edge-case cookie wire — unbalanced quotes, spliced control bytes, truncated escapes, smuggled `;`, garbage attributes — to many parsers and measures how they cope, so kekse's behaviour on difficult input stays correct and well understood.
+
+- **Layer A** runs in CI, pinning kekse's fail-soft behaviour (never panics, never echoes an injection byte, strict ⊆ lenient) across 80+ malformed-input scenarios.
+- The **differential matrix** feeds the same payloads to 40+ cookie parsers across Rust, Python, Node, Go, .NET, PHP, Java, and C, tabulating where they diverge from the RFC and from real-world consensus.
+
+**[Parser-divergence Matrix](https://gronke.github.io/kekse/COOKIE_MATRIX.html)**
 
 ## Crates
 
-[`kekse`](crates/kekse) is the library: a strict, dependency-light cookie codec.
-It reads a `Cookie:` request header into a `CookieJar` of `Cookie`s, builds and parses `Set-Cookie:` response values through the `SetCookie` type, and converts one straight into an `http::HeaderValue` — directly on the RFC 6265 §4.1.1 grammar.
-There is no cookie *store* (no persistence, eviction, or domain/path send-matching) and no signing or encryption, but dates are handled: a lifetime is `Max-Age` seconds or an `Expires` timestamp, parsed and rendered through the `time` crate.
-It never panics on untrusted input, and a malformed pair in a header is skipped rather than aborting the parse, so attacker-appended junk can never evict a later valid cookie.
-See its [README](crates/kekse/README.md) for the builder's encoding modes and the lenient and strict parsers.
-
-[`keksbruch`](crates/keksbruch) is the companion test harness — kekse's *chaos monkey*.
-It renders the same logical cookie two ways: a clean baseline through kekse, and a malformed variant built directly as bytes — unbalanced quotes, spliced control bytes, truncated escapes, smuggled `;`, garbage attributes.
-**Layer A** (run in CI) pins kekse's own fail-soft behaviour against this corpus — never panics, never echoes an injection byte, strict ⊆ lenient.
-A later, opt-in differential layer feeds the same payloads to cookie parsers in other languages to tabulate where they diverge, checking kekse against both the RFC (*standard*) and real-world parsers (*expectation*).
-
-## Dependencies and support
-
-The library depends on `percent-encoding` (the value codec), `http` (the RFC 7230 token grammar for cookie-names), and `time` (`Expires` date parsing and formatting).
-It targets Rust 1.88.0.
+- [`kekse`](crates/kekse) — the library (depend on this).
+- [`keksbruch`](crates/keksbruch) — the differential test harness (unpublished).
+- [`rfc_6265`](crates/rfc_6265) — reusable, exhaustively-tested RFC 6265 primitives (grammar byte-classes, cookie-date parsing, domain/path matching).
 
 ## License
 
@@ -28,4 +71,5 @@ Copyright © 2026 Stefan Grönke.
 
 Licensed under the MIT License — see [`LICENSE`](LICENSE).
 
+The published crates (`kekse`, `rfc_6265`) are entirely MIT.
 Some third-party test fixtures bundled in [`keksbruch`](crates/keksbruch) (e.g. the BSD-2-Clause `lua-resty-cookie`) remain under their own licenses — see [`crates/keksbruch/NOTICE`](crates/keksbruch/NOTICE).
