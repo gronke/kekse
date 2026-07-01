@@ -10,6 +10,12 @@
 /// Whether `b` is an RFC 6265 §4.1.1 **cookie-octet** — a byte a cookie *value* may carry bare:
 /// `%x21 / %x23-2B / %x2D-3A / %x3C-5B / %x5D-7E` (US-ASCII visible characters excluding the
 /// CTLs, whitespace, `"`, `,`, `;`, and `\`).
+///
+/// ```
+/// use rfc_6265::grammar::is_cookie_octet;
+/// assert!(is_cookie_octet(b'a') && is_cookie_octet(b'!'));
+/// assert!(!is_cookie_octet(b';') && !is_cookie_octet(b' '));
+/// ```
 #[must_use]
 pub const fn is_cookie_octet(b: u8) -> bool {
     matches!(b, 0x21 | 0x23..=0x2b | 0x2d..=0x3a | 0x3c..=0x5b | 0x5d..=0x7e)
@@ -18,12 +24,24 @@ pub const fn is_cookie_octet(b: u8) -> bool {
 /// Whether `b` is an RFC 6265 §4.1.1 **av-octet** — a byte a `Set-Cookie` attribute value
 /// (`Path` / `Domain`) may carry: `%x20-3A / %x3C-7E` (any visible character or `SP`, minus the
 /// `;` attribute delimiter, the CTLs, and DEL).
+///
+/// ```
+/// use rfc_6265::grammar::is_av_octet;
+/// assert!(is_av_octet(b'/') && is_av_octet(b' ')); // a `Path` may carry `SP`
+/// assert!(!is_av_octet(b';')); // the attribute delimiter
+/// ```
 #[must_use]
 pub const fn is_av_octet(b: u8) -> bool {
     matches!(b, 0x20..=0x3a | 0x3c..=0x7e)
 }
 
 /// Whether `b` is `SP` or `HTAB` — the optional whitespace around a cookie pair.
+///
+/// ```
+/// use rfc_6265::grammar::is_ws;
+/// assert!(is_ws(b' ') && is_ws(b'\t'));
+/// assert!(!is_ws(b'\n'));
+/// ```
 #[must_use]
 pub const fn is_ws(b: u8) -> bool {
     b == b' ' || b == b'\t'
@@ -31,6 +49,12 @@ pub const fn is_ws(b: u8) -> bool {
 
 /// Whether `b` is a control byte — the C0 controls (`%x00-1F`) and DEL (`%x7F`), i.e. RFC 5234
 /// `CTL`. CR, LF, and NUL — the header-injection bytes — are all CTLs.
+///
+/// ```
+/// use rfc_6265::grammar::is_ctl;
+/// assert!(is_ctl(b'\r') && is_ctl(b'\n') && is_ctl(0x7f));
+/// assert!(!is_ctl(b'a'));
+/// ```
 #[must_use]
 pub const fn is_ctl(b: u8) -> bool {
     matches!(b, 0x00..=0x1f | 0x7f)
@@ -38,6 +62,12 @@ pub const fn is_ctl(b: u8) -> bool {
 
 /// Whether `b` is an RFC 7230 §3.2.6 **tchar** — a byte a `token` (and therefore a cookie-name)
 /// may contain: ``ALPHA / DIGIT`` or one of ``! # $ % & ' * + - . ^ _ ` | ~``.
+///
+/// ```
+/// use rfc_6265::grammar::is_tchar;
+/// assert!(is_tchar(b'A') && is_tchar(b'9') && is_tchar(b'-'));
+/// assert!(!is_tchar(b'(') && !is_tchar(b'/')); // delimiters
+/// ```
 #[must_use]
 pub const fn is_tchar(b: u8) -> bool {
     matches!(b,
@@ -49,6 +79,12 @@ pub const fn is_tchar(b: u8) -> bool {
 
 /// Whether `name` is a valid RFC 6265 cookie-name — a non-empty RFC 7230 `token` (every byte a
 /// [`tchar`](is_tchar)).
+///
+/// ```
+/// use rfc_6265::grammar::is_cookie_name;
+/// assert!(is_cookie_name("SID"));
+/// assert!(!is_cookie_name("") && !is_cookie_name("a b") && !is_cookie_name("a=b"));
+/// ```
 #[must_use]
 pub fn is_cookie_name(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(is_tchar)
