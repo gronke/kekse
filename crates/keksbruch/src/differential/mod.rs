@@ -17,10 +17,11 @@ use result::ParseOutcome;
 use rust_comparators::rust_comparators;
 
 /// Run the whole matrix: every scenario through the in-process Rust comparators
-/// and the language sidecars; render it to Markdown, CSV, and a self-contained
-/// HTML report; print the Markdown; and write `COOKIE_MATRIX.{md,csv,html}`
-/// next to the crate (the HTML report is the GitHub Pages view). Returns the
-/// Markdown.
+/// and the language sidecars; render it to Markdown, CSV, a self-contained HTML
+/// report, and a machine-readable JSON document; print the Markdown; and write
+/// `COOKIE_MATRIX.{md,csv,html,json}` next to the crate (the HTML report is the
+/// GitHub Pages view; the JSON is the source of truth for later stats/probing).
+/// Returns the Markdown.
 pub fn run_matrix() -> String {
     let scenarios = scenarios();
     let mut columns: Vec<Column> = Vec::new();
@@ -68,6 +69,13 @@ pub fn run_matrix() -> String {
     let html = matrix::render_html(&scenarios, &columns, &versions);
     if let Err(e) = std::fs::write(dir.join("COOKIE_MATRIX.html"), &html) {
         eprintln!("could not write COOKIE_MATRIX.html: {e}");
+    }
+    // The machine-readable JSON — scenario → target → full ParseOutcome, plus
+    // per-scenario metadata (direction, wire, RFC verdict, consensus). The source
+    // of truth for later statistics and proxy-probing.
+    let json = matrix::render_json(&scenarios, &columns, &versions);
+    if let Err(e) = std::fs::write(dir.join("COOKIE_MATRIX.json"), &json) {
+        eprintln!("could not write COOKIE_MATRIX.json: {e}");
     }
     markdown
 }

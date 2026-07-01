@@ -98,6 +98,8 @@ function toughResponse(wire) {
         path: c.path || null,
         domain: c.domain || null,
         max_age: typeof c.maxAge === "number" && isFinite(c.maxAge) ? c.maxAge : null,
+        // tough-cookie keeps `.expires` as the parsed Expires date (distinct from maxAge).
+        expires: c.expires instanceof Date ? Math.floor(c.expires.getTime() / 1000) : null,
       },
     };
   } catch (e) {
@@ -124,6 +126,8 @@ function setCookieParserResponse(wire) {
         path: c.path || null,
         domain: c.domain || null,
         max_age: typeof c.maxAge === "number" && isFinite(c.maxAge) ? c.maxAge : null,
+        // set-cookie-parser exposes `.expires` as the parsed Expires date, when present.
+        expires: c.expires instanceof Date ? Math.floor(c.expires.getTime() / 1000) : null,
       },
     };
   } catch (e) {

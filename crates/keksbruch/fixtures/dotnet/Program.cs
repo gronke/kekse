@@ -90,6 +90,7 @@ static object ParseResponse(string wire)
             ["path"] = sc.Path.HasValue ? sc.Path.ToString() : null,
             ["domain"] = sc.Domain.HasValue ? sc.Domain.ToString() : null,
             ["max_age"] = sc.MaxAge.HasValue ? (long)sc.MaxAge.Value.TotalSeconds : (long?)null,
+            ["expires"] = sc.Expires.HasValue ? sc.Expires.Value.ToUnixTimeSeconds() : (long?)null,
         };
         return new Dictionary<string, object> { ["outcome"] = "SetCookie", ["set_cookie"] = view };
     }

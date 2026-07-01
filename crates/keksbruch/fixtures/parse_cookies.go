@@ -82,6 +82,10 @@ func parseResponse(wire string) map[string]any {
 	if c.MaxAge != 0 {
 		sc["max_age"] = c.MaxAge
 	}
+	// Go keeps Expires (the parsed attribute) distinct from Max-Age; the zero time means absent.
+	if !c.Expires.IsZero() {
+		sc["expires"] = c.Expires.Unix()
+	}
 	return map[string]any{"outcome": "SetCookie", "set_cookie": sc}
 }
 

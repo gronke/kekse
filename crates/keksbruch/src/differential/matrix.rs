@@ -25,8 +25,10 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use base64::prelude::{Engine as _, BASE64_STANDARD};
 use maud::{html, Markup, PreEscaped};
 use pulldown_cmark::{html as cmark_html, Options, Parser};
+use serde::Serialize;
 use tera::{Context, Tera};
 
 use crate::differential::result::ParseOutcome;
@@ -44,7 +46,8 @@ const TEMPLATE: &str = include_str!("cookie_matrix.md.tera");
 /// Inserted via the `{{ downloads }}` marker — empty in the Markdown render.
 const DOWNLOADS_HTML: &str = "<p class=\"downloads\">Download the same matrix: \
      <a href=\"COOKIE_MATRIX.md\">Markdown</a> · \
-     <a href=\"COOKIE_MATRIX.csv\">CSV</a></p>";
+     <a href=\"COOKIE_MATRIX.csv\">CSV</a> · \
+     <a href=\"COOKIE_MATRIX.json\">JSON</a></p>";
 
 /// The HTML report's stylesheet, inlined so the page is fully self-contained (no
 /// CDN/fonts — it must render offline and as a static GitHub Pages file). The wide
@@ -74,7 +77,11 @@ table:not(.matrix-scroll table) td:last-child{white-space:normal}
 .matrix-scroll td.diverge{background:var(--diverge);font-weight:700}
 .matrix-scroll td.reject{color:#c92a2a}
 .matrix-scroll td.muted{color:var(--muted)}
-.matrix-scroll td.crash{color:#c92a2a;font-weight:700;text-decoration:underline}"#;
+.matrix-scroll td.crash{color:#c92a2a;font-weight:700;text-decoration:underline}
+.tt-btn{cursor:pointer}
+.tt [role=tooltip]{position:fixed;left:50%;bottom:1rem;transform:translateX(-50%);z-index:10;max-width:min(92vw,64rem);visibility:hidden;opacity:0;transition:visibility 0s .35s,opacity .12s .35s;background:#1f2933;color:#f5f7fa;border:1px solid #3e4c59;border-radius:.4rem;box-shadow:0 .4rem 1.4rem rgba(0,0,0,.35);padding:.5rem .7rem}
+.tt [role=tooltip] pre{margin:0;max-height:60vh;overflow:auto;white-space:pre;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45;color:#f5f7fa}
+.tt-btn:hover ~ [role=tooltip],.tt-btn:focus ~ [role=tooltip],.tt [role=tooltip]:hover,.tt [role=tooltip]:focus-within{visibility:visible;opacity:1;transition-delay:0s}"#;
 
 /// One matrix column: a parser, with one [`ParseOutcome`] per scenario (aligned
 /// to the scenario order).
@@ -317,6 +324,16 @@ fn column_participates(column: &Column, rows: &[usize]) -> bool {
     })
 }
 
+/// A document-unique, deterministic element id for a cell's tooltip — the trigger's
+/// `aria-describedby` target. Built from the column identity and scenario id (both
+/// unique), slugged to id-safe characters.
+fn tooltip_id(column: &Column, scenario_id: &str) -> String {
+    format!("tt-{}-{}-{}", column.lang, column.dep, scenario_id)
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
 /// Build one direction's table model: a column per test in the section, the
 /// payload/RFC/consensus reference rows, then one row per participating tool. `cons`
 /// is indexed by the global scenario row, so it is shared verbatim across sections.
@@ -373,7 +390,11 @@ fn build_section(
                 .iter()
                 .map(|&r| {
                     let outcome = &column.cells[r];
+                    // On ❌ (reject) and ☠️ (crash) cells, carry the error / crash
+                    // reason plus any captured stdout/stderr into a role="tooltip"
+                    // panel, keyed by a document-unique id.
                     Cell::code(outcome.cell(), cell_kind(outcome, cons[r].as_ref()))
+                        .with_detail(tooltip_id(column, scenarios[r].id), outcome.diagnostics())
                 })
                 .collect(),
         });
@@ -846,4 +867,125 @@ pub fn render_csv(scenarios: &[Scenario], columns: &[Column]) -> String {
         .into_inner()
         .expect("flushing the in-memory CSV buffer cannot fail");
     String::from_utf8(bytes).expect("CSV output is valid UTF-8")
+}
+
+/// The whole run as one machine-readable JSON document — the source of truth for
+/// later statistics and probing (notably how kekse fares versus the proxy columns).
+/// Keyed by scenario id; each entry carries its direction, the wire (a readable
+/// lossy view plus exact base64 for faithful replay), the RFC verdict and
+/// cross-parser consensus, and a `results` map of every target's full
+/// [`ParseOutcome`] — the error / crash reason and captured stdout/stderr ride along
+/// verbatim.
+pub fn render_json(scenarios: &[Scenario], columns: &[Column], versions: &[String]) -> String {
+    let mut out = BTreeMap::new();
+    for (row, s) in scenarios.iter().enumerate() {
+        let bytes = s.recipe.render();
+        let results = columns
+            .iter()
+            .map(|c| (format!("{}/{}", c.lang, c.dep), &c.cells[row]))
+            .collect();
+        out.insert(
+            s.id,
+            JsonScenario {
+                direction: match s.direction {
+                    Direction::Request => "request",
+                    Direction::Response => "response",
+                },
+                wire: String::from_utf8_lossy(&bytes).into_owned(),
+                wire_b64: BASE64_STANDARD.encode(&bytes),
+                rfc: rfc_verdict(s.id),
+                consensus: consensus(row, columns),
+                results,
+            },
+        );
+    }
+    let report = JsonReport {
+        meta: JsonMeta { versions },
+        scenarios: out,
+    };
+    let mut json = serde_json::to_string_pretty(&report).expect("matrix JSON serializes");
+    json.push('\n');
+    json
+}
+
+/// The top-level JSON document: run metadata plus the scenario map.
+#[derive(Serialize)]
+struct JsonReport<'a> {
+    meta: JsonMeta<'a>,
+    scenarios: BTreeMap<&'a str, JsonScenario<'a>>,
+}
+
+#[derive(Serialize)]
+struct JsonMeta<'a> {
+    /// Exactly what was tested against — the Rust lockfile versions plus each
+    /// sidecar's reported runtime/deps.
+    versions: &'a [String],
+}
+
+/// One scenario's JSON entry: its metadata and one [`ParseOutcome`] per target.
+#[derive(Serialize)]
+struct JsonScenario<'a> {
+    direction: &'static str,
+    /// The wire as a lossy UTF-8 string — readable, but a non-UTF-8 payload shows
+    /// replacement chars; use `wire_b64` for the exact bytes.
+    wire: String,
+    /// The exact wire bytes, base64 (standard alphabet), for faithful replay/probing.
+    wire_b64: String,
+    /// The RFC verdict, or null where 6265 is not prescriptive.
+    rfc: Option<&'a str>,
+    /// The modal real-world outcome (the cell string), or null when there is none.
+    consensus: Option<String>,
+    /// `"<lang>/<dep>"` → that target's full outcome.
+    results: BTreeMap<String, &'a ParseOutcome>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::differential::rust_comparators::rust_comparators;
+    use crate::scenario::scenarios;
+
+    #[test]
+    fn render_json_is_valid_and_self_describing() {
+        // Columns from the in-process Rust comparators alone (no sidecars), so this
+        // stays a fast, hermetic unit test.
+        let scenarios = scenarios();
+        let columns: Vec<Column> = rust_comparators()
+            .iter()
+            .map(|c| {
+                let (lang, dep) = c.id();
+                Column {
+                    lang: lang.to_string(),
+                    dep: dep.to_string(),
+                    cells: scenarios
+                        .iter()
+                        .map(|s| match s.recipe.render_str() {
+                            Some(wire) => c.run(&wire, s.direction),
+                            None => ParseOutcome::NotApplicable,
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+        let versions = vec!["Rust: test".to_string()];
+
+        let json = render_json(&scenarios, &columns, &versions);
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+
+        // Run metadata is present.
+        assert!(v["meta"]["versions"].is_array(), "{v}");
+
+        // Every scenario is keyed by id and carries direction + wire + results.
+        let objs = v["scenarios"].as_object().expect("scenarios object");
+        assert_eq!(objs.len(), scenarios.len());
+        let first = scenarios[0].id;
+        let entry = &v["scenarios"][first];
+        assert!(entry["direction"].is_string(), "{entry}");
+        assert!(entry["wire_b64"].is_string(), "{entry}");
+        // The kekse (lenient) target reports an outcome for this scenario.
+        assert!(
+            entry["results"]["rust/kekse (lenient)"]["outcome"].is_string(),
+            "{entry}"
+        );
+    }
 }
