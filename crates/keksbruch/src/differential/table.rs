@@ -66,10 +66,20 @@ impl CellText {
     }
 }
 
-/// One table cell: its text and its visual kind.
+/// The rich crash/error tooltip a data cell can carry: a document-unique element
+/// `id` (the trigger's `aria-describedby` target) and the multi-line body shown in
+/// the tooltip's `<pre>`. HTML-only — Markdown/CSV have no tooltips.
+pub struct Detail {
+    pub id: String,
+    pub body: String,
+}
+
+/// One table cell: its text, its visual kind, and an optional rich hover tooltip
+/// (a `role="tooltip"` panel in HTML; ignored in Markdown, which has no tooltips).
 pub struct Cell {
     pub text: CellText,
     pub kind: CellKind,
+    pub detail: Option<Detail>,
 }
 
 impl Cell {
@@ -77,25 +87,38 @@ impl Cell {
         Cell {
             text: CellText::Code(text),
             kind,
+            detail: None,
         }
     }
     pub fn inline(text: String) -> Self {
         Cell {
             text: CellText::Inline(text),
             kind: CellKind::Plain,
+            detail: None,
         }
     }
     pub fn plain(text: String, kind: CellKind) -> Self {
         Cell {
             text: CellText::Plain(text),
             kind,
+            detail: None,
         }
     }
     pub fn payload(capped: String, full: String) -> Self {
         Cell {
             text: CellText::Payload { capped, full },
             kind: CellKind::Plain,
+            detail: None,
         }
+    }
+
+    /// Attach a rich HTML hover tooltip: `id` anchors the trigger's
+    /// `aria-describedby`, `body` is the `<pre>` text. A `None` body → no tooltip.
+    /// A no-op in Markdown.
+    #[must_use]
+    pub fn with_detail(mut self, id: String, body: Option<String>) -> Self {
+        self.detail = body.map(|body| Detail { id, body });
+        self
     }
 }
 
@@ -187,8 +210,24 @@ pub fn to_markdown(t: &Table) -> String {
 /// Markdown is spliced raw via [`PreEscaped`].
 fn cell_html(cell: &Cell) -> Markup {
     match &cell.text {
-        CellText::Code(s) => html! {
-            td class=[cell.kind.class()] { code { (escape_controls(s)) } }
+        // A crash/reject glyph with captured detail becomes the tooltip trigger: the
+        // glyph itself is focusable (pointer cursor) and `aria-describedby` points at
+        // a `role="tooltip"` panel holding the `<pre>` — a CSS-only reveal (see the
+        // stylesheet). Without detail it is a plain code cell, as before.
+        CellText::Code(s) => match &cell.detail {
+            None => html! {
+                td class=[cell.kind.class()] { code { (escape_controls(s)) } }
+            },
+            Some(d) => html! {
+                td class=[cell.kind.class()] {
+                    span class="tt" {
+                        span class="tt-btn" tabindex="0" aria-describedby=(d.id) {
+                            code { (escape_controls(s)) }
+                        }
+                        span role="tooltip" id=(d.id) { pre { (d.body) } }
+                    }
+                }
+            },
         },
         CellText::Inline(s) => html! {
             td { (PreEscaped(md_inline(s))) }
@@ -228,5 +267,52 @@ pub fn to_html(t: &Table) -> Markup {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn one_cell_table(cell: Cell) -> Table {
+        Table {
+            corner: "tool".to_string(),
+            col_headers: vec![CellText::Code("scenario".to_string())],
+            rows: vec![Row {
+                header: "kekse".to_string(),
+                cells: vec![cell],
+                is_ref: false,
+            }],
+        }
+    }
+
+    #[test]
+    fn html_cell_renders_a_role_tooltip_when_detail_is_set() {
+        let html = to_html(&one_cell_table(
+            Cell::code("☠️".to_string(), CellKind::Crash).with_detail(
+                "tt-x".to_string(),
+                Some("signal 11\n\n── stderr ──\npanic: boom".to_string()),
+            ),
+        ))
+        .into_string();
+        // The glyph is the trigger (aria-describedby → the panel id); the body rides
+        // in a role="tooltip" <pre> with newlines intact.
+        assert!(html.contains("aria-describedby=\"tt-x\""), "{html}");
+        assert!(html.contains("role=\"tooltip\" id=\"tt-x\""), "{html}");
+        assert!(
+            html.contains("<pre>signal 11\n\n── stderr ──\npanic: boom</pre>"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn html_cell_omits_the_tooltip_when_no_detail() {
+        let html = to_html(&one_cell_table(Cell::code(
+            "SID=a".to_string(),
+            CellKind::Plain,
+        )))
+        .into_string();
+        assert!(!html.contains("role=\"tooltip\""), "{html}");
+        assert!(!html.contains("aria-describedby"), "{html}");
     }
 }

@@ -86,26 +86,31 @@ Internally tagged by `"outcome"`. Matrix rendering shown in parentheses.
 | `SetCookieRejected` | `error: string` | `Set-Cookie` parser rejected the input | `❌` |
 | `NotApplicable` | — | this dep doesn't handle this direction | `n/a` |
 | `Panicked` | `message: string` | an unexpected in-language failure (a finding, not a clean reject) | `☠️` |
-| `Crashed` | `reason: string` | the parser **crashed** on this payload (signal / non-zero exit / hang) — usually synthesized by the harness on process death, but a sidecar may emit it too | `☠️` |
+| `Crashed` | `reason: string`, `stdout?`, `stderr?` | the parser **crashed** on this payload (signal / non-zero exit / hang) — usually synthesized by the harness on process death, which captures the crashing process's `stdout`/`stderr`; a sidecar may also emit it (and then may omit the streams) | `☠️` |
 | `Skipped` | — | comparator unavailable (dep/interpreter missing) | `SKIP` |
 | `ForwardedVerbatim` | — | *proxy* target forwarded the Cookie byte-for-byte | `≡` |
 | `ForwardedAltered` | `forwarded: string` | proxy forwarded a Cookie, but altered it | `≠ …` |
 | `ForwardedRejected` | — | proxy did not forward the Cookie (rejected/dropped) | `❌` |
 
 `set_cookie` fields: `name`, `value` (strings); `http_only`, `secure` (bool); `same_site`, `path`,
-`domain` (string or null); `max_age` (integer or null — kept as `i64` so a negative delta survives).
+`domain` (string or null); `max_age` (integer or null — kept as `i64` so a negative delta survives);
+`expires` (integer Unix timestamp or null — the parsed `Expires` attribute).
+A parser that folds `Expires` and `Max-Age` into one effective (possibly now-relative) expiry reports
+`expires` as null, so a cell never depends on when the matrix ran.
 
 A cookie's optional `shape` is `"scalar"` (the default — omit it), `"array"`, or `"object"`. A parser
 that builds a *rich type* from a bracketed name — only PHP's `$_COOKIE`, via `name[]=`/`name[k]=` — sets
 it and puts the JSON-encoded structure in `value`; the matrix then displays the type name
 (`⟨array⟩`/`⟨object⟩`). Every other sidecar omits `shape`, and the harness defaults a missing `shape` to scalar.
 
-The `error`, `Panicked` `message`, and `Crashed` `reason` strings are free-form, human-facing debug text
-— they are **not** rendered in the matrix (a rejection always shows `❌`, a crash always `☠️`), so they
-never affect a cell or the consensus vote. Give the best available reason, consistently: `<kind>: <detail>`
-where the parser provides one (an exception type + message, or a library error string), or a clear
-`<what failed>` where the API is opaque (e.g. a bool `TryParse` that yields no reason). Like `NotApplicable`
-and `Skipped`, both crash outcomes (`Panicked`/`Crashed`) are excluded from the cross-parser consensus vote.
+The `error`, `Panicked` `message`, and `Crashed` `reason` strings — plus the harness-captured `stdout` /
+`stderr` on a `Crashed` — are free-form, human-facing debug text. They never change a cell's glyph (a
+rejection always shows `❌`, a crash always `☠️`) or the consensus vote, but the **HTML** matrix surfaces
+them in a hover tooltip on the cell (a scrollable `<pre>`), so give the best available detail:
+`<kind>: <detail>` where the parser provides one (an exception type + message, or a library error string),
+or a clear `<what failed>` where the API is opaque (e.g. a bool `TryParse` that yields no reason). Like
+`NotApplicable` and `Skipped`, both crash outcomes (`Panicked`/`Crashed`) are excluded from the
+cross-parser consensus vote.
 
 The three `Forwarded*` outcomes are a **forwarding-fidelity** axis (currently only the `nginx/proxy`
 column), not a parse, so the harness excludes them from the cross-parser consensus vote.

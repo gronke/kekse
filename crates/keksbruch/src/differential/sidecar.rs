@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::env;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::mpsc;
@@ -474,6 +474,11 @@ fn selfcheck(spec: &SidecarSpec, script: &Path) -> Option<SelfcheckLine> {
 /// `☠️` crash, exactly like a terminating signal or a non-zero exit.
 const SIDECAR_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// The most stdout-diagnostic / stderr text kept per process. Enough to hold a
+/// stack trace; a runaway sidecar is truncated rather than bloating the report
+/// (its pipe is still fully drained, so a cap can never deadlock the child).
+const STREAM_CAP: usize = 64 * 1024;
+
 /// What one run of a sidecar process produced.
 struct BatchOutcome {
     /// `id → {dep → outcome}` for the records this run answered.
@@ -481,6 +486,13 @@ struct BatchOutcome {
     /// `None` if the process exited 0; `Some(reason)` if it died on a signal,
     /// exited non-zero, or was killed for hanging — the crash diagnosis.
     death: Option<String>,
+    /// Non-protocol text the process printed to stdout (build chatter, stray
+    /// prints); the JSONL protocol lines are consumed into `answers`, not kept.
+    /// `None` when it printed only protocol output.
+    stdout: Option<String>,
+    /// Everything the process wrote to stderr — a panic/traceback/exception or a
+    /// build error, drained on its own thread. `None` when stderr was empty.
+    stderr: Option<String>,
 }
 
 /// Send the whole corpus to a sidecar and collect `id → {dep → outcome}`.
@@ -504,9 +516,14 @@ fn run_sidecar(
     // some (progress) or pins exactly one crasher (also progress), so `remaining`
     // strictly shrinks and the loop terminates.
     while !remaining.is_empty() {
-        let batch = run_batch(spec, script, &remaining)?;
-        let made_progress = !batch.answers.is_empty();
-        for (id, by_dep) in batch.answers {
+        let BatchOutcome {
+            answers,
+            death,
+            stdout,
+            stderr,
+        } = run_batch(spec, script, &remaining)?;
+        let made_progress = !answers.is_empty();
+        for (id, by_dep) in answers {
             answered.insert(id, by_dep);
         }
         let next: Vec<&Scenario> = remaining
@@ -517,7 +534,7 @@ fn run_sidecar(
         if next.is_empty() {
             return Some(answered);
         }
-        let Some(reason) = batch.death else {
+        let Some(reason) = death else {
             // Exited cleanly yet left records unanswered: a sidecar that simply did
             // not emit them, not a crash. Leave them to default to SKIP.
             return Some(answered);
@@ -528,7 +545,9 @@ fn run_sidecar(
         // (a sidecar that block-buffers stdout dies before flushing any line), so
         // confirm by re-running it alone before blaming it.
         let crasher = next[0];
-        let crash_reason = if !made_progress && next.len() > 1 {
+        // Attribute the crashing process's captured output to the crasher. When we
+        // re-run it alone (below), the solo run's streams are exactly its own.
+        let (crash_reason, crash_stdout, crash_stderr) = if !made_progress && next.len() > 1 {
             let solo = run_batch(spec, script, &[crasher])?;
             if let Some(by_dep) = solo.answers.get(crasher.id) {
                 // Parses fine alone — the true crasher is later in the batch.
@@ -536,11 +555,19 @@ fn run_sidecar(
                 remaining = next[1..].to_vec();
                 continue;
             }
-            solo.death.unwrap_or(reason)
+            (solo.death.unwrap_or(reason), solo.stdout, solo.stderr)
         } else {
-            reason
+            (reason, stdout, stderr)
         };
-        answered.insert(crasher.id.to_string(), crash_map(spec, &crash_reason));
+        answered.insert(
+            crasher.id.to_string(),
+            crash_map(
+                spec,
+                &crash_reason,
+                crash_stdout.as_deref(),
+                crash_stderr.as_deref(),
+            ),
+        );
         remaining = next[1..].to_vec();
     }
     Some(answered)
@@ -554,9 +581,11 @@ fn run_batch(spec: &SidecarSpec, script: &Path, batch: &[&Scenario]) -> Option<B
     let mut child = launch(spec, script, true)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        // stderr is discarded: draining it would need a second thread, and the exit
-        // status/signal already names the crash. The cell only ever shows `☠️`.
-        .stderr(Stdio::null())
+        // stderr is captured (drained on its own thread below) so a panic /
+        // traceback / exception survives as the crash tooltip, not just the exit
+        // signal. A dedicated thread is required: draining only stdout while the
+        // child fills a stderr pipe would deadlock it.
+        .stderr(Stdio::piped())
         .spawn()
         .ok()?;
 
@@ -579,6 +608,11 @@ fn run_batch(spec: &SidecarSpec, script: &Path, batch: &[&Scenario]) -> Option<B
         }
         // `tx` drops here → the receiver sees `Disconnected`, our stdout-EOF signal.
     });
+
+    // Drain stderr concurrently on its own thread (see the `.stderr` note above),
+    // keeping up to `STREAM_CAP` bytes as the crash diagnostic.
+    let stderr_pipe = child.stderr.take()?;
+    let err_reader = thread::spawn(move || drain_capped(stderr_pipe));
 
     {
         let mut stdin = child.stdin.take()?;
@@ -604,14 +638,24 @@ fn run_batch(spec: &SidecarSpec, script: &Path, batch: &[&Scenario]) -> Option<B
     }
 
     let mut answers: BTreeMap<String, BTreeMap<String, ParseOutcome>> = BTreeMap::new();
+    // Lines that are not protocol JSON — build chatter or a stray print — kept (up
+    // to `STREAM_CAP`) as the stdout half of a crash diagnostic.
+    let mut stdout_diag: Vec<String> = Vec::new();
+    let mut stdout_bytes = 0usize;
+    let mut stdout_truncated = false;
     let mut timed_out = false;
     loop {
         match rx.recv_timeout(SIDECAR_INACTIVITY_TIMEOUT) {
-            Ok(line) => {
-                if let Ok(result) = serde_json::from_str::<ResultLine>(&line) {
+            Ok(line) => match serde_json::from_str::<ResultLine>(&line) {
+                Ok(result) => {
                     answers.insert(result.id, result.by_dep);
                 }
-            }
+                Err(_) if stdout_bytes < STREAM_CAP => {
+                    stdout_bytes += line.len() + 1;
+                    stdout_diag.push(line);
+                }
+                Err(_) => stdout_truncated = true,
+            },
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 timed_out = true;
                 let _ = child.kill();
@@ -622,6 +666,7 @@ fn run_batch(spec: &SidecarSpec, script: &Path, batch: &[&Scenario]) -> Option<B
     }
     let status = child.wait().ok();
     let _ = reader.join();
+    let stderr = err_reader.join().ok().flatten();
 
     let death = if timed_out {
         Some("timeout".to_string())
@@ -632,12 +677,33 @@ fn run_batch(spec: &SidecarSpec, script: &Path, batch: &[&Scenario]) -> Option<B
             None => Some("abnormal exit".to_string()),
         }
     };
-    Some(BatchOutcome { answers, death })
+    let stdout = if stdout_diag.is_empty() {
+        None
+    } else {
+        let mut s = stdout_diag.join("\n");
+        if stdout_truncated {
+            s.push_str("\n… (truncated)");
+        }
+        Some(s)
+    };
+    Some(BatchOutcome {
+        answers,
+        death,
+        stdout,
+        stderr,
+    })
 }
 
 /// Mark every dependency column of a sidecar `Crashed` for the payload that killed
 /// the process — one crash takes the whole process down, hence every dep with it.
-fn crash_map(spec: &SidecarSpec, reason: &str) -> BTreeMap<String, ParseOutcome> {
+/// The crashing process's captured `stdout`/`stderr` (a stack trace, usually) ride
+/// along so the matrix can show *why* it died, not just the signal.
+fn crash_map(
+    spec: &SidecarSpec,
+    reason: &str,
+    stdout: Option<&str>,
+    stderr: Option<&str>,
+) -> BTreeMap<String, ParseOutcome> {
     spec.deps
         .iter()
         .map(|d| {
@@ -645,6 +711,8 @@ fn crash_map(spec: &SidecarSpec, reason: &str) -> BTreeMap<String, ParseOutcome>
                 d.to_string(),
                 ParseOutcome::Crashed {
                     reason: reason.to_string(),
+                    stdout: stdout.map(str::to_string),
+                    stderr: stderr.map(str::to_string),
                 },
             )
         })
@@ -665,6 +733,24 @@ fn death_reason(status: ExitStatus) -> String {
         Some(code) => format!("exit {code}"),
         None => "abnormal exit".to_string(),
     }
+}
+
+/// Drain a child pipe fully — so it can never fill and deadlock the child — while
+/// keeping at most [`STREAM_CAP`] bytes as lossy-decoded text (a crash's stack
+/// trace fits comfortably). `None` when the stream was empty.
+fn drain_capped<R: Read>(mut r: R) -> Option<String> {
+    let mut buf = Vec::new();
+    let _ = (&mut r).take(STREAM_CAP as u64).read_to_end(&mut buf);
+    // Keep reading past the cap into the void so the writer never blocks.
+    let overflowed = std::io::copy(&mut r, &mut std::io::sink()).unwrap_or(0) > 0;
+    if buf.is_empty() {
+        return None;
+    }
+    let mut text = String::from_utf8_lossy(&buf).into_owned();
+    if overflowed {
+        text.push_str("\n… (truncated)");
+    }
+    Some(text)
 }
 
 #[cfg(test)]
@@ -694,6 +780,8 @@ for line in sys.stdin:
         continue
     rec = json.loads(line)
     if rec["id"] == CRASH:
+        sys.stderr.write("FauxTraceback: boom at %s\n" % CRASH)
+        sys.stderr.flush()
         os.kill(os.getpid(), signal.SIGKILL)
     print(json.dumps({"id": rec["id"], "by_dep": {"faux": {"outcome": "NotApplicable"}}}), flush=True)
 "#;
@@ -747,11 +835,22 @@ for line in sys.stdin:
         let result = result.expect("run_sidecar returns Some even when a payload crashes");
 
         let faux = |id: &str| result.get(id).and_then(|by_dep| by_dep.get("faux"));
-        assert!(
-            matches!(faux(crash_id), Some(ParseOutcome::Crashed { .. })),
-            "the crashing payload should be pinned Crashed, got {:?}",
-            faux(crash_id)
-        );
+        // The crashing payload is pinned Crashed, and it carries the process's
+        // captured stderr (its "stack trace") — the text the HTML tooltip surfaces,
+        // not just the terminating signal.
+        match faux(crash_id) {
+            Some(ParseOutcome::Crashed { reason, stderr, .. }) => {
+                assert!(reason.starts_with("signal"), "reason: {reason:?}");
+                assert!(
+                    stderr
+                        .as_deref()
+                        .unwrap_or("")
+                        .contains("FauxTraceback: boom"),
+                    "captured stderr should carry the trace, got {stderr:?}"
+                );
+            }
+            other => panic!("the crashing payload should be pinned Crashed, got {other:?}"),
+        }
         assert!(
             matches!(faux(earlier_id), Some(ParseOutcome::NotApplicable)),
             "a record before the crash should still be answered, got {:?}",

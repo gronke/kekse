@@ -103,6 +103,7 @@ fn kekse_view(sc: &kekse::SetCookie) -> SetCookieView {
         path: a.path.map(|p| p.as_str().to_string()),
         domain: a.domain.map(|d| d.as_str().to_string()),
         max_age: a.max_age.map(|m| m as i64),
+        expires: a.expires.map(|dt| dt.unix_timestamp()),
     }
 }
 
@@ -145,6 +146,17 @@ fn cookie_view(c: &cookie::Cookie) -> SetCookieView {
         path: c.path().map(str::to_string),
         domain: c.domain().map(str::to_string),
         max_age: c.max_age().map(|d| d.whole_seconds()),
+        expires: cookie_expires(c),
+    }
+}
+
+/// The parsed `Expires` of a `cookie`-crate cookie as a Unix timestamp — `None` for a session
+/// cookie or no `Expires`. The `cookie` crate keeps `Expires` and `Max-Age` as distinct parsed
+/// attributes (it does not fold one into the other), so this is the literal parsed date.
+fn cookie_expires(c: &cookie::Cookie) -> Option<i64> {
+    match c.expires() {
+        Some(cookie::Expiration::DateTime(dt)) => Some(dt.unix_timestamp()),
+        _ => None,
     }
 }
 
@@ -199,6 +211,8 @@ fn cookie_store_view(c: &cookie_store::Cookie<'_>) -> SetCookieView {
         path: c.path().map(str::to_string),
         domain: c.domain().map(str::to_string),
         max_age: c.max_age().map(|d| d.whole_seconds()),
+        // Derefs to the `cookie` crate's cookie, so the parsed `Expires` reads the same way.
+        expires: cookie_expires(c),
     }
 }
 

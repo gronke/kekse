@@ -25,6 +25,7 @@ kekse is the subject under test, so it is excluded from the consensus vote.
 
 The matrix is split by direction into two tables: the **request** `Cookie:` parsers and the **response** `Set-Cookie:` parsers, each listing only the tools that engage that direction (so neither is a wall of `n/a`).
 Date/expiry behaviour — what a *client* cares about — lives in the Set-Cookie section, where `Expires` is meaningful; the request side carries none.
+A parsed `Expires` renders in the cell as `;Expires=<UTC date>`; a client jar that folds `Expires` and `Max-Age` into one effective (possibly now-relative) expiry reports none, so cells stay reproducible.
 
 Request side: the `cookie` crate runs in percent-decoding (`*_encoded`) mode so its values are comparable to kekse's.
 biscotti is fail-hard and exposes no general iterator, so its accepted pairs are enumerated by name.
@@ -57,8 +58,9 @@ The same matrix is written beside this file as `COOKIE_MATRIX.csv`.
 
 ## Attribute fidelity
 
-`resp-all-attrs` sets all six attributes; this is which each parser surfaces.
+`resp-all-attrs` sets all six non-date attributes; this is which each parser surfaces.
 `✗` = dropped — except the client jars' `Max-Age`, which they fold into an absolute expiry rather than report as such.
+The seventh attribute, `Expires`, is shown per parser in the `date-*` columns of the Set-Cookie table above rather than here.
 Parsers that rejected the cookie outright are omitted.
 
 {{ fidelity_table }}

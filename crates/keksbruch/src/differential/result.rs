@@ -38,8 +38,17 @@ pub enum ParseOutcome {
     /// carries the diagnosis (`signal 11`, `exit 134`, `timeout`); the cell shows
     /// `☠️`. Distinct from [`Skipped`](ParseOutcome::Skipped) (the tool was never
     /// available) and from an empty/`❌` parse — a crash is its own finding,
-    /// attributed to the exact payload that triggered it.
-    Crashed { reason: String },
+    /// attributed to the exact payload that triggered it. `stdout`/`stderr` carry
+    /// the crashing process's captured output (a stack trace, usually) for the HTML
+    /// tooltip; both are `#[serde(default)]` so a sidecar that emits `Crashed`
+    /// itself may omit them.
+    Crashed {
+        reason: String,
+        #[serde(default)]
+        stdout: Option<String>,
+        #[serde(default)]
+        stderr: Option<String>,
+    },
     /// The comparator was unavailable (interpreter or dependency missing) — SKIP.
     Skipped,
 }
@@ -125,6 +134,12 @@ pub struct SetCookieView {
     pub domain: Option<String>,
     #[serde(default)]
     pub max_age: Option<i64>,
+    /// The parsed `Expires` attribute as a Unix timestamp (seconds), or `None`. Populated by
+    /// parsers that expose the parsed attribute distinctly and deterministically; a client jar
+    /// that folds `Expires` / `Max-Age` into one effective (possibly now-relative) expiry reports
+    /// `None`, so a cell never depends on when the matrix ran.
+    #[serde(default)]
+    pub expires: Option<i64>,
 }
 
 impl ParseOutcome {
@@ -154,6 +169,52 @@ impl ParseOutcome {
     pub fn consensus_key(&self) -> String {
         self.cell()
     }
+
+    /// The diagnostic text a cell carries for an HTML hover tooltip: the rejection
+    /// `error`, the crash `reason`, or the panic `message`. `None` for any outcome that
+    /// has no error text (a successful parse, `n/a`, `SKIP`, or a forwarding verdict) —
+    /// so a tooltip is attached exactly when there is something to explain.
+    #[must_use]
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            ParseOutcome::Rejected { error } | ParseOutcome::SetCookieRejected { error } => {
+                Some(error)
+            }
+            ParseOutcome::Crashed { reason, .. } => Some(reason),
+            ParseOutcome::Panicked { message } => Some(message),
+            _ => None,
+        }
+    }
+
+    /// The full multi-line diagnostic for the HTML tooltip's `<pre>`: a rejection
+    /// `error` or panic `message` as-is, and for a [`Crashed`](ParseOutcome::Crashed)
+    /// sidecar the `reason` plus its captured `stdout`/`stderr` under labelled
+    /// dividers. `None` when there is nothing to explain (a clean parse, `n/a`,
+    /// `SKIP`, a forwarding verdict). Control bytes are made visible, but newlines
+    /// and tabs are kept so a stack trace renders line-for-line.
+    #[must_use]
+    pub fn diagnostics(&self) -> Option<String> {
+        match self {
+            ParseOutcome::Rejected { error } | ParseOutcome::SetCookieRejected { error } => {
+                Some(sanitize_multiline(error))
+            }
+            ParseOutcome::Panicked { message } => Some(sanitize_multiline(message)),
+            ParseOutcome::Crashed {
+                reason,
+                stdout,
+                stderr,
+            } => {
+                let mut out = sanitize_multiline(reason);
+                for (label, stream) in [("stdout", stdout), ("stderr", stderr)] {
+                    if let Some(text) = stream {
+                        out.push_str(&format!("\n\n── {label} ──\n{}", sanitize_multiline(text)));
+                    }
+                }
+                Some(out)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl SetCookieView {
@@ -173,6 +234,9 @@ impl SetCookieView {
         }
         if let Some(d) = &self.domain {
             flags.push(format!("Domain={d}"));
+        }
+        if let Some(e) = self.expires {
+            flags.push(format!("Expires={}", fmt_expires(e)));
         }
         if let Some(m) = self.max_age {
             flags.push(format!("Max-Age={m}"));
@@ -212,6 +276,15 @@ fn render_cookies(cookies: &[CookieView]) -> String {
     }
 }
 
+/// Render a Unix-timestamp `Expires` as the canonical UTC HTTP-date for the cell (falling back to
+/// the raw epoch if it is out of range), so parsers that agree on the instant read identically and
+/// the value is legible rather than a bare integer.
+fn fmt_expires(epoch: i64) -> String {
+    rfc_6265::OffsetDateTime::from_unix_timestamp(epoch)
+        .map(rfc_6265::date::format_imf_fixdate)
+        .unwrap_or_else(|_| epoch.to_string())
+}
+
 /// Truncate a long value to a short prefix plus a length marker.
 fn short(value: &str) -> String {
     let count = value.chars().count();
@@ -220,5 +293,142 @@ fn short(value: &str) -> String {
         format!("{prefix}…<{count} chars>")
     } else {
         value.to_string()
+    }
+}
+
+/// Make control bytes visible for a tooltip `<pre>` while **keeping** newlines and
+/// tabs, so a captured stack trace renders line-for-line. `\r` is dropped (so a
+/// CRLF trace does not render doubled), and NUL / other C0 / DEL bytes become
+/// `\xNN`. (`matrix::escape_controls` deliberately flattens newlines for a
+/// single-line cell; this is its multi-line sibling.)
+fn sanitize_multiline(s: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\n' | '\t' => out.push(ch),
+            '\r' => {}
+            c if c.is_control() => {
+                let _ = write!(out, "\\x{:02x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detail_exposes_reject_error_crash_reason_and_panic_message() {
+        assert_eq!(
+            ParseOutcome::Rejected {
+                error: "bad header".into()
+            }
+            .detail(),
+            Some("bad header")
+        );
+        assert_eq!(
+            ParseOutcome::SetCookieRejected {
+                error: "unknown attribute".into()
+            }
+            .detail(),
+            Some("unknown attribute")
+        );
+        assert_eq!(
+            ParseOutcome::Crashed {
+                reason: "signal 11".into(),
+                stdout: None,
+                stderr: None,
+            }
+            .detail(),
+            Some("signal 11")
+        );
+        assert_eq!(
+            ParseOutcome::Panicked {
+                message: "index out of bounds".into()
+            }
+            .detail(),
+            Some("index out of bounds")
+        );
+        // Outcomes with no error text carry no tooltip.
+        assert_eq!(ParseOutcome::NotApplicable.detail(), None);
+        assert_eq!(ParseOutcome::ForwardedVerbatim.detail(), None);
+    }
+
+    fn set_cookie(expires: Option<i64>) -> SetCookieView {
+        SetCookieView {
+            name: "SID".into(),
+            value: "abc".into(),
+            http_only: false,
+            secure: false,
+            same_site: None,
+            path: None,
+            domain: None,
+            max_age: None,
+            expires,
+        }
+    }
+
+    #[test]
+    fn cell_renders_expires_as_a_readable_utc_date() {
+        // A Unix-timestamp expiry round-trips to the canonical HTTP-date in the cell.
+        let epoch = rfc_6265::date::parse_imf_fixdate("Sun, 06 Nov 1994 08:49:37 GMT")
+            .unwrap()
+            .unix_timestamp();
+        assert_eq!(
+            set_cookie(Some(epoch)).cell(),
+            "SID=abc ;Expires=Sun, 06 Nov 1994 08:49:37 GMT"
+        );
+    }
+
+    #[test]
+    fn cell_without_expires_is_unchanged() {
+        assert_eq!(set_cookie(None).cell(), "SID=abc");
+    }
+
+    #[test]
+    fn diagnostics_joins_crash_reason_with_captured_streams() {
+        let d = ParseOutcome::Crashed {
+            reason: "signal 11".into(),
+            stdout: Some("go: downloading\r\n".into()),
+            stderr: Some("panic: runtime error\n\tmain.parse()\n".into()),
+        }
+        .diagnostics()
+        .unwrap();
+        assert!(d.contains("signal 11"), "{d}");
+        assert!(d.contains("── stdout ──"), "{d}");
+        assert!(d.contains("── stderr ──"), "{d}");
+        // Newlines and tabs survive for the <pre>; CR is dropped so CRLF is not doubled.
+        assert!(d.contains("panic: runtime error\n\tmain.parse()"), "{d}");
+        assert!(!d.contains('\r'), "{d}");
+    }
+
+    #[test]
+    fn diagnostics_omits_absent_streams_and_clean_outcomes() {
+        // A crash with no captured output is just its reason.
+        assert_eq!(
+            ParseOutcome::Crashed {
+                reason: "timeout".into(),
+                stdout: None,
+                stderr: None,
+            }
+            .diagnostics()
+            .as_deref(),
+            Some("timeout")
+        );
+        // A reject surfaces its text; clean outcomes have none.
+        assert_eq!(
+            ParseOutcome::SetCookieRejected {
+                error: "unknown attribute".into()
+            }
+            .diagnostics()
+            .as_deref(),
+            Some("unknown attribute")
+        );
+        assert_eq!(ParseOutcome::NotApplicable.diagnostics(), None);
+        assert_eq!(ParseOutcome::Skipped.diagnostics(), None);
     }
 }

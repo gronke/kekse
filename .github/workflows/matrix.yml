@@ -209,7 +209,7 @@ jobs:
           f=crates/keksbruch/COOKIE_MATRIX.md
           if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; fi
 
-      - name: Upload matrix (Markdown + CSV + HTML)
+      - name: Upload matrix (Markdown + CSV + HTML + JSON)
         uses: actions/upload-artifact@v7
         with:
           name: keksbruch-matrix
@@ -217,12 +217,13 @@ jobs:
             crates/keksbruch/COOKIE_MATRIX.md
             crates/keksbruch/COOKIE_MATRIX.csv
             crates/keksbruch/COOKIE_MATRIX.html
+            crates/keksbruch/COOKIE_MATRIX.json
           if-no-files-found: error
 
-  # Publish the matrix's three files to GitHub Pages: the HTML report is the
-  # well-readable view, with the .md and .csv beside it as downloads (the report
-  # links to them by relative path). There is deliberately no index.html — the
-  # files are served at their own URLs, entry point COOKIE_MATRIX.html. Runs
+  # Publish the matrix's four files to GitHub Pages: the HTML report is the
+  # well-readable view, with the .md, .csv, and .json beside it as downloads (the
+  # report links to them by relative path). There is deliberately no index.html —
+  # the files are served at their own URLs, entry point COOKIE_MATRIX.html. Runs
   # only on a push to main; never on pull_request (a fork cannot, and must not,
   # publish). One-time repo setup: Settings → Pages → Source = "GitHub Actions".
   deploy-pages:
@@ -241,8 +242,8 @@ jobs:
       group: pages
       cancel-in-progress: true
     steps:
-      # The matrix job uploaded the three files under a common ancestor, so they
-      # land flat in site/ (site/COOKIE_MATRIX.{md,csv,html}).
+      # The matrix job uploaded the four files under a common ancestor, so they
+      # land flat in site/ (site/COOKIE_MATRIX.{md,csv,html,json}).
       - name: Download the matrix artifact
         uses: actions/download-artifact@v8
         with:
