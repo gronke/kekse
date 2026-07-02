@@ -238,9 +238,12 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    # One publish at a time, and never cancel one that is already running: a Pages
+    # deployment in flight must be allowed to finish, since cancelling it can leave
+    # the repository's Pages queue wedged so later deployments never leave the queue.
     concurrency:
       group: pages
-      cancel-in-progress: true
+      cancel-in-progress: false
     steps:
       # The matrix job uploaded the four files under a common ancestor, so they
       # land flat in site/ (site/COOKIE_MATRIX.{md,csv,html,json}).
