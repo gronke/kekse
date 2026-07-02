@@ -1,10 +1,10 @@
 # keksbruch
 
-kekse's *chaos monkey* — a differential test harness for cookie *wire*.
-It runs a growing body of behavioural tests that surface divergence and drift across cookie implementations, so [`kekse`](../kekse) stays correct, compliant, and robust even on bad input.
+*Bruch* is German for fracture — keksbruch bends cookies until they break.
 
-Where kekse emits only honest, canonical cookies, keksbruch exercises the hard cases — unbalanced quotes, spliced control bytes, truncated percent-escapes, smuggled `;`, garbage `Set-Cookie` attributes, and the malformed shapes commonly seen in injection attempts, because that is exactly where implementations diverge most.
-A `KeksbruchRecipe` renders the same logical cookie two ways: a clean `baseline()` *through kekse*, and a malformed `render()` built directly as bytes (kekse's encoders refuse to emit injection bytes, so keksbruch constructs that wire by hand) — then checks how each parser copes.
+A differential test harness for cookie *wire*. It runs a growing body of behavioural tests that surface divergence and drift across cookie implementations, so [`kekse`](../kekse) stays correct, compliant, and robust even on bad input.
+
+Where kekse emits only honest, canonical cookies, keksbruch exercises the hard cases — unbalanced quotes, spliced control bytes, truncated percent-escapes, smuggled `;`, garbage `Set-Cookie` attributes, and the malformed shapes commonly seen in injection attempts, because that is exactly where implementations diverge most. A `KeksbruchRecipe` renders the same logical cookie two ways: a clean `baseline()` *through kekse*, and a malformed `render()` built directly as bytes (kekse's encoders refuse to emit injection bytes, so keksbruch constructs that wire by hand) — then checks how each parser copes.
 
 ## Two layers
 
@@ -38,11 +38,11 @@ The library under test is [`kekse`](../kekse); depend on that instead.
 - The differential matrix reports *observed divergence* between parsers — an insight and comparison aid, **not** a conformance certification of any parser, including kekse.
 - The corpus is not claimed to be exhaustive; it grows with every test added, and passing Layer A does not prove a parser free of defects.
 
-## Third-party fixtures
+## License
+
+Licensed under the [MIT License](LICENSE).
+
+### Third-party fixtures
 
 `fixtures/` vendors third-party parser source for the differential matrix (e.g. CloudFlare's BSD-licensed `lua-resty-cookie`) and drives others through their own build-time dependencies (Go, C, Node, PHP, Python, .NET, Java).
 Vendored files remain under their respective upstream licenses; see [`NOTICE`](NOTICE) and each file's header.
-
-## License
-
-MIT © 2026 Stefan Grönke — see [`LICENSE`](LICENSE).

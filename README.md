@@ -6,7 +6,7 @@ A strict, dependency-light cookie **codec** for Rust.
 
 ## Highlights
 
-- **RFC 6265-compliant.** With RFC 7230 tokens, RFC 7231 dates, and RFC 6265bis `SameSite` — see [Standards](#standards).
+- **Built to RFC 6265.** With RFC 7230 tokens, RFC 7231 dates, and RFC 6265bis `SameSite` — see [Standards](#standards).
 - **Strict mode.** Brutally strict — cookie-octets only.
 - **Lenient mode.** Compliant and tolerant — yet, like strict, refuses injection bytes (`;`, CR, LF, NUL, controls, raw non-ASCII).
 - **Strongly typed.** `Cookie`, `SetCookie`, `CookieJar`, `SameSite`, and typed attributes — never stringly-typed maps.
@@ -67,9 +67,7 @@ More runnable programs live in [`crates/kekse/examples/`](crates/kekse/examples)
 
 ## License
 
-Copyright © 2026 Stefan Grönke.
-
-Licensed under the MIT License — see [`LICENSE`](LICENSE).
+Licensed under the [MIT License](LICENSE).
 
 The published crates (`kekse`, `rfc_6265`) are entirely MIT.
 Some third-party test fixtures bundled in [`keksbruch`](crates/keksbruch) (e.g. the BSD-2-Clause `lua-resty-cookie`) remain under their own licenses — see [`crates/keksbruch/NOTICE`](crates/keksbruch/NOTICE).

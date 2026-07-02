@@ -1,6 +1,8 @@
 # rfc_6265
 
-Reusable, exhaustively-tested primitives and algorithms from [RFC 6265] (HTTP State Management) and the grammar it borrows from RFC 7230 — the side-effect-free building blocks an HTTP cookie implementation needs, each defined once so the essential bits and bytes can't drift.
+Reusable, exhaustively-tested primitives and algorithms from [RFC 6265] (HTTP State Management) and
+the grammar it borrows from RFC 7230 — the side-effect-free building blocks an HTTP cookie
+implementation needs, each defined once so the essential bits and bytes can't drift.
 
 - `grammar` — §4.1.1 byte classes (cookie-octet, av-octet) and the RFC 7230 token for cookie-names. Always available, dependency-free, all `const fn`.
 - `date` (feature) — the tolerant RFC 6265 §5.1.1 cookie-date scan, the strict RFC 7231 IMF-fixdate, and formatters for each HTTP-date variant. Built on `time`; parsing is never hand-rolled.
@@ -15,6 +17,4 @@ It is deliberately *not* a cookie store (§5.3) nor a `Set-Cookie`/`Cookie` code
 
 ## License
 
-Copyright © 2026 Stefan Grönke.
-
-Licensed under the MIT License — see [`LICENSE`](LICENSE).
+Licensed under the [MIT License](LICENSE).
