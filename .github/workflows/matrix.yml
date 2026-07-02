@@ -55,6 +55,13 @@ jobs:
   matrix:
     name: cross-language parser matrix
     runs-on: ubuntu-latest
+    # Cancel a superseded matrix run on the same ref — a fresh push to a pull request
+    # or to main — since regenerating the cross-language matrix is expensive and only
+    # the newest result matters. This is scoped to the matrix job on purpose: the
+    # deploy job below keeps its own `pages` group and is never cancelled.
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
     # Optional per-sidecar version overrides (set via workflow_dispatch; empty on
     # pull_request/push → the defaults below and in sidecar.rs apply). Keep these
     # in sync with ImageSpec::default_version in src/differential/sidecar.rs.
