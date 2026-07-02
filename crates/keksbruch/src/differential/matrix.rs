@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use base64::prelude::{BASE64_STANDARD, Engine as _};
-use maud::{Markup, PreEscaped, html};
+use maud::{Markup, html};
 use pulldown_cmark::{Options, Parser, html as cmark_html};
 use serde::Serialize;
 use tera::{Context, Tera};
@@ -478,18 +478,14 @@ fn build_fidelity(rows: &[(String, [bool; 6])]) -> Table {
 
 // ── divergences worth knowing ────────────────────────────────────────────────────
 // The scenarios where kekse (the subject) renders a different outcome than the
-// real-world consensus — surfaced as a prose list, with each subject's mode and the
-// RFC note where the standard is prescriptive.
+// real-world consensus — surfaced as an overview of *which* tests diverge; the
+// outcomes themselves live in the matrix rows above, not here.
 
-/// One "kekse diverges here" entry: the scenario, the consensus it differs from, and
-/// each subject column's mode (`dep`, rendered `cell`). `cell` strings are raw — the
-/// renderers escape them (Markdown `esc`, HTML via `maud`/`escape_controls`).
+/// One "kekse diverges here" entry: the scenario id and what it exercises. Both are
+/// authored scenario strings, not parsed cookie output.
 struct Divergence<'a> {
     id: &'a str,
     description: &'a str,
-    consensus: String,
-    modes: Vec<(String, String)>,
-    rfc: Option<&'static str>,
 }
 
 /// Collect the scenarios where a subject (kekse) column diverges from consensus.
@@ -501,21 +497,18 @@ fn divergences<'a>(
     let subjects: Vec<&Column> = columns.iter().filter(|c| c.is_subject()).collect();
     let mut out = Vec::new();
     for (row, scenario) in scenarios.iter().enumerate() {
-        let Some(con) = cons[row].clone() else {
+        let Some(con) = cons[row].as_ref() else {
             continue;
         };
-        if !subjects.iter().any(|c| c.cells[row].consensus_key() != con) {
+        if !subjects
+            .iter()
+            .any(|c| c.cells[row].consensus_key() != *con)
+        {
             continue;
         }
         out.push(Divergence {
             id: scenario.id,
             description: scenario.description,
-            consensus: con,
-            modes: subjects
-                .iter()
-                .map(|c| (c.dep.clone(), c.cells[row].cell()))
-                .collect(),
-            rfc: rfc_verdict(scenario.id),
         });
     }
     out
@@ -524,41 +517,12 @@ fn divergences<'a>(
 /// The divergences list as Markdown bullets (no heading — that lives in the template).
 fn md_divergences(divs: &[Divergence]) -> String {
     divs.iter()
-        .map(|d| {
-            let modes = d
-                .modes
-                .iter()
-                .map(|(dep, cell)| format!("{} → `{}`", dep, esc(cell)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let mut line = format!(
-                "- **`{}`** — {}. Real-world consensus `{}`; {}.",
-                d.id,
-                d.description,
-                esc(&d.consensus),
-                modes
-            );
-            if let Some(rfc) = d.rfc {
-                let _ = write!(line, " RFC: {rfc}.");
-            }
-            line
-        })
+        .map(|d| format!("- **`{}`** — {}.", d.id, d.description))
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-/// One subject's modes as the HTML run `dep → <code>cell</code>, …` (cell entity- and
-/// control-escaped). Built as a string so the maud `<li>` can splice it `PreEscaped`.
-fn modes_html(modes: &[(String, String)]) -> String {
-    modes
-        .iter()
-        .map(|(dep, cell)| format!("{} → <code>{}</code>", h(dep), h(&escape_controls(cell))))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// The divergences list as an HTML `<ul>` (no heading). Untrusted strings are
-/// `maud`-escaped; the trusted RFC verdict is inline Markdown rendered to HTML.
+/// The divergences list as an HTML `<ul>` (no heading; `maud` escapes the strings).
 fn html_divergences(divs: &[Divergence]) -> Markup {
     html! {
         ul {
@@ -567,16 +531,7 @@ fn html_divergences(divs: &[Divergence]) -> Markup {
                     strong { code { (d.id) } }
                     " — "
                     (d.description)
-                    ". Real-world consensus "
-                    code { (escape_controls(&d.consensus)) }
-                    "; "
-                    (PreEscaped(modes_html(&d.modes)))
                     "."
-                    @if let Some(rfc) = d.rfc {
-                        " RFC: "
-                        (PreEscaped(md_inline(rfc)))
-                        "."
-                    }
                 }
             }
         }
