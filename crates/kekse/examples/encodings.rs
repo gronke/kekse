@@ -2,7 +2,7 @@
 //!
 //! Run with: `cargo run -p kekse --example encodings`
 
-use kekse::{encode_value, parse_pairs, Cookie, ValueEncoding};
+use kekse::{Cookie, ValueEncoding, encode_value, parse_pairs};
 
 fn main() {
     // A value an RFC 6265 cookie cannot carry bare: it has a space and a `;`.

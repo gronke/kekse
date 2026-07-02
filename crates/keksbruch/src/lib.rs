@@ -35,9 +35,12 @@ mod recipe;
 mod scenario;
 mod taxonomy;
 
-pub use invariants::{assert_no_injection_echo, assert_strict_subset_of_lenient, drive};
+pub use invariants::{
+    assert_no_injection_echo, assert_no_injection_echo_bytes, assert_strict_subset_of_lenient,
+    assert_strict_subset_of_lenient_bytes, drive, drive_bytes,
+};
 pub use recipe::{KeksbruchRecipe, LogicalCookie};
-pub use scenario::{scenarios, Expect, Scenario};
+pub use scenario::{Expect, Scenario, scenarios};
 pub use taxonomy::{Direction, Keksbruch};
 
 /// The generator over the whole corpus — every `Keksbruch` recipe Layer A and the

@@ -2,7 +2,7 @@
 //! crate, and `biscotti`. Called directly — they are Rust — with each call
 //! wrapped in `catch_unwind` so a panic becomes a recorded finding, not a crash.
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::differential::result::{CookieView, ParseOutcome, SetCookieView};
 use crate::taxonomy::Direction;
@@ -178,7 +178,7 @@ impl RustComparator for CookieStore {
             Err(_) => {
                 return ParseOutcome::SetCookieRejected {
                     error: "bad base url".to_string(),
-                }
+                };
             }
         };
         let mut store = cookie_store::CookieStore::new();

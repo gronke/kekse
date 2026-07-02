@@ -581,9 +581,10 @@ pub fn scenarios() -> Vec<Scenario> {
         // ── domain: supercookie defense + IDN notation (Response) ───────────
         // Default kekse is a pure codec: it stores any av-octet `Domain` verbatim (it does not even
         // strip the leading dot — the matrix shows which parsers do). The `psl` / `idna` features
-        // (the `hardened` build) turn it into policy: a public-suffix `Domain` (the supercookie) and
-        // malformed punycode are refused, leaving the cookie host-only. The matrix compares how
-        // other parsers strip the dot and read IDNs.
+        // (the `hardened` build) turn it into policy: a non-host-name value (LDH syntax, after the
+        // §5.2.3 leading-dot strip), a public-suffix `Domain` (the supercookie), and malformed
+        // punycode are refused, leaving the cookie host-only. The matrix compares how other parsers
+        // strip the dot and read IDNs.
         s(
             "domain-supercookie-tld",
             "Domain=.com is a supercookie: stored verbatim by the pure codec, refused under `psl`",
@@ -677,6 +678,19 @@ pub fn scenarios() -> Vec<Scenario> {
             Expect::ResponseDomain {
                 value: "abc",
                 default_domain: Some("xn--"),
+                hardened_domain: None,
+            },
+        ),
+        s(
+            "domain-not-a-host-name",
+            "an underscored label is av-octet-clean but not LDH host-name syntax: the pure codec \
+             stores it verbatim, the hardened build refuses a Domain that could never domain-match",
+            Response,
+            "SID",
+            Keksbruch::DomainValue("ex_ample.com"),
+            Expect::ResponseDomain {
+                value: "abc",
+                default_domain: Some("ex_ample.com"),
                 hardened_domain: None,
             },
         ),

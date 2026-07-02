@@ -4,8 +4,8 @@
 //! `CookieAttributes`. The `Path` and `Domain` values are validated [`Path`] /
 //! [`Domain`] newtypes, so the public fields cannot carry an injection byte.
 
-use rfc_6265::grammar::is_av_octet;
 use rfc_6265::OffsetDateTime;
+use rfc_6265::grammar::is_av_octet;
 
 use crate::same_site::SameSite;
 
@@ -25,7 +25,7 @@ impl<'a> Path<'a> {
     }
 
     /// The validated path value.
-    pub fn as_str(&self) -> &'a str {
+    pub const fn as_str(&self) -> &'a str {
         self.0
     }
 }
@@ -43,11 +43,24 @@ impl AsRef<str> for Path<'_> {
 pub struct Domain<'a>(&'a str);
 
 impl<'a> Domain<'a> {
-    /// `Some(Domain)` iff every byte is an av-octet (no control byte, `;`, or non-ASCII). With the
-    /// `psl` feature a public-suffix value (a supercookie `Domain` such as `com` / `.co.uk`) is also
-    /// refused; with the `idna` feature, malformed punycode is refused too.
+    /// `Some(Domain)` iff every byte is an av-octet (no control byte, `;`, or non-ASCII). With any
+    /// Domain-hardening feature on (`psl` / `idna` — the `hardened` build has both), the value must
+    /// also be LDH host-name syntax ([`rfc_6265::domain::is_host_name`], after stripping the one
+    /// leading dot of the RFC 6265 §5.2.3 wire form) — a `Domain` that could never domain-match is
+    /// refused rather than stored as dead weight. On top of that, the `psl` feature refuses a
+    /// public-suffix value (a supercookie `Domain` such as `com` / `.co.uk`) and the `idna` feature
+    /// refuses malformed punycode.
     pub fn new(value: &'a str) -> Option<Self> {
         if !value.bytes().all(is_av_octet) {
+            return None;
+        }
+        // Host-name syntax (any hardening feature): the policies below are only meaningful over a
+        // well-formed host name, and `domain_matches` requires one anyway — a stored `Domain` it
+        // could never match would be dead weight. Checked on the effective cookie-domain: one
+        // leading dot is the §5.2.3 wire form consumers strip (`is_public_suffix` already ignores
+        // it too). The pure-codec default stays byte-identical.
+        #[cfg(any(feature = "psl", feature = "idna"))]
+        if !rfc_6265::domain::is_host_name(value.strip_prefix('.').unwrap_or(value)) {
             return None;
         }
         // Supercookie defense (`psl`): a `Domain` that is itself a public suffix can never be set,
@@ -65,7 +78,7 @@ impl<'a> Domain<'a> {
     }
 
     /// The validated domain value.
-    pub fn as_str(&self) -> &'a str {
+    pub const fn as_str(&self) -> &'a str {
         self.0
     }
 }
@@ -260,11 +273,12 @@ mod tests {
         // av-octet = 0x20..=0x3a | 0x3c..=0x7e: SP and digits are in; HTAB, `;`,
         // controls, and non-ASCII are out (the rejections are pinned above).
         // Empty: every byte is an av-octet (vacuously). `Path` always accepts it; `Domain` accepts
-        // it by default, but the `idna` feature rejects an empty string as not a valid domain.
+        // it in the pure-codec default, but any hardening feature refuses it — an empty string is
+        // not a host name (and under `idna` it is not a valid domain either).
         assert_eq!(Path::new("").map(|p| p.as_str()), Some(""));
-        #[cfg(not(feature = "idna"))]
+        #[cfg(not(any(feature = "psl", feature = "idna")))]
         assert_eq!(Domain::new("").map(|d| d.as_str()), Some(""));
-        #[cfg(feature = "idna")]
+        #[cfg(any(feature = "psl", feature = "idna"))]
         assert!(Domain::new("").is_none());
         // SP (0x20) is an av-octet → space-only paths are valid.
         assert!(Path::new(" ").is_some());
@@ -278,6 +292,28 @@ mod tests {
         // (av-octet-only) acceptance here; `psl` Domain behaviour is pinned separately.
         #[cfg(not(feature = "psl"))]
         assert!(Domain::new("123").is_some());
+    }
+
+    #[cfg(any(feature = "psl", feature = "idna"))]
+    #[test]
+    fn hardening_features_require_host_name_syntax() {
+        // av-octet-clean shapes that are not LDH host names: stored by the pure codec
+        // (pinned by keksbruch's `domain-not-a-host-name` scenario), refused under any
+        // hardening feature — `domain_matches` could never match them, so storing them
+        // would be dead weight.
+        assert!(Domain::new("ex_ample.com").is_none()); // underscore is not LDH
+        assert!(Domain::new("a..b").is_none()); // empty label
+        assert!(Domain::new("example.com.").is_none()); // FQDN root dot: unmatchable suffix
+        assert!(Domain::new("exa mple.com").is_none()); // SP is av-octet but never LDH
+        assert!(Domain::new("example.com:8080").is_none()); // smuggled port
+        // One leading dot is the RFC 6265 §5.2.3 wire form — stripped before the check,
+        // consistent with `is_public_suffix`. (Under `psl` the example must not be a
+        // public suffix, so use a registrable name.)
+        assert!(Domain::new(".example.com").is_some());
+        // LDH includes digits: an IP-shaped value still stores (it domain-matches by
+        // identity), and hyphens are fine anywhere `is_host_name` allows them.
+        assert!(Domain::new("192.168.0.1").is_some());
+        assert!(Domain::new("my-host.example.com").is_some());
     }
 
     #[cfg(feature = "psl")]

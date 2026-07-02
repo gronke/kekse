@@ -10,15 +10,15 @@
 //!    soft, straight off a live `Cookie` request header — including the browser
 //!    dance of set-cookie-then-send-it-back.
 
+use axum::Router;
 use axum::body::Body;
 use axum::http::header::{COOKIE, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
 use tower::ServiceExt; // oneshot
 
-use kekse::{parse_pairs, parse_pairs_strict, SameSite, SetCookie, ValueEncoding};
+use kekse::{SameSite, SetCookie, ValueEncoding, parse_pairs, parse_pairs_strict};
 
 /// Values a real app might try to stuff into a cookie — separators, control
 /// bytes, quotes, percent, non-ASCII, whitespace.

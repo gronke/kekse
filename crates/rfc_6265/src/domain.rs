@@ -74,10 +74,8 @@ pub fn domain_matches(host: &str, domain: &str) -> bool {
     if host.parse::<IpAddr>().is_ok() {
         return false;
     }
-    match host.strip_suffix(domain) {
-        Some(prefix) => prefix.ends_with('.'),
-        None => false,
-    }
+    host.strip_suffix(domain)
+        .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
 // ---- IDN (UTS-46), behind the `idna` feature -------------------------------

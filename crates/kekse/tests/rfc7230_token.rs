@@ -8,7 +8,7 @@
 
 mod common;
 
-use kekse::{is_cookie_name, parse_pairs, SetCookie};
+use kekse::{SetCookie, is_cookie_name, parse_pairs};
 
 /// The RFC 7230 `tchar` predicate, spelled out as the spec defines it.
 fn is_tchar(b: u8) -> bool {

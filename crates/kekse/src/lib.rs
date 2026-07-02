@@ -80,6 +80,15 @@
 //! controls, raw non-ASCII) in every mode — the lenient/strict difference is
 //! only whether raw whitespace is tolerated.
 //!
+//! Both readers also come as byte-level twins, [`parse_pairs_bytes`] /
+//! [`parse_pairs_bytes_strict`] (and [`CookieJar::parse_bytes`] /
+//! [`CookieJar::parse_bytes_strict`]), for callers holding raw header bytes: an
+//! `http` `HeaderValue` may legally carry obs-text (`>= 0x80`) that `to_str()`
+//! refuses *wholesale*. The bytes readers accept nothing extra — raw non-ASCII
+//! stays outside the grammar — but they keep fail-soft **per pair**: the pair
+//! carrying a stray byte is refused individually and its well-formed neighbors
+//! survive, instead of the whole header dying at a UTF-8 boundary.
+//!
 //! On the response side, [`SetCookie::parse`] reads one `Set-Cookie` header value
 //! back into a [`SetCookie`] (RFC 6265 §5.2, attributes matched
 //! case-insensitively). Per §5.2 an **unrecognised attribute is ignored** and the
@@ -101,10 +110,13 @@
 //! ## Hardening (optional)
 //!
 //! By default kekse is a pure codec that stores whatever `Domain` the wire carries. The opt-in
-//! `hardened` feature (= `psl` + `idna`) makes it *enforce* policy on the `Domain` attribute: `psl`
-//! refuses a public-suffix value (`com`, `co.uk`, …) — the supercookie defense — and `idna` refuses
-//! malformed punycode. Both pull extra tables (the Public Suffix List / IDNA, via `rfc_6265`), so
-//! they are not in the default, dependency-light build. Independently,
+//! `hardened` feature (= `psl` + `idna`) makes it *enforce* policy on the `Domain` attribute.
+//! Either sub-feature first requires LDH host-name syntax (after stripping the RFC 6265 §5.2.3
+//! leading dot): a `Domain` like `ex_ample.com` or `a..b` that could never domain-match is refused
+//! instead of stored as dead weight. On top of that, `psl` refuses a public-suffix value (`com`,
+//! `co.uk`, …) — the supercookie defense — and `idna` refuses malformed punycode. Both pull extra
+//! tables (the Public Suffix List / IDNA, via `rfc_6265`), so they are not in the default,
+//! dependency-light build. Independently,
 //! [`SetCookie::parse_strict`] rejects a `Set-Cookie` carrying a duplicate attribute.
 //!
 //! ## A single source of truth for the grammar
@@ -117,7 +129,8 @@
 //! ## Module layout
 //!
 //! One concept per module — `grammar` (the value codec's percent-encode sets, on top of
-//! `rfc_6265`'s byte classes), `encoding` (the value codec), `same_site`, `cookie` (the request
+//! `rfc_6265`'s byte classes), `wire` (the shared byte-level `name=value` segmentation both
+//! readers run), `encoding` (the value codec), `same_site`, `cookie` (the request
 //! [`Cookie`] kernel), `attributes` (the response [`CookieAttributes`]),
 //! `set_cookie` (the response [`SetCookie`] = kernel + attributes, with its
 //! `Set-Cookie` parse/serialize), and `jar` (the request-`Cookie:` reader *and*
@@ -136,14 +149,17 @@ mod grammar;
 mod jar;
 mod same_site;
 mod set_cookie;
+mod wire;
 
 pub use attributes::{CookieAttributes, Domain, Path};
 #[cfg(feature = "axum")]
 pub use axum::CookieJarBuf;
 pub use cookie::Cookie;
-pub use encoding::{encode_value, ValueEncoding};
-pub use jar::{parse_pairs, parse_pairs_strict, CookieJar};
-pub use rfc_6265::grammar::{is_cookie_name, is_cookie_octet};
+pub use encoding::{ValueEncoding, encode_value};
+pub use jar::{
+    CookieJar, parse_pairs, parse_pairs_bytes, parse_pairs_bytes_strict, parse_pairs_strict,
+};
+pub use rfc_6265::grammar::{is_cookie_name, is_cookie_name_bytes, is_cookie_octet};
 pub use same_site::{ParseSameSiteError, SameSite};
 pub use set_cookie::SetCookie;
 

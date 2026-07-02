@@ -18,7 +18,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use base64::prelude::{Engine as _, BASE64_STANDARD};
+use base64::prelude::{BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 
 use crate::differential::matrix::Column;
@@ -409,38 +409,38 @@ fn docker_available() -> bool {
 /// resolves identically in the container. `interactive` adds `-i` so a piped
 /// stdin reaches the container. The caller still sets stdio and any extra args.
 fn launch(spec: &SidecarSpec, script: &Path, interactive: bool) -> Command {
-    if let Some(img) = &spec.image {
-        if docker_available() {
-            let image_ref = img.resolve();
-            let dir = script
-                .parent()
-                .expect("a sidecar script always has a parent (the fixtures dir)")
-                .to_string_lossy()
-                .into_owned();
-            let mut cmd = Command::new("docker");
-            // `--network=none`: a sidecar runs untrusted third-party parsers against
-            // untrusted input, so it gets NO network — defence-in-depth against a
-            // compromised dependency exfiltrating or phoning home. The container keeps
-            // its loopback interface, which is all any sidecar needs (nginx and the
-            // curl/wget client boot servers on 127.0.0.1 inside their own container).
-            // The image must be pre-pulled/built (CI does this with network on) since a
-            // no-network `docker run` cannot pull. The matrix job itself also holds no
-            // push/deploy credentials — only the separate deploy-pages job does.
-            cmd.arg("run").arg("--rm").arg("--network=none");
-            if interactive {
-                cmd.arg("-i");
-            }
-            cmd.arg("-v")
-                .arg(format!("{dir}:{dir}"))
-                .arg("-w")
-                .arg(&dir)
-                .arg(&image_ref)
-                .arg(spec.command)
-                .args(spec.args)
-                .arg(script)
-                .args(spec.post_args);
-            return cmd;
+    if let Some(img) = &spec.image
+        && docker_available()
+    {
+        let image_ref = img.resolve();
+        let dir = script
+            .parent()
+            .expect("a sidecar script always has a parent (the fixtures dir)")
+            .to_string_lossy()
+            .into_owned();
+        let mut cmd = Command::new("docker");
+        // `--network=none`: a sidecar runs untrusted third-party parsers against
+        // untrusted input, so it gets NO network — defence-in-depth against a
+        // compromised dependency exfiltrating or phoning home. The container keeps
+        // its loopback interface, which is all any sidecar needs (nginx and the
+        // curl/wget client boot servers on 127.0.0.1 inside their own container).
+        // The image must be pre-pulled/built (CI does this with network on) since a
+        // no-network `docker run` cannot pull. The matrix job itself also holds no
+        // push/deploy credentials — only the separate deploy-pages job does.
+        cmd.arg("run").arg("--rm").arg("--network=none");
+        if interactive {
+            cmd.arg("-i");
         }
+        cmd.arg("-v")
+            .arg(format!("{dir}:{dir}"))
+            .arg("-w")
+            .arg(&dir)
+            .arg(&image_ref)
+            .arg(spec.command)
+            .args(spec.args)
+            .arg(script)
+            .args(spec.post_args);
+        return cmd;
     }
     // Host invocation: no image, or docker absent (the local fallback).
     let mut cmd = Command::new(resolve_command(spec.command));

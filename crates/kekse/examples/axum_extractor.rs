@@ -2,10 +2,10 @@
 //!
 //! Run with: `cargo run -p kekse --example axum_extractor --features axum`
 
-use axum::body::Body;
-use axum::http::{header::COOKIE, Request};
-use axum::routing::get;
 use axum::Router;
+use axum::body::Body;
+use axum::http::{Request, header::COOKIE};
+use axum::routing::get;
 use kekse::CookieJarBuf;
 use tower::ServiceExt; // for `oneshot`
 

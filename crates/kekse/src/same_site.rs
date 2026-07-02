@@ -16,7 +16,7 @@ pub enum SameSite {
 
 impl SameSite {
     /// The token as it appears in a `Set-Cookie` header: `Strict`/`Lax`/`None`.
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             SameSite::Strict => "Strict",
             SameSite::Lax => "Lax",

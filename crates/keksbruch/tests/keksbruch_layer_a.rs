@@ -3,10 +3,11 @@
 //! future kekse change alters fail-soft parsing, these assertions break here.
 
 use keksbruch::{
-    assert_no_injection_echo, assert_strict_subset_of_lenient, drive, payloads, scenarios,
-    Direction, Expect,
+    Direction, Expect, assert_no_injection_echo, assert_no_injection_echo_bytes,
+    assert_strict_subset_of_lenient, assert_strict_subset_of_lenient_bytes, drive, drive_bytes,
+    payloads, scenarios,
 };
-use kekse::{parse_pairs, parse_pairs_strict, SetCookie};
+use kekse::{SetCookie, parse_pairs, parse_pairs_strict};
 
 fn pairs(wire: &str, strict: bool) -> Vec<(String, String)> {
     if strict {
@@ -29,6 +30,15 @@ fn owned(want: &[(&str, &str)]) -> Vec<(String, String)> {
 #[test]
 fn every_keksbruch_survives_the_universal_invariants() {
     for recipe in payloads() {
+        // The raw wire reaches the byte-level readers for EVERY request recipe —
+        // including the Unrepresentable (non-UTF-8) ones a &str parser can never
+        // see. The same three promises must hold below the UTF-8 boundary.
+        if recipe.direction == Direction::Request {
+            let wire = recipe.render();
+            drive_bytes(&wire);
+            assert_no_injection_echo_bytes(&wire);
+            assert_strict_subset_of_lenient_bytes(&wire);
+        }
         match recipe.render_str() {
             Some(wire) if recipe.direction == Direction::Request => {
                 drive(&wire); // never panics

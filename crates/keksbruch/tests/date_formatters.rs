@@ -4,7 +4,7 @@
 //! `date-asctime`) are the genuine RFC forms of a *single* instant rather than hand-typed strings —
 //! and a worked example of the "format in a selected variant" tool keksbruch uses to build payloads.
 
-use rfc_6265::date::{format_http_date, parse_imf_fixdate, HttpDateFormat};
+use rfc_6265::date::{HttpDateFormat, format_http_date, parse_imf_fixdate};
 
 #[test]
 fn corpus_date_literals_are_the_genuine_rfc_forms_of_one_instant() {

@@ -11,7 +11,7 @@
 //! renderer reuses its `esc`/`code` helpers, so the Markdown bytes are identical to
 //! the previous renderer's; only the HTML assembly changed.
 
-use maud::{html, Markup, PreEscaped};
+use maud::{Markup, PreEscaped, html};
 
 use super::matrix::{code, esc, escape_controls, md_inline};
 

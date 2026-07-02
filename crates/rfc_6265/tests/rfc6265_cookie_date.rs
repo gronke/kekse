@@ -7,10 +7,10 @@
 //! <https://www.rfc-editor.org/rfc/rfc7231#section-7.1.1.1>
 #![cfg(feature = "date")]
 
-use rfc_6265::date::{
-    format_http_date, format_imf_fixdate, parse_cookie_date, parse_imf_fixdate, HttpDateFormat,
-};
 use rfc_6265::OffsetDateTime;
+use rfc_6265::date::{
+    HttpDateFormat, format_http_date, format_imf_fixdate, parse_cookie_date, parse_imf_fixdate,
+};
 
 /// The RFC 6265 §5.1.1 / RFC 7231 running example instant: `Sun, 06 Nov 1994 08:49:37 GMT`.
 fn example() -> OffsetDateTime {

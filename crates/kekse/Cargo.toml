@@ -23,7 +23,7 @@ all-features = true
 # RFC 6265 primitives — the grammar byte-classes (cookie-octet / av-octet / token) and the
 # `Expires` date codec. The single, exhaustively-tested source of truth for the bits and bytes;
 # its `date` feature pulls `time`, so kekse never depends on `time` directly.
-rfc_6265 = { path = "../rfc_6265", version = "0.1", features = ["date"] }
+rfc_6265 = { path = "../rfc_6265", version = "0.2", features = ["date"] }
 # `http::HeaderValue` for the typed-header conversions.
 http.workspace = true
 # Percent-encoding primitive; the RFC 6265 cookie-value codec is defined on top.
@@ -43,8 +43,10 @@ tracing = ["dep:tracing"]
 # axum `FromRequestParts` extractor (`CookieJarBuf`) for the request `Cookie:` header.
 axum = ["dep:axum-core"]
 # Reject public-suffix `Domain`s (supercookie defense) via rfc_6265's Public Suffix List.
+# Like `idna`, also gates `Domain` on LDH host-name syntax first (see `Domain::new`).
 psl = ["rfc_6265/psl"]
 # Validate internationalized `Domain`s (reject malformed punycode) via rfc_6265's IDNA.
+# Like `psl`, also gates `Domain` on LDH host-name syntax first (see `Domain::new`).
 idna = ["rfc_6265/idna"]
 # The full Domain-hardening suite. Opt-in (not in the default, dependency-light codec); pulls the
 # `psl`/`idna` trees and may carry a higher MSRV than the 1.88 core.
