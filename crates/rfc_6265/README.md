@@ -23,3 +23,5 @@ This software is provided free of charge and **“as is,” without warranty of 
 No support, maintenance, updates, or assurance of correctness, security, or fitness for a particular purpose is provided.
 
 **Use at your own risk, subject to applicable law.**
+
+Security reports: see [`SECURITY.md`](../../SECURITY.md).

@@ -6,7 +6,7 @@ A strict, dependency-light cookie **codec** for Rust.
 
 ## Highlights
 
-- **RFC 6265-compliant.** With RFC 7230 tokens, RFC 7231 dates, and RFC 6265bis `SameSite` — see [Standards](#standards).
+- **Built to RFC 6265.** With RFC 7230 tokens, RFC 7231 dates, and RFC 6265bis `SameSite` — see [Standards](#standards).
 - **Strict mode.** Brutally strict — cookie-octets only.
 - **Lenient mode.** Compliant and tolerant — yet, like strict, refuses injection bytes (`;`, CR, LF, NUL, controls, raw non-ASCII).
 - **Strongly typed.** `Cookie`, `SetCookie`, `CookieJar`, `SameSite`, and typed attributes — never stringly-typed maps.
@@ -78,3 +78,5 @@ This software is provided free of charge and **“as is,” without warranty of 
 No support, maintenance, updates, or assurance of correctness, security, or fitness for a particular purpose is provided.
 
 **Use at your own risk, subject to applicable law.**
+
+Security reports: see [`SECURITY.md`](SECURITY.md).

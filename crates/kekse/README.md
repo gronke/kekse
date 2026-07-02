@@ -3,7 +3,7 @@
 A strict, dependency-light cookie codec.
 It builds `Set-Cookie` response values from a `SetCookie`, reads *and writes* a `Cookie` request header through a `CookieJar` of typed `Cookie`s, and converts either straight into an `http::HeaderValue` — directly on the RFC 6265 §4.1.1 grammar.
 There is no cookie *store* (no persistence, eviction, or domain/path send-matching) and no signing or encryption, but dates are handled: a lifetime is `Max-Age` seconds (a `u64`) or an `Expires` timestamp, parsed and rendered through the `time` crate.
-It never panics on untrusted input, and a malformed pair in a header is skipped rather than aborting the parse, so attacker-appended junk can never evict a later valid cookie.
+It is designed not to panic on untrusted input, and a malformed pair in a header is skipped rather than aborting the parse, so attacker-appended junk cannot evict a later valid cookie.
 
 It depends on `percent-encoding` (the value codec), `http` (the RFC 7230 token grammar for cookie-names, borrowed rather than re-implemented as a homemade table), and `time` (`Expires` date parsing and formatting — RFC 6265 §5.1.1 and RFC 7231).
 
@@ -92,7 +92,7 @@ Each prints its output and asserts the invariant it documents, so it doubles as 
 | `parse_request` | Reading and rewriting a `Cookie:` request header through a `CookieJar`. |
 | `encodings` | How each `ValueEncoding` escapes one tricky value for the wire. |
 | `strict_vs_lenient` | The lenient and strict readers side by side on a quoted value. |
-| `fail_soft` | Fail-soft parsing and the never-panic guarantee on hostile input. |
+| `fail_soft` | Fail-soft parsing and the no-panic behaviour on hostile input. |
 | `axum_extractor` | The `CookieJarBuf` axum extractor (needs `--features axum`). |
 
 ```sh
@@ -110,3 +110,5 @@ This software is provided free of charge and **“as is,” without warranty of 
 No support, maintenance, updates, or assurance of correctness, security, or fitness for a particular purpose is provided.
 
 **Use at your own risk, subject to applicable law.**
+
+Security reports: see [`SECURITY.md`](../../SECURITY.md).
