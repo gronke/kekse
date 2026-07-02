@@ -899,7 +899,7 @@ pub fn scenarios() -> Vec<Scenario> {
         ),
         s(
             "attr-nul-value",
-            "a NUL in a Path value survives parse (raw &str); the HeaderValue gate catches it (#9)",
+            "a NUL in a Path value survives parse (raw &str); the HeaderValue gate catches it",
             Response,
             "SID",
             Keksbruch::NulInAttrValue,
