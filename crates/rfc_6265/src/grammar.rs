@@ -86,8 +86,35 @@ pub const fn is_tchar(b: u8) -> bool {
 /// assert!(!is_cookie_name("") && !is_cookie_name("a b") && !is_cookie_name("a=b"));
 /// ```
 #[must_use]
-pub fn is_cookie_name(name: &str) -> bool {
-    !name.is_empty() && name.bytes().all(is_tchar)
+pub const fn is_cookie_name(name: &str) -> bool {
+    is_cookie_name_bytes(name.as_bytes())
+}
+
+/// [`is_cookie_name`] on raw bytes, for callers still on the wire side of UTF-8 validation. The
+/// two can never drift: the `&str` form *is* this predicate over `as_bytes()`. A `token` is ASCII
+/// by construction, so a byte slice this accepts is always valid UTF-8.
+///
+/// ```
+/// use rfc_6265::grammar::is_cookie_name_bytes;
+/// assert!(is_cookie_name_bytes(b"SID"));
+/// assert!(!is_cookie_name_bytes(b"") && !is_cookie_name_bytes(b"a b"));
+/// assert!(!is_cookie_name_bytes(b"caf\xc3\xa9")); // non-ASCII is never a token
+/// ```
+#[must_use]
+pub const fn is_cookie_name_bytes(name: &[u8]) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    // `const fn` still means no iterator adapters; an index walk is the ~one place a manual loop
+    // beats `.bytes().all(..)`.
+    let mut i = 0;
+    while i < name.len() {
+        if !is_tchar(name[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 #[cfg(test)]
@@ -158,5 +185,25 @@ mod tests {
         for bad in ["", "a b", "a;b", "a=b", "naïve", "a\r", "\"q\"", "a(b"] {
             assert!(!is_cookie_name(bad), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn cookie_name_bytes_agrees_with_the_str_form() {
+        // The str form delegates to the bytes form, but pin the agreement anyway so a
+        // future divergence (e.g. an extra check on one side) fails here.
+        for s in ["SID", "a!#$%&'*+-.^_`|~9", "", "a b", "a;b", "a=b", "naïve"] {
+            assert_eq!(
+                is_cookie_name_bytes(s.as_bytes()),
+                is_cookie_name(s),
+                "{s:?}"
+            );
+        }
+        // Over every single byte: exactly the tchars form a one-byte name.
+        for b in 0u8..=0xff {
+            assert_eq!(is_cookie_name_bytes(&[b]), is_tchar(b), "0x{b:02x}");
+        }
+        // Non-UTF-8 input is expressible only through the bytes form — and refused.
+        assert!(!is_cookie_name_bytes(b"\xff"));
+        assert!(!is_cookie_name_bytes(b"a\xffb"));
     }
 }

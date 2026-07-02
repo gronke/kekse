@@ -4,11 +4,12 @@
 
 use std::borrow::Cow;
 
-use percent_encoding::{percent_decode_str, utf8_percent_encode};
+use percent_encoding::{percent_decode, utf8_percent_encode};
 
 use rfc_6265::grammar::{is_cookie_octet, is_ws};
 
-use crate::grammar::{is_ws_char, ENCODE_FULL, ENCODE_IN_QUOTES};
+use crate::grammar::{ENCODE_FULL, ENCODE_IN_QUOTES};
+use crate::wire::trim_ws;
 
 /// How [`SetCookie`](crate::SetCookie) escapes a value for the wire. See the
 /// [crate docs](crate).
@@ -60,31 +61,36 @@ fn quote(value: &str) -> String {
 }
 
 /// The shared cookie-value pipeline, run by the request `Cookie:` reader
-/// (`split_pairs`) and — once it lands — the response `Set-Cookie` reader, so
+/// (`split_pairs`) and the response `Set-Cookie` reader (`SetCookie::parse`), so
 /// the read side can never drift from the write side ([`encode_value`]). Trims
 /// surrounding `SP`/`HTAB`, strips one wrapping `DQUOTE` pair, requires every
 /// remaining byte to be a cookie-octet (plus `SP`/`HTAB` when `allow_ws`), then
 /// percent-decodes to UTF-8. Returns `None` if a byte is outside the accepted
 /// set or the escapes do not decode to valid UTF-8.
 ///
+/// Takes raw bytes so a reader can run it on wire input *before* any UTF-8
+/// commitment: the octet gate admits only ASCII, so whatever passes it is valid
+/// UTF-8 for free, and the borrowed `Cow` path stays zero-copy exactly as the
+/// `&str` form was.
+///
 /// Percent-decoding is lenient (a stray `%` passes through), which is safe
 /// because [`encode_value`] always escapes `%`, so a value kekse produced
 /// never carries an ambiguous escape.
-pub(crate) fn decode_cookie_value(raw_value: &str, allow_ws: bool) -> Option<Cow<'_, str>> {
-    let value = raw_value.trim_matches(is_ws_char);
+pub(crate) fn decode_cookie_value(raw_value: &[u8], allow_ws: bool) -> Option<Cow<'_, str>> {
+    let value = trim_ws(raw_value);
     // Strip one wrapping `DQUOTE` pair when both are present; a lone or unmatched
     // quote is left for the cookie-octet check below to reject.
     let value = value
-        .strip_prefix('"')
-        .and_then(|inner| inner.strip_suffix('"'))
+        .strip_prefix(b"\"")
+        .and_then(|inner| inner.strip_suffix(b"\""))
         .unwrap_or(value);
     if !value
-        .bytes()
-        .all(|b| is_cookie_octet(b) || (allow_ws && is_ws(b)))
+        .iter()
+        .all(|&b| is_cookie_octet(b) || (allow_ws && is_ws(b)))
     {
         return None;
     }
-    percent_decode_str(value).decode_utf8().ok()
+    percent_decode(value).decode_utf8().ok()
 }
 
 #[cfg(test)]

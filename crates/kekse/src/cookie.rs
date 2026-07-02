@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 
 use crate::attributes::CookieAttributes;
-use crate::encoding::{encode_value, ValueEncoding};
+use crate::encoding::{ValueEncoding, encode_value};
 use crate::set_cookie::SetCookie;
 
 /// The request `Cookie:` cookie: a `name=value` pair with no attributes. It is
@@ -42,7 +42,7 @@ impl<'a> Cookie<'a> {
     }
 
     /// The cookie-name.
-    pub fn name(&self) -> &str {
+    pub const fn name(&self) -> &str {
         self.name
     }
 
@@ -58,7 +58,7 @@ impl<'a> Cookie<'a> {
     }
 
     /// The value's wire encoding.
-    pub fn encoding(&self) -> ValueEncoding {
+    pub const fn encoding(&self) -> ValueEncoding {
         self.encoding
     }
 

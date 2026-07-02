@@ -43,8 +43,10 @@ tracing = ["dep:tracing"]
 # axum `FromRequestParts` extractor (`CookieJarBuf`) for the request `Cookie:` header.
 axum = ["dep:axum-core"]
 # Reject public-suffix `Domain`s (supercookie defense) via rfc_6265's Public Suffix List.
+# Like `idna`, also gates `Domain` on LDH host-name syntax first (see `Domain::new`).
 psl = ["rfc_6265/psl"]
 # Validate internationalized `Domain`s (reject malformed punycode) via rfc_6265's IDNA.
+# Like `psl`, also gates `Domain` on LDH host-name syntax first (see `Domain::new`).
 idna = ["rfc_6265/idna"]
 # The full Domain-hardening suite. Opt-in (not in the default, dependency-light codec); pulls the
 # `psl`/`idna` trees and may carry a higher MSRV than the 1.88 core.

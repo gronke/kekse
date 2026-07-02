@@ -3,7 +3,7 @@
 //!
 //! Black-box over `parse_pairs`, `parse_pairs_strict`, and `CookieJar`.
 
-use kekse::{parse_pairs, parse_pairs_strict, CookieJar};
+use kekse::{CookieJar, parse_pairs, parse_pairs_strict};
 
 fn pairs(h: &str) -> Vec<(String, String)> {
     parse_pairs(h)

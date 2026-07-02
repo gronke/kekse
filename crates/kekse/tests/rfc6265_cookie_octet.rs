@@ -7,7 +7,7 @@
 
 mod common;
 
-use kekse::{encode_value, is_cookie_octet, parse_pairs, Domain, Path, ValueEncoding};
+use kekse::{Domain, Path, ValueEncoding, encode_value, is_cookie_octet, parse_pairs};
 
 /// RFC 6265 §4.1.1 `cookie-octet = %x21 / %x23-2B / %x2D-3A / %x3C-5B / %x5D-7E`.
 fn is_rfc_cookie_octet(b: u8) -> bool {

@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc afe1e6377f47e9abffa3a88f95163a957e4a9a3870bb52ed9188ed5516cb62ee # shrinks to wire = [65, 61, 37, 48, 66, 59, 0, 32, 35, 61, 37, 67, 50, 37, 65, 49]
+cc 5b928e7055f6e4be7333afb551afade995e51d8ba78d6988080b8f5372f909ef # shrinks to wire = "A=0\t0"

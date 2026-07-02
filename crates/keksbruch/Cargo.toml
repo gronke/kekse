@@ -21,8 +21,8 @@ kekse = { path = "../kekse" }
 rfc_6265 = { path = "../rfc_6265", features = ["date"] }
 
 # --- differential harness (opt-in; never built on the default / MSRV CI legs) ---
-# All optional and gated behind `differential`. cookie + biscotti are edition
-# 2024 / Rust 1.85; keeping them optional preserves kekse's MSRV 1.77.2.
+# All optional and gated behind `differential`: the matrix is opt-in tooling, so
+# its dependency tree stays out of the default `cargo test` and MSRV CI legs.
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
@@ -74,3 +74,7 @@ hardened = ["kekse/hardened"]
 # Layer A asserts the Set-Cookie HeaderValue gate rejects injection that a raw
 # attribute value could carry; kekse already pulls http transitively.
 http = { workspace = true }
+# The generative layer: random and structured-mutation wire fed through the same
+# universal invariants Layer A pins on the curated corpus. Stable-toolchain, so it
+# runs inside the sealed CI test legs; bounded case counts keep it fast.
+proptest = { workspace = true }

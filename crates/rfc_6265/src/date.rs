@@ -209,29 +209,29 @@ pub fn parse_cookie_date(value: &str) -> Option<OffsetDateTime> {
         if token.is_empty() {
             continue;
         }
-        if hms.is_none() {
-            if let Some(t) = match_time(token) {
-                hms = Some(t);
-                continue;
-            }
+        if hms.is_none()
+            && let Some(t) = match_time(token)
+        {
+            hms = Some(t);
+            continue;
         }
-        if day.is_none() {
-            if let Some(d) = match_day_of_month(token) {
-                day = Some(d);
-                continue;
-            }
+        if day.is_none()
+            && let Some(d) = match_day_of_month(token)
+        {
+            day = Some(d);
+            continue;
         }
-        if month.is_none() {
-            if let Some(m) = match_month(token) {
-                month = Some(m);
-                continue;
-            }
+        if month.is_none()
+            && let Some(m) = match_month(token)
+        {
+            month = Some(m);
+            continue;
         }
-        if year.is_none() {
-            if let Some(y) = match_year(token) {
-                year = Some(y);
-                continue;
-            }
+        if year.is_none()
+            && let Some(y) = match_year(token)
+        {
+            year = Some(y);
+            continue;
         }
     }
 

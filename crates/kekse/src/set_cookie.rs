@@ -5,15 +5,15 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use rfc_6265::date::{format_imf_fixdate, parse_cookie_date, parse_imf_fixdate};
-use rfc_6265::grammar::is_cookie_name;
 use rfc_6265::OffsetDateTime;
+use rfc_6265::date::{format_imf_fixdate, parse_cookie_date, parse_imf_fixdate};
 
 use crate::attributes::{CookieAttributes, Domain, Path};
 use crate::cookie::Cookie;
-use crate::encoding::{decode_cookie_value, ValueEncoding};
+use crate::encoding::{ValueEncoding, decode_cookie_value};
 use crate::grammar::is_ws_char;
 use crate::same_site::SameSite;
+use crate::wire::split_checked_pair;
 
 /// A `Set-Cookie:` response cookie: a [`Cookie`] kernel (name, value, wire
 /// encoding) plus [`CookieAttributes`] (`HttpOnly`, `SameSite`, `Secure`,
@@ -90,36 +90,40 @@ impl<'a> SetCookie<'a> {
     /// twice) signals something is wrong. A malformed *known* attribute (e.g. a non-numeric
     /// `Max-Age`) is dropped, not fatal, in both modes; lenient [`parse`](SetCookie::parse)
     /// tolerates duplicates (last-wins).
+    ///
+    /// Unlike [`parse_pairs_strict`](crate::parse_pairs_strict), strict mode does **not** tighten
+    /// the cookie-*value* pipeline: one wrapping quote pair is still stripped and raw `SP`/`HTAB`
+    /// inside the value is still accepted, exactly as in [`parse`](SetCookie::parse). This is
+    /// deliberate — every managed [`ValueEncoding`], including
+    /// [`Quoted`](ValueEncoding::Quoted) (which carries whitespace raw inside its quotes), must
+    /// round-trip through the strict reader. Response-side strictness polices the *attributes*,
+    /// not the value's escaping.
     pub fn parse_strict(header_value: &'a str) -> Option<Self> {
         Self::parse_with(header_value, true)
     }
 
     fn parse_with(header_value: &'a str, strict: bool) -> Option<Self> {
-        let (pair, attrs) = match header_value.split_once(';') {
-            Some((pair, rest)) => (pair, Some(rest)),
-            None => (header_value, None),
-        };
-        let (raw_name, raw_value) = pair.split_once('=')?;
-        let name = raw_name.trim_matches(is_ws_char);
-        if name.is_empty() || !is_cookie_name(name) {
+        // The leading segment is the `name=value` pair; everything after the first `;`
+        // is attributes. `str::split` always yields the leading segment, even for "".
+        let mut segments = header_value.split(';');
+        let (name, raw_value) = split_checked_pair(segments.next()?.as_bytes())?;
+        // The value pipeline is deliberately the lenient one in BOTH modes — see
+        // `parse_strict`'s docs: every managed encoding must round-trip through it.
+        let Some(value) = decode_cookie_value(raw_value, true) else {
+            #[cfg(feature = "tracing")]
+            tracing::debug!(
+                cookie = %name,
+                "rejecting Set-Cookie: value carries a byte outside the accepted \
+                 set or percent-escapes that are not valid UTF-8"
+            );
             return None;
-        }
-        let value = decode_cookie_value(raw_value, true)?;
+        };
         let mut set_cookie =
             Self::from_parts(Cookie::new(name, value), CookieAttributes::default());
-        // Bitmask of recognised attributes already seen, so strict mode can reject a duplicate
+        // Bits of recognised attributes already seen, so strict mode can reject a duplicate
         // (e.g. two `Domain=`). Lenient keeps last-wins, consistent across every attribute.
         let mut seen: u8 = 0;
-        macro_rules! once {
-            ($bit:expr) => {{
-                let b: u8 = $bit;
-                if strict && seen & b != 0 {
-                    return None; // strict: a repeated attribute rejects the whole cookie
-                }
-                seen |= b;
-            }};
-        }
-        for piece in attrs.into_iter().flat_map(|a| a.split(';')) {
+        for piece in segments {
             let (attr, val) = match piece.split_once('=') {
                 Some((a, v)) => (a.trim_matches(is_ws_char), v.trim_matches(is_ws_char)),
                 None => (piece.trim_matches(is_ws_char), ""),
@@ -127,43 +131,46 @@ impl<'a> SetCookie<'a> {
             if attr.is_empty() {
                 continue; // a stray or trailing `;` — not an attribute
             }
-            if attr.eq_ignore_ascii_case(attr_name::HTTP_ONLY) {
-                once!(0x01);
-                set_cookie.attributes.http_only = true;
-            } else if attr.eq_ignore_ascii_case(attr_name::SECURE) {
-                once!(0x02);
-                set_cookie.attributes.secure = true;
-            } else if attr.eq_ignore_ascii_case(attr_name::SAME_SITE) {
-                once!(0x04);
+            let Some(known) = KnownAttribute::recognize(attr) else {
+                if strict {
+                    // Strict (opt-in): an unrecognised attribute rejects the cookie.
+                    return None;
+                }
+                // Default: an unrecognised attribute is ignored (RFC 6265 §5.2).
+                continue;
+            };
+            if strict && seen & known.bit() != 0 {
+                return None; // strict: a repeated attribute rejects the whole cookie
+            }
+            seen |= known.bit();
+            let attributes = &mut set_cookie.attributes;
+            match known {
+                KnownAttribute::HttpOnly => attributes.http_only = true,
+                KnownAttribute::Secure => attributes.secure = true,
                 // `.ok()` drops an unrecognised token (keeping the cookie), same as
                 // a malformed Max-Age — see `SameSite`'s case-insensitive `FromStr`.
-                set_cookie.attributes.same_site = val.parse::<SameSite>().ok();
-            } else if attr.eq_ignore_ascii_case(attr_name::PATH) {
-                once!(0x08);
+                KnownAttribute::SameSite => {
+                    attributes.same_site = noted(val.parse::<SameSite>().ok(), known, val);
+                }
                 // An invalid value (control byte, `;`, non-ASCII) is dropped like a
                 // malformed Max-Age — the cookie is kept, the attribute discarded.
-                set_cookie.attributes.path = Path::new(val);
-            } else if attr.eq_ignore_ascii_case(attr_name::DOMAIN) {
-                once!(0x10);
-                set_cookie.attributes.domain = Domain::new(val);
-            } else if attr.eq_ignore_ascii_case(attr_name::MAX_AGE) {
-                once!(0x20);
-                set_cookie.attributes.max_age = val.parse::<u64>().ok();
-            } else if attr.eq_ignore_ascii_case(attr_name::EXPIRES) {
-                once!(0x40);
+                KnownAttribute::Path => attributes.path = noted(Path::new(val), known, val),
+                KnownAttribute::Domain => attributes.domain = noted(Domain::new(val), known, val),
+                KnownAttribute::MaxAge => {
+                    attributes.max_age = noted(val.parse::<u64>().ok(), known, val);
+                }
                 // RFC 6265 §5.1.1 (lenient) / RFC 7231 IMF-fixdate (strict). An
                 // unparseable date is dropped like any malformed known attribute —
                 // the cookie survives.
-                set_cookie.attributes.expires = if strict {
-                    parse_imf_fixdate(val)
-                } else {
-                    parse_cookie_date(val)
-                };
-            } else if strict {
-                // Strict (opt-in): an unrecognised attribute rejects the cookie.
-                return None;
+                KnownAttribute::Expires => {
+                    let parsed = if strict {
+                        parse_imf_fixdate(val)
+                    } else {
+                        parse_cookie_date(val)
+                    };
+                    attributes.expires = noted(parsed, known, val);
+                }
             }
-            // Default: an unrecognised attribute is ignored (RFC 6265 §5.2).
         }
         Some(set_cookie)
     }
@@ -344,6 +351,85 @@ mod attr_name {
     pub const EXPIRES: &str = "Expires";
 }
 
+/// A recognised `Set-Cookie` attribute — the parser's dispatch unit. Recognition
+/// ([`recognize`](KnownAttribute::recognize)), strict duplicate accounting
+/// ([`bit`](KnownAttribute::bit)), and application (the `match` in `parse_with`)
+/// are separate phases: the compiler forces [`name`](KnownAttribute::name) and
+/// the applying `match` to cover every variant, and the duplicate bit derives
+/// from the discriminant, so none of the three can drift the way a hand-numbered
+/// bitmask across an `if`/`else` chain could.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KnownAttribute {
+    HttpOnly,
+    Secure,
+    SameSite,
+    Path,
+    Domain,
+    MaxAge,
+    Expires,
+}
+
+impl KnownAttribute {
+    /// Every recognisable attribute. [`recognize`](KnownAttribute::recognize)
+    /// scans this list, so a variant missing here would be unreachable from the
+    /// wire — the recognition test walks it against every canonical name.
+    const ALL: [Self; 7] = [
+        Self::HttpOnly,
+        Self::Secure,
+        Self::SameSite,
+        Self::Path,
+        Self::Domain,
+        Self::MaxAge,
+        Self::Expires,
+    ];
+
+    /// The canonical wire name — the same `attr_name` constant the serializer
+    /// renders, so reader and writer share one spelling per attribute.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::HttpOnly => attr_name::HTTP_ONLY,
+            Self::Secure => attr_name::SECURE,
+            Self::SameSite => attr_name::SAME_SITE,
+            Self::Path => attr_name::PATH,
+            Self::Domain => attr_name::DOMAIN,
+            Self::MaxAge => attr_name::MAX_AGE,
+            Self::Expires => attr_name::EXPIRES,
+        }
+    }
+
+    /// Match a wire attribute name, ASCII-case-insensitively (RFC 6265 §5.2).
+    fn recognize(attr: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|known| attr.eq_ignore_ascii_case(known.name()))
+    }
+
+    /// This attribute's bit in the strict-mode duplicate mask, derived from the
+    /// discriminant (7 variants fit a `u8`) — collision-free by construction.
+    const fn bit(self) -> u8 {
+        1 << (self as u8)
+    }
+}
+
+/// Pass a known attribute's parse result through, debug-logging the fail-soft
+/// drop when it is `None` — the malformed-known-attribute skip the crate docs
+/// promise, observable like the readers' pair-level skips. The cookie is kept
+/// either way; only the attribute is lost (and in lenient last-wins, an earlier
+/// good occurrence is still overwritten by a later malformed one).
+fn noted<T>(parsed: Option<T>, attribute: KnownAttribute, raw_value: &str) -> Option<T> {
+    #[cfg(feature = "tracing")]
+    if parsed.is_none() {
+        tracing::debug!(
+            attribute = attribute.name(),
+            value = %raw_value.escape_debug(),
+            "dropping a malformed known attribute; the cookie is kept"
+        );
+    }
+    #[cfg(not(feature = "tracing"))]
+    let _ = (attribute, raw_value);
+    parsed
+}
+
 /// One rendered `Set-Cookie` attribute — the typed unit the serializer emits.
 ///
 /// [`to_set_cookie`](SetCookie::to_set_cookie) turns each set attribute into one
@@ -420,6 +506,62 @@ impl TryFrom<&SetCookie<'_>> for http::HeaderValue {
 mod tests {
     use super::*;
 
+    // ---- the KnownAttribute dispatch table ---------------------------------
+
+    #[test]
+    fn known_attribute_bits_are_distinct_and_recognition_is_case_insensitive() {
+        let mut mask = 0u8;
+        for known in KnownAttribute::ALL {
+            // Every bit is fresh — the mask can address each attribute independently.
+            assert_eq!(mask & known.bit(), 0, "{known:?} bit collides");
+            mask |= known.bit();
+            // The canonical name and its case variants all recognize back to the variant.
+            assert_eq!(KnownAttribute::recognize(known.name()), Some(known));
+            assert_eq!(
+                KnownAttribute::recognize(&known.name().to_ascii_uppercase()),
+                Some(known)
+            );
+            assert_eq!(
+                KnownAttribute::recognize(&known.name().to_ascii_lowercase()),
+                Some(known)
+            );
+        }
+        // An attribute this version does not model stays unrecognised.
+        assert_eq!(KnownAttribute::recognize("Partitioned"), None);
+        assert_eq!(KnownAttribute::recognize(""), None);
+    }
+
+    #[test]
+    fn strict_rejects_a_duplicate_of_every_attribute() {
+        // One duplicated occurrence per recognisable attribute — each must reject in
+        // strict and keep last-wins in lenient.
+        for (known, dup) in [
+            (KnownAttribute::HttpOnly, "HttpOnly; HttpOnly"),
+            (KnownAttribute::Secure, "Secure; Secure"),
+            (KnownAttribute::SameSite, "SameSite=Lax; SameSite=Strict"),
+            (KnownAttribute::Path, "Path=/a; Path=/b"),
+            (KnownAttribute::Domain, "Domain=a.test; Domain=b.test"),
+            (KnownAttribute::MaxAge, "Max-Age=1; Max-Age=2"),
+            (
+                KnownAttribute::Expires,
+                "Expires=Sun, 06 Nov 1994 08:49:37 GMT; Expires=Mon, 07 Nov 1994 08:49:37 GMT",
+            ),
+        ] {
+            let header = format!("n=v; {dup}");
+            assert!(
+                SetCookie::parse_strict(&header).is_none(),
+                "strict must reject the duplicated {:?} in {header:?}",
+                known.name()
+            );
+            assert!(
+                SetCookie::parse(&header).is_some(),
+                "lenient must keep the cookie for {header:?}"
+            );
+        }
+        // The ALL table drives the loop above; make sure the loop covered it fully.
+        assert_eq!(KnownAttribute::ALL.len(), 7);
+    }
+
     // ---- rendering --------------------------------------------------------
 
     #[test]
@@ -452,14 +594,18 @@ mod tests {
 
     #[test]
     fn builder_max_age_is_u64_without_saturation() {
-        assert!(SetCookie::new("n", "v")
-            .max_age(u64::MAX)
-            .to_set_cookie()
-            .ends_with("; Max-Age=18446744073709551615"));
-        assert!(SetCookie::new("n", "v")
-            .max_age(0)
-            .to_set_cookie()
-            .ends_with("; Max-Age=0"));
+        assert!(
+            SetCookie::new("n", "v")
+                .max_age(u64::MAX)
+                .to_set_cookie()
+                .ends_with("; Max-Age=18446744073709551615")
+        );
+        assert!(
+            SetCookie::new("n", "v")
+                .max_age(0)
+                .to_set_cookie()
+                .ends_with("; Max-Age=0")
+        );
     }
 
     #[test]

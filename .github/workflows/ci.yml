@@ -109,8 +109,8 @@ jobs:
   # that toolchain, SEALED: build-image resolves `msrv` from Cargo.toml's
   # rust-version, so the whole build runs on the support floor and a dependency
   # that raises its MSRV fails here. `--locked` pins the MSRV-verified dependency
-  # versions. (keksbruch's differential deps need newer toolchains and are not
-  # built here.)
+  # versions. (keksbruch is a dev-only harness and is deliberately not built on
+  # the MSRV leg.)
   msrv:
     name: build (MSRV 1.88.0, sealed)
     runs-on: ubuntu-latest

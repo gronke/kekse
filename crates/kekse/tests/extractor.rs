@@ -4,12 +4,12 @@
 //! session id, lenient for a preference), and extraction is infallible.
 #![cfg(feature = "axum")]
 
+use axum::Router;
 use axum::body::Body;
 use axum::http::header::COOKIE;
 use axum::http::{Request, StatusCode};
 use axum::response::Response;
 use axum::routing::get;
-use axum::Router;
 use tower::ServiceExt; // oneshot
 
 use kekse::CookieJarBuf;
@@ -101,5 +101,22 @@ async fn fail_soft_junk_never_hides_the_session_cookie() {
         .oneshot(get_request("/sid", Some(header)))
         .await
         .unwrap();
+    assert_eq!(body_string(resp).await, "deadbeef");
+}
+
+#[tokio::test]
+async fn obs_text_in_the_header_never_hides_the_session_cookie() {
+    // 0xE9 is obs-text: a perfectly legal HeaderValue byte that is not UTF-8.
+    // The extractor takes the header bytes verbatim, so only the pair carrying
+    // the stray byte is refused — the session cookie beside it still reads.
+    // (The String-backed extractor dropped this ENTIRE header at to_str().)
+    let header = axum::http::HeaderValue::from_bytes(b"pref=caf\xE9; SID=deadbeef").unwrap();
+    let request = Request::builder()
+        .uri("/sid")
+        .header(COOKIE, header)
+        .body(Body::empty())
+        .unwrap();
+    let resp = app().oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(body_string(resp).await, "deadbeef");
 }

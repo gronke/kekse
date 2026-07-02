@@ -1,20 +1,20 @@
 //! The request `Cookie:` dialect: the [`parse_pairs`] / [`parse_pairs_strict`]
-//! readers and the [`CookieJar`] typed view layered on them.
+//! readers (with their [`parse_pairs_bytes`] / [`parse_pairs_bytes_strict`]
+//! byte-level twins) and the [`CookieJar`] typed view layered on them.
 
 use std::borrow::Cow;
 
 use crate::cookie::Cookie;
-use crate::encoding::{decode_cookie_value, ValueEncoding};
-use crate::grammar::is_ws_char;
+use crate::encoding::{ValueEncoding, decode_cookie_value};
+use crate::wire::split_checked_pair;
 use http::header::{HeaderValue, InvalidHeaderValue};
-use rfc_6265::grammar::is_cookie_name;
 
 /// Parse a request `Cookie` header into `(name, decoded value)` pairs, in order,
 /// yielding every well-formed pair. Lenient: tolerates raw whitespace and the
 /// quoted form. The inverse of [`encode_value`](crate::encode_value) /
 /// [`SetCookie`](crate::SetCookie). See the [crate docs](crate).
 pub fn parse_pairs(header: &str) -> impl Iterator<Item = (&str, Cow<'_, str>)> {
-    split_pairs(header, true)
+    parse_pairs_bytes(header.as_bytes())
 }
 
 /// Like [`parse_pairs`] but **strict**: a value byte outside the RFC 6265
@@ -22,26 +22,32 @@ pub fn parse_pairs(header: &str) -> impl Iterator<Item = (&str, Cow<'_, str>)> {
 /// Use this for a session cookie or any value you minted yourself, where a shape
 /// you could not have emitted should not be trusted.
 pub fn parse_pairs_strict(header: &str) -> impl Iterator<Item = (&str, Cow<'_, str>)> {
+    parse_pairs_bytes_strict(header.as_bytes())
+}
+
+/// [`parse_pairs`] on raw header bytes, for callers on the wire side of UTF-8 —
+/// an `http` `HeaderValue` may legally carry obs-text (`>= 0x80`) that
+/// `to_str()` refuses wholesale. Fail-soft stays **per pair** here: a pair
+/// carrying a non-ASCII byte is refused individually (raw non-ASCII is outside
+/// the grammar in every mode), while its well-formed neighbors survive. Names
+/// come back as `&str` for free (tokens are ASCII); values decode to UTF-8
+/// `Cow`s that borrow the buffer whenever no escape actually decoded.
+pub fn parse_pairs_bytes(header: &[u8]) -> impl Iterator<Item = (&str, Cow<'_, str>)> {
+    split_pairs(header, true)
+}
+
+/// [`parse_pairs_strict`] on raw header bytes — see [`parse_pairs_bytes`].
+pub fn parse_pairs_bytes_strict(header: &[u8]) -> impl Iterator<Item = (&str, Cow<'_, str>)> {
     split_pairs(header, false)
 }
 
 /// Each `;`-separated segment runs an independent, fail-soft pipeline — a
 /// malformed segment is skipped (logged at `debug`), never aborting the whole
-/// header. Per segment: split at the first `=` (so `=` survives in a value);
-/// trim `SP`/`HTAB` around the name; the name must be a non-empty token; then
-/// the value runs through [`decode_cookie_value`].
-fn split_pairs(header: &str, allow_ws: bool) -> impl Iterator<Item = (&str, Cow<'_, str>)> {
-    header.split(';').filter_map(move |segment| {
-        let (raw_name, raw_value) = segment.split_once('=')?;
-        let name = raw_name.trim_matches(is_ws_char);
-        if name.is_empty() || !is_cookie_name(name) {
-            #[cfg(feature = "tracing")]
-            tracing::debug!(
-                name = %name.escape_debug(),
-                "ignoring a cookie pair with an empty or non-token name"
-            );
-            return None;
-        }
+/// header. Per segment: [`split_checked_pair`] (first `=`, OWS-trimmed
+/// token-gated name), then the value runs through [`decode_cookie_value`].
+fn split_pairs(header: &[u8], allow_ws: bool) -> impl Iterator<Item = (&str, Cow<'_, str>)> {
+    header.split(|&b| b == b';').filter_map(move |segment| {
+        let (name, raw_value) = split_checked_pair(segment)?;
         let value = decode_cookie_value(raw_value, allow_ws);
         #[cfg(feature = "tracing")]
         if value.is_none() {
@@ -83,6 +89,27 @@ impl<'a> CookieJar<'a> {
     pub fn parse_strict(header: &'a str) -> Self {
         Self {
             cookies: parse_pairs_strict(header)
+                .map(|(name, value)| Cookie::new(name, value))
+                .collect(),
+        }
+    }
+
+    /// [`parse`](CookieJar::parse) on raw header bytes (see
+    /// [`parse_pairs_bytes`]): fail-soft per pair even when the header carries
+    /// obs-text a `to_str()` boundary would have to refuse wholesale.
+    pub fn parse_bytes(header: &'a [u8]) -> Self {
+        Self {
+            cookies: parse_pairs_bytes(header)
+                .map(|(name, value)| Cookie::new(name, value))
+                .collect(),
+        }
+    }
+
+    /// [`parse_strict`](CookieJar::parse_strict) on raw header bytes (see
+    /// [`parse_pairs_bytes_strict`]).
+    pub fn parse_bytes_strict(header: &'a [u8]) -> Self {
+        Self {
+            cookies: parse_pairs_bytes_strict(header)
                 .map(|(name, value)| Cookie::new(name, value))
                 .collect(),
         }
@@ -191,7 +218,7 @@ impl<'a, 's> IntoIterator for &'s CookieJar<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{encode_value, ValueEncoding};
+    use crate::{ValueEncoding, encode_value};
 
     fn lenient(header: &str) -> Vec<(&str, String)> {
         parse_pairs(header)
@@ -312,7 +339,7 @@ mod tests {
         assert_eq!(lenient_first(r#"n="""#).as_deref(), Some("")); // empty quoted
         assert_eq!(lenient_first(r#"n="a b""#).as_deref(), Some("a b"));
         assert_eq!(lenient_first(r#"n="%41""#).as_deref(), Some("A")); // decoded inside
-                                                                       // strict strips one quote pair, then requires octets
+        // strict strips one quote pair, then requires octets
         assert_eq!(strict_first(r#"n="v""#).as_deref(), Some("v"));
         assert!(strict_first(r#"n="a b""#).is_none()); // space refused by strict
     }
@@ -451,6 +478,70 @@ mod tests {
         let jar = CookieJar::parse("n=a\u{1}b; m=ok");
         assert!(jar.get("n").is_none());
         assert_eq!(jar.get("m").map(|c| c.value()), Some("ok"));
+    }
+
+    // ---- the bytes readers -------------------------------------------------
+
+    #[test]
+    fn bytes_and_str_readers_agree_on_utf8_input() {
+        // The str readers ARE the bytes readers over as_bytes(); pin it anyway so a
+        // future divergence (an extra gate on one side) fails here, over headers that
+        // exercise quoting, escapes, whitespace, junk segments, and non-ASCII refusal.
+        for header in [
+            "",
+            "a=1; b=2; c=3",
+            "n=a=b",
+            " n = v ; m=%41",
+            "n=\"a b\"; strictfail=x y",
+            ";; =v; novalue; ok=1",
+            "n=caf\u{e9}; m=ok",
+            "n=%C3%A9; bad=%FF; m=ok",
+        ] {
+            let via_str: Vec<(&str, String)> = lenient(header);
+            let via_bytes: Vec<(&str, String)> = parse_pairs_bytes(header.as_bytes())
+                .map(|(n, v)| (n, v.into_owned()))
+                .collect();
+            assert_eq!(via_bytes, via_str, "lenient on {header:?}");
+
+            let via_str: Vec<(&str, String)> = strict(header);
+            let via_bytes: Vec<(&str, String)> = parse_pairs_bytes_strict(header.as_bytes())
+                .map(|(n, v)| (n, v.into_owned()))
+                .collect();
+            assert_eq!(via_bytes, via_str, "strict on {header:?}");
+        }
+    }
+
+    #[test]
+    fn obs_text_pair_is_dropped_alone_not_the_header() {
+        // Raw 0xE9 is obs-text a HeaderValue may carry but to_str() refuses wholesale.
+        // The bytes reader keeps fail-soft per PAIR: only the carrying pair is refused.
+        let wire = b"good=1; bad=caf\xE9; m=ok";
+        let pairs: Vec<(&str, String)> = parse_pairs_bytes(wire)
+            .map(|(n, v)| (n, v.into_owned()))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![("good", "1".to_string()), ("m", "ok".to_string())]
+        );
+        // Same through the jar view, in both modes.
+        let jar = CookieJar::parse_bytes(wire);
+        assert_eq!(jar.len(), 2);
+        assert!(jar.get("bad").is_none());
+        let jar = CookieJar::parse_bytes_strict(wire);
+        assert_eq!(jar.get("m").map(|c| c.value()), Some("ok"));
+        // Even a non-UTF-8 NAME only costs its own pair.
+        let pairs: Vec<(&str, String)> = parse_pairs_bytes(b"a\xFFb=v; m=ok")
+            .map(|(n, v)| (n, v.into_owned()))
+            .collect();
+        assert_eq!(pairs, vec![("m", "ok".to_string())]);
+    }
+
+    #[test]
+    fn bytes_value_borrows_when_octet_clean() {
+        // The zero-copy pin, bytes-path twin of jar_value_borrows_when_octet_clean.
+        let jar = CookieJar::parse_bytes_strict(b"SID=deadbeef");
+        let cookie = jar.into_iter().next().unwrap();
+        assert!(matches!(cookie.into_value(), Cow::Borrowed(_)));
     }
 
     // ---- write side: build / mutate / serialize ---------------------------

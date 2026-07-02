@@ -25,9 +25,9 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use base64::prelude::{Engine as _, BASE64_STANDARD};
-use maud::{html, Markup, PreEscaped};
-use pulldown_cmark::{html as cmark_html, Options, Parser};
+use base64::prelude::{BASE64_STANDARD, Engine as _};
+use maud::{Markup, PreEscaped, html};
+use pulldown_cmark::{Options, Parser, html as cmark_html};
 use serde::Serialize;
 use tera::{Context, Tera};
 
