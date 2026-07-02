@@ -25,7 +25,7 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
   # Resilient crates.io downloads in the one networked step (cargo-fetch): more
   # retries and HTTP/1.1, which sidesteps the intermittent curl "[16] HTTP2 framing
-  # layer" error. Forwarded into the container via CARGO_.* (see #26).
+  # layer" error. Forwarded into the container via CARGO_.*.
   CARGO_NET_RETRY: "10"
   CARGO_HTTP_MULTIPLEXING: "false"
 

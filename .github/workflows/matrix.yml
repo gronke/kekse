@@ -68,7 +68,7 @@ jobs:
       DOTNET_VERSION: ${{ inputs.dotnet_version }}
       # Resilient crates.io downloads: more retries + HTTP/1.1, sidestepping the
       # intermittent curl "[16] HTTP2 framing layer" error while `cargo` updates the
-      # index / downloads deps in the "Generate the matrix" step (see #26).
+      # index / downloads deps in the "Generate the matrix" step.
       CARGO_NET_RETRY: "10"
       CARGO_HTTP_MULTIPLEXING: "false"
     steps:
