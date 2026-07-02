@@ -58,9 +58,10 @@ jobs:
         with:
           package: rfc_6265
 
-      # kekse path-depends on `rfc_6265 = { version = "0.1" }`. Until rfc_6265 0.1.x is
-      # actually on crates.io, kekse's `cargo package` verify-build can't resolve that
-      # dependency, so this step is advisory for now (classic workspace publish-order).
+      # kekse path-depends on rfc_6265 pinned at the workspace version (0.2 as of this
+      # writing — see crates/kekse/Cargo.toml). Until that rfc_6265 version is actually
+      # on crates.io, kekse's `cargo package` verify-build can't resolve the dependency,
+      # so this step is advisory for now (classic workspace publish-order).
       # Promote it to a hard gate (drop continue-on-error) after rfc_6265's first publish.
       - name: Dry-run kekse (advisory until rfc_6265 is published)
         continue-on-error: true
