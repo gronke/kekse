@@ -14,9 +14,8 @@ env:
   # The ONE place the gronke/rust-ci version is pinned. Each job checks the repo
   # out once at this ref, then uses its actions by local ./ path — GitHub does not
   # allow an expression in a step's `uses:`, so this is how the ref stays single-
-  # sourced. Bump here only. Currently a main SHA (rust-ci is pre-v1); switch it to
-  # a tag (e.g. v1) once rust-ci cuts one.
-  RUST_CI_REF: 20d04cdfa016537dec1c8a68e520ac46052680f7
+  # sourced. Bump here only; pinned to the signed release tag.
+  RUST_CI_REF: v0.0.4
   # Incremental compilation is counter-productive in CI: it bloats the cache and
   # never pays off across the clean checkouts each run starts from. No debug symbols
   # either — nobody attaches a debugger to CI artifacts. Both are CARGO_* so the
@@ -65,7 +64,8 @@ jobs:
           lockfiles: Cargo.lock
 
       # Build the pinned toolchain image (rust:latest + clippy/rustfmt/jq) and load
-      # it locally. cache:false keeps this off actions/github-script@v7 (Node 20).
+      # it locally. The default cache:false skips the buildx/GHA-cache setup — the
+      # added layer is a quick component install; flip it if image builds get heavy.
       - name: Build toolchain image
         uses: ./.rust-ci/.github/actions/build-image
 
