@@ -65,9 +65,18 @@ Parsers that rejected the cookie outright are omitted.
 
 {{ fidelity_table }}
 
-## Divergences worth knowing
+## Tested scenarios
 
-{{ divergences }}
+One line per test — the id each matrix column is headed by, and what its wire probes.
+Outcomes are not repeated here; read them from the tables above (a **bold** cell diverges from the consensus).
+
+### Request `Cookie:` scenarios
+
+{{ request_scenarios }}
+
+### Response `Set-Cookie:` scenarios
+
+{{ response_scenarios }}
 
 ## Tested against
 

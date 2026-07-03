@@ -25,7 +25,7 @@ fn render_parser_divergence_matrix() {
         "## Legend",
         "## Request `Cookie:` parsers",
         "## Attribute fidelity",
-        "## Divergences worth knowing",
+        "## Tested scenarios",
         "## Tested against",
         "unavailable",
     ] {

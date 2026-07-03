@@ -1,7 +1,7 @@
 //! Render the differential matrix from **one prose template plus precompiled
 //! fragments**. The document's English text lives in `cookie_matrix.md.tera`
 //! (authored Markdown with `{{ … }}` markers); the dynamic parts — the two wide
-//! matrix tables, the attribute-fidelity grid, and the divergences / versions lists —
+//! matrix tables, the attribute-fidelity grid, and the scenario-index / versions lists —
 //! are built here in two forms and spliced in by Tera:
 //!
 //! * [`render`] inserts the **Markdown** fragments → `COOKIE_MATRIX.md`.
@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use base64::prelude::{BASE64_STANDARD, Engine as _};
-use maud::{Markup, html};
+use maud::{Markup, PreEscaped, html};
 use pulldown_cmark::{Options, Parser, html as cmark_html};
 use serde::Serialize;
 use tera::{Context, Tera};
@@ -58,9 +58,10 @@ const DOWNLOADS_HTML: &str = "<p class=\"downloads\">Download the same matrix: \
 const CSS: &str = r#":root{--fg:#1f2933;--muted:#9aa5b1;--line:#e1e6eb;--head:#1f2933;--head-fg:#f5f7fa;--rowhead:#f4f6f9;--ref:#eaf1f8;--diverge:#fff3bf;--accent:#1565c0}
 *{box-sizing:border-box}
 body{margin:0;padding:0 0 4rem;font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--fg);background:#fff}
-h1,h2,p,ul{padding-left:1.5rem;padding-right:1.5rem}
+h1,h2,h3,p,ul{padding-left:1.5rem;padding-right:1.5rem}
 h1{margin:1.6rem 0 .3rem;font-size:1.55rem}
 h2{margin:2.2rem 0 .6rem;font-size:1.2rem}
+h3{margin:1.6rem 0 .4rem;font-size:1.05rem}
 p{margin:.55rem 0;color:#3e4c59}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.85em}
@@ -476,61 +477,34 @@ fn build_fidelity(rows: &[(String, [bool; 6])]) -> Table {
     }
 }
 
-// ── divergences worth knowing ────────────────────────────────────────────────────
-// The scenarios where kekse (the subject) renders a different outcome than the
-// real-world consensus — surfaced as an overview of *which* tests diverge; the
-// outcomes themselves live in the matrix rows above, not here.
+// ── tested scenarios ───────────────────────────────────────────────────────────────
+// The per-direction index of every scenario — the id each matrix column is headed
+// by, and what its wire probes. Outcomes stay in the tables above; this is the key.
 
-/// One "kekse diverges here" entry: the scenario id and what it exercises. Both are
-/// authored scenario strings, not parsed cookie output.
-struct Divergence<'a> {
-    id: &'a str,
-    description: &'a str,
-}
-
-/// Collect the scenarios where a subject (kekse) column diverges from consensus.
-fn divergences<'a>(
-    scenarios: &'a [Scenario],
-    columns: &[Column],
-    cons: &[Option<String>],
-) -> Vec<Divergence<'a>> {
-    let subjects: Vec<&Column> = columns.iter().filter(|c| c.is_subject()).collect();
-    let mut out = Vec::new();
-    for (row, scenario) in scenarios.iter().enumerate() {
-        let Some(con) = cons[row].as_ref() else {
-            continue;
-        };
-        if !subjects
-            .iter()
-            .any(|c| c.cells[row].consensus_key() != *con)
-        {
-            continue;
-        }
-        out.push(Divergence {
-            id: scenario.id,
-            description: scenario.description,
-        });
-    }
-    out
-}
-
-/// The divergences list as Markdown bullets (no heading — that lives in the template).
-fn md_divergences(divs: &[Divergence]) -> String {
-    divs.iter()
-        .map(|d| format!("- **`{}`** — {}.", d.id, d.description))
+/// One section's scenario index as Markdown bullets (no heading — that lives in the
+/// template).
+fn md_scenario_index(rows: &[usize], scenarios: &[Scenario]) -> String {
+    rows.iter()
+        .map(|&r| {
+            format!(
+                "- **`{}`** — {}.",
+                scenarios[r].id, scenarios[r].description
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-/// The divergences list as an HTML `<ul>` (no heading; `maud` escapes the strings).
-fn html_divergences(divs: &[Divergence]) -> Markup {
+/// One section's scenario index as an HTML `<ul>` (no heading). Descriptions are
+/// authored inline Markdown (backtick spans), rendered via [`md_inline`].
+fn html_scenario_index(rows: &[usize], scenarios: &[Scenario]) -> Markup {
     html! {
         ul {
-            @for d in divs {
+            @for &r in rows {
                 li {
-                    strong { code { (d.id) } }
+                    strong { code { (scenarios[r].id) } }
                     " — "
-                    (d.description)
+                    (PreEscaped(md_inline(scenarios[r].description)))
                     "."
                 }
             }
@@ -693,8 +667,12 @@ pub fn render(scenarios: &[Scenario], columns: &[Column], versions: &[String]) -
         &table::to_markdown(&build_fidelity(&attribute_fidelity(scenarios, columns))),
     );
     ctx.insert(
-        "divergences",
-        &md_divergences(&divergences(scenarios, columns, &cons)),
+        "request_scenarios",
+        &md_scenario_index(&req_rows, scenarios),
+    );
+    ctx.insert(
+        "response_scenarios",
+        &md_scenario_index(&resp_rows, scenarios),
     );
     ctx.insert("versions", &md_versions(versions));
 
@@ -732,8 +710,12 @@ pub fn render_html(scenarios: &[Scenario], columns: &[Column], versions: &[Strin
         &table::to_html(&build_fidelity(&attribute_fidelity(scenarios, columns))).into_string(),
     );
     ctx.insert(
-        "divergences",
-        &html_divergences(&divergences(scenarios, columns, &cons)).into_string(),
+        "request_scenarios",
+        &html_scenario_index(&req_rows, scenarios).into_string(),
+    );
+    ctx.insert(
+        "response_scenarios",
+        &html_scenario_index(&resp_rows, scenarios).into_string(),
     );
     ctx.insert("versions", &html_versions(versions).into_string());
     let body = Tera::one_off(&converted, &ctx, false).expect("matrix HTML template renders");
