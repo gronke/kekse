@@ -8,8 +8,13 @@
 //! non-UTF-8 payloads a `&str` can never carry). The str form *is* the bytes
 //! form over `as_bytes()`, mirroring kekse's own layering.
 
-use kekse::{Cookie, is_cookie_name, parse_pairs_bytes, parse_pairs_bytes_strict};
+use kekse::{
+    Cookie, CookieJar, SetCookie, is_cookie_name, parse_pairs_bytes, parse_pairs_bytes_strict,
+    try_parse_pairs_bytes, try_parse_pairs_bytes_strict,
+};
 use rfc_6265::grammar::is_ctl;
+
+use crate::taxonomy::Direction;
 
 /// Drive both request readers to completion. kekse's no-panic promise is
 /// structural — the readers return iterators, so merely exhausting them in a test
@@ -85,5 +90,141 @@ pub fn assert_strict_subset_of_lenient_bytes(wire: &[u8]) {
             lenient.contains(&pair),
             "strict yielded {pair:?}, not present in lenient, for {wire:?}"
         );
+    }
+}
+
+/// A rendered issue must never carry a raw control byte — the report's own
+/// no-echo promise: printing what the wire did wrong must not let the wire do
+/// it again in whatever log line or response the report lands in.
+fn assert_issue_display_safe(rendered: &str, wire: &[u8]) {
+    assert!(
+        !rendered.bytes().any(|b| b.is_ascii_control()),
+        "rendered issue echoes a control byte for {wire:?}: {rendered:?}"
+    );
+}
+
+/// The reporting request readers are the plain readers plus data, never a
+/// different parse. Three prongs:
+///
+/// - The `Ok` items of `try_parse_pairs*` equal the plain readers' output
+///   exactly, in both modes — the report can never change what parses.
+/// - Lenient's issue set is a subset of strict's — the report dual of
+///   strict ⊆ lenient: everything lenient refuses, strict refuses too.
+/// - Every rendered issue is control-byte-free (see the no-echo promise).
+pub fn assert_report_consistency(wire: &str) {
+    assert_report_consistency_bytes(wire.as_bytes());
+}
+
+/// [`assert_report_consistency`] over raw wire bytes.
+pub fn assert_report_consistency_bytes(wire: &[u8]) {
+    for strict in [false, true] {
+        let plain: Vec<(String, String)> = if strict {
+            parse_pairs_bytes_strict(wire)
+                .map(|(n, v)| (n.to_string(), v.into_owned()))
+                .collect()
+        } else {
+            parse_pairs_bytes(wire)
+                .map(|(n, v)| (n.to_string(), v.into_owned()))
+                .collect()
+        };
+        let reported: Vec<(String, String)> = if strict {
+            try_parse_pairs_bytes_strict(wire)
+                .filter_map(Result::ok)
+                .map(|(n, v)| (n.to_string(), v.into_owned()))
+                .collect()
+        } else {
+            try_parse_pairs_bytes(wire)
+                .filter_map(Result::ok)
+                .map(|(n, v)| (n.to_string(), v.into_owned()))
+                .collect()
+        };
+        assert_eq!(
+            reported, plain,
+            "reporting Ok items diverge from the plain reader (strict={strict}) for {wire:?}"
+        );
+    }
+    let lenient_issues: Vec<_> = try_parse_pairs_bytes(wire)
+        .filter_map(Result::err)
+        .collect();
+    let strict_issues: Vec<_> = try_parse_pairs_bytes_strict(wire)
+        .filter_map(Result::err)
+        .collect();
+    for issue in &lenient_issues {
+        assert!(
+            strict_issues.contains(issue),
+            "lenient reported {issue:?}, absent from strict, for {wire:?}"
+        );
+    }
+    for issue in lenient_issues.iter().chain(&strict_issues) {
+        assert_issue_display_safe(&issue.to_string(), wire);
+    }
+}
+
+/// `SetCookie`'s reporting readers agree with the plain ones: the same inputs
+/// are fatal (`Err` exactly when `parse*` is `None`), a parsed cookie is the
+/// same cookie (equal, and rendering identically), and every issue — fatal or
+/// reported — renders control-byte-free.
+pub fn assert_set_cookie_report_consistency(wire: &str) {
+    for strict in [false, true] {
+        let plain = if strict {
+            SetCookie::parse_strict(wire)
+        } else {
+            SetCookie::parse(wire)
+        };
+        let reported = if strict {
+            SetCookie::try_parse_strict(wire)
+        } else {
+            SetCookie::try_parse(wire)
+        };
+        match (plain, reported) {
+            (Some(plain), Ok(reported)) => {
+                assert_eq!(
+                    plain, reported.value,
+                    "reported cookie diverges (strict={strict}) for {wire:?}"
+                );
+                assert_eq!(
+                    plain.to_set_cookie(),
+                    reported.value.to_set_cookie(),
+                    "reported cookie renders differently (strict={strict}) for {wire:?}"
+                );
+                for issue in &reported.issues {
+                    assert_issue_display_safe(&issue.to_string(), wire.as_bytes());
+                }
+            }
+            (None, Err(fatal)) => {
+                assert_issue_display_safe(&fatal.to_string(), wire.as_bytes());
+            }
+            (plain, reported) => panic!(
+                "fatality diverges (strict={strict}) for {wire:?}: plain parsed {}, reporting {}",
+                plain.is_some(),
+                reported.is_ok()
+            ),
+        }
+    }
+}
+
+/// kekse's own clean wire reads back clean: a baseline rendered *through kekse*
+/// must produce an empty report — if kekse's writer emits something its own
+/// reporting reader flags, writer and reader have drifted.
+pub fn assert_baseline_parses_clean(baseline: &str, direction: Direction) {
+    match direction {
+        Direction::Request => {
+            let reported = CookieJar::parse_reported(baseline);
+            assert!(
+                reported.is_clean(),
+                "kekse-rendered request baseline reported issues: {baseline:?} -> {:?}",
+                reported.issues
+            );
+        }
+        Direction::Response => match SetCookie::try_parse(baseline) {
+            Ok(reported) => assert!(
+                reported.is_clean(),
+                "kekse-rendered Set-Cookie baseline reported issues: {baseline:?} -> {:?}",
+                reported.issues
+            ),
+            Err(fatal) => {
+                panic!("kekse-rendered Set-Cookie baseline is fatal: {baseline:?} -> {fatal}")
+            }
+        },
     }
 }

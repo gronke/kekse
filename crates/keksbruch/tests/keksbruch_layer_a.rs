@@ -3,11 +3,12 @@
 //! future kekse change alters fail-soft parsing, these assertions break here.
 
 use keksbruch::{
-    Direction, Expect, assert_no_injection_echo, assert_no_injection_echo_bytes,
-    assert_strict_subset_of_lenient, assert_strict_subset_of_lenient_bytes, drive, drive_bytes,
-    payloads, scenarios,
+    Direction, Expect, assert_baseline_parses_clean, assert_no_injection_echo,
+    assert_no_injection_echo_bytes, assert_report_consistency, assert_report_consistency_bytes,
+    assert_set_cookie_report_consistency, assert_strict_subset_of_lenient,
+    assert_strict_subset_of_lenient_bytes, drive, drive_bytes, payloads, scenarios,
 };
-use kekse::{SetCookie, parse_pairs, parse_pairs_strict};
+use kekse::{SetCookie, is_cookie_name, parse_pairs, parse_pairs_strict};
 
 fn pairs(wire: &str, strict: bool) -> Vec<(String, String)> {
     if strict {
@@ -30,22 +31,34 @@ fn owned(want: &[(&str, &str)]) -> Vec<(String, String)> {
 #[test]
 fn every_keksbruch_survives_the_universal_invariants() {
     for recipe in payloads() {
+        // kekse's own clean rendering of the base cookie must read back with an
+        // empty report — writer and reporting reader may never drift. Gated on a
+        // token name: the corpus deliberately carries hostile bases (`<script>`,
+        // non-ASCII names), and the writer documentedly does not validate names.
+        if is_cookie_name(recipe.base.name) {
+            assert_baseline_parses_clean(&recipe.base.baseline(recipe.direction), recipe.direction);
+        }
         // The raw wire reaches the byte-level readers for EVERY request recipe —
         // including the Unrepresentable (non-UTF-8) ones a &str parser can never
-        // see. The same three promises must hold below the UTF-8 boundary.
+        // see. The same promises must hold below the UTF-8 boundary.
         if recipe.direction == Direction::Request {
             let wire = recipe.render();
             drive_bytes(&wire);
             assert_no_injection_echo_bytes(&wire);
             assert_strict_subset_of_lenient_bytes(&wire);
+            assert_report_consistency_bytes(&wire);
         }
         match recipe.render_str() {
             Some(wire) if recipe.direction == Direction::Request => {
                 drive(&wire); // never panics
                 assert_no_injection_echo(&wire); // no ; CR LF NUL echoed
                 assert_strict_subset_of_lenient(&wire); // strict only removes
+                assert_report_consistency(&wire); // reporting = plain + data
             }
             Some(wire) => {
+                // The reporting Set-Cookie readers agree with the plain ones on
+                // every corrupted response wire, and their issues render safely.
+                assert_set_cookie_report_consistency(&wire);
                 // Response: parsing never panics. The cookie value is decoded and
                 // octet-validated, so it is always injection-free. Attribute values
                 // (Path/Domain) are stored raw, so the wire boundary is the
