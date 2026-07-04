@@ -228,19 +228,28 @@ impl<'a> SetCookie<'a> {
                 // `.ok()` drops an unrecognised token (keeping the cookie), same as
                 // a malformed Max-Age — see `SameSite`'s case-insensitive `FromStr`.
                 KnownAttribute::SameSite => {
-                    attributes.same_site =
-                        noted(val.parse::<SameSite>().ok(), known, val, &mut report);
+                    if let Some(v) = noted(val.parse::<SameSite>().ok(), known, val, &mut report) {
+                        attributes.same_site = Some(v);
+                    }
                 }
                 // An invalid value (control byte, `;`, non-ASCII) is dropped like a
-                // malformed Max-Age — the cookie is kept, the attribute discarded.
+                // malformed Max-Age — the cookie is kept, the attribute discarded,
+                // and an earlier valid occurrence survives (RFC 6265 §5.2.2:
+                // "ignore the cookie-av", not the attribute).
                 KnownAttribute::Path => {
-                    attributes.path = noted(Path::new(val), known, val, &mut report);
+                    if let Some(v) = noted(Path::new(val), known, val, &mut report) {
+                        attributes.path = Some(v);
+                    }
                 }
                 KnownAttribute::Domain => {
-                    attributes.domain = noted(Domain::new(val), known, val, &mut report);
+                    if let Some(v) = noted(Domain::new(val), known, val, &mut report) {
+                        attributes.domain = Some(v);
+                    }
                 }
                 KnownAttribute::MaxAge => {
-                    attributes.max_age = noted(val.parse::<u64>().ok(), known, val, &mut report);
+                    if let Some(v) = noted(val.parse::<u64>().ok(), known, val, &mut report) {
+                        attributes.max_age = Some(v);
+                    }
                 }
                 // RFC 6265 §5.1.1 (lenient) / RFC 7231 IMF-fixdate (strict). An
                 // unparseable date is dropped like any malformed known attribute —
@@ -251,7 +260,9 @@ impl<'a> SetCookie<'a> {
                     } else {
                         parse_cookie_date(val)
                     };
-                    attributes.expires = noted(parsed, known, val, &mut report);
+                    if let Some(v) = noted(parsed, known, val, &mut report) {
+                        attributes.expires = Some(v);
+                    }
                 }
             }
         }
@@ -604,8 +615,9 @@ fn record<'a>(report: &mut Option<&mut Vec<SetCookieIssue<'a>>>, issue: SetCooki
 /// Pass a known attribute's parse result through, debug-logging and reporting
 /// the fail-soft drop when it is `None` — the malformed-known-attribute skip the
 /// crate docs promise, observable like the readers' pair-level skips. The cookie
-/// is kept either way; only the attribute is lost (and in lenient last-wins, an
-/// earlier good occurrence is still overwritten by a later malformed one).
+/// is kept either way; only the malformed occurrence is lost, and it never
+/// erases an earlier valid one — RFC 6265 §5.2.2 ignores the *cookie-av*, not
+/// the attribute (last-wins applies among the occurrences that parse).
 fn noted<'a, T>(
     parsed: Option<T>,
     attribute: KnownAttribute,
@@ -1291,6 +1303,41 @@ mod tests {
                 value: b"a\x01b"
             }))
         );
+    }
+
+    #[test]
+    fn parse_keeps_earlier_valid_attribute_over_later_malformed() {
+        // RFC 6265 §5.2.2: an unparseable cookie-av is ignored — it must not
+        // erase an earlier valid occurrence of the same attribute.
+        let p = SetCookie::parse("n=v; Max-Age=60; Max-Age=banana").unwrap();
+        assert_eq!(p.attributes().max_age, Some(60));
+        let p = SetCookie::parse("n=v; Domain=valid.example.com; Domain=café").unwrap();
+        assert_eq!(
+            p.attributes().domain.map(|d| d.as_str()),
+            Some("valid.example.com")
+        );
+        // Among occurrences that PARSE, last-wins is unchanged.
+        let p = SetCookie::parse("n=v; Max-Age=1; Max-Age=2").unwrap();
+        assert_eq!(p.attributes().max_age, Some(2));
+        // A malformed occurrence with no valid predecessor still leaves the
+        // attribute unset.
+        let p = SetCookie::parse("n=v; Max-Age=banana").unwrap();
+        assert_eq!(p.attributes().max_age, None);
+        // The report sees both the duplicate and the malformed value.
+        let reported = SetCookie::try_parse("n=v; Max-Age=60; Max-Age=banana").unwrap();
+        assert_eq!(
+            reported.issues,
+            vec![
+                SetCookieIssue::DuplicateAttribute {
+                    attribute: KnownAttribute::MaxAge
+                },
+                SetCookieIssue::InvalidAttributeValue {
+                    attribute: KnownAttribute::MaxAge,
+                    value: "banana"
+                },
+            ]
+        );
+        assert_eq!(reported.value.attributes().max_age, Some(60));
     }
 
     #[test]

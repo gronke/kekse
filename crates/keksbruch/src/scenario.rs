@@ -22,6 +22,13 @@ pub enum Expect {
     BothPairsCount(usize),
     /// Response: strict `parse` rejects (`None`); lenient keeps a cookie with `value`.
     ResponseStrictRejectsLenientKeeps { value: &'static str },
+    /// Response: strict `parse` rejects (`None`); lenient keeps a cookie with `value`
+    /// whose `Domain` is exactly `domain` — pinning RFC 6265 §5.2.2: a later
+    /// malformed occurrence never erases an earlier valid one.
+    ResponseStrictRejectsLenientKeepsDomain {
+        value: &'static str,
+        domain: Option<&'static str>,
+    },
     /// Response: both modes parse to a cookie with this value and these known attrs.
     ResponseValue {
         value: &'static str,
@@ -733,14 +740,17 @@ pub fn scenarios() -> Vec<Scenario> {
         ),
         s(
             "domain-dup-valid-then-invalid",
-            "a valid then an invalid Domain: lenient ends host-only (last wins, then dropped), strict rejects",
+            "a valid then an invalid Domain: lenient keeps the earlier valid Domain (§5.2.2), strict rejects the duplicate",
             Response,
             "SID",
             Keksbruch::DuplicateDomain {
                 first: "valid.example.com",
                 second: "café",
             },
-            Expect::ResponseStrictRejectsLenientKeeps { value: "abc" },
+            Expect::ResponseStrictRejectsLenientKeepsDomain {
+                value: "abc",
+                domain: Some("valid.example.com"),
+            },
         ),
         // ── path: edge-case Path values (Response) ──────────────────────────
         // RFC 6265 §4.1.1 path-av is any av-octet string with no semantics, so kekse

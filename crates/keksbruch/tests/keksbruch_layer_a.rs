@@ -124,6 +124,20 @@ fn each_scenario_matches_its_pinned_expectation() {
                     .unwrap_or_else(|| panic!("{id} default must keep the cookie"));
                 assert_eq!(sc.value(), *value, "{id} value");
             }
+            Expect::ResponseStrictRejectsLenientKeepsDomain { value, domain } => {
+                assert!(
+                    SetCookie::parse_strict(&wire).is_none(),
+                    "{id} strict must reject"
+                );
+                let sc = SetCookie::parse(&wire)
+                    .unwrap_or_else(|| panic!("{id} default must keep the cookie"));
+                assert_eq!(sc.value(), *value, "{id} value");
+                assert_eq!(
+                    sc.attributes().domain.map(|d| d.as_str()),
+                    *domain,
+                    "{id} lenient Domain — §5.2.2 keeps the earlier valid occurrence"
+                );
+            }
             Expect::ResponseValue {
                 value,
                 max_age,
