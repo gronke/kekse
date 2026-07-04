@@ -182,7 +182,13 @@ impl<'a> SetCookie<'a> {
                     return Err(issue);
                 }
                 // Default: an unrecognised attribute is ignored (RFC 6265 §5.2) —
-                // reported, so a mistyped flag never vanishes without a trace.
+                // logged and reported, so a mistyped flag never vanishes without
+                // a trace.
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    attribute = %attr.escape_debug(),
+                    "ignoring an unrecognised attribute; the cookie is kept (RFC 6265 §5.2)"
+                );
                 record(&mut report, issue);
                 continue;
             };
@@ -192,8 +198,13 @@ impl<'a> SetCookie<'a> {
                     // Strict: a repeated attribute rejects the whole cookie.
                     return Err(issue);
                 }
-                // Lenient keeps last-wins — reported, since the overwrite is
-                // invisible in the parsed result.
+                // Lenient keeps last-wins — logged and reported, since the
+                // overwrite is invisible in the parsed result.
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    attribute = known.name(),
+                    "duplicate attribute; the last occurrence that parses wins"
+                );
                 record(&mut report, issue);
             }
             seen |= known.bit();
