@@ -84,3 +84,5 @@ The same matrix is written beside this file as `COOKIE_MATRIX.csv`.
 ## Tested against
 
 {{ versions }}
+
+[gronke/kekse](https://github.com/gronke/kekse) · MIT licensed

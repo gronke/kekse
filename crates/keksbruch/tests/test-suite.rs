@@ -29,6 +29,8 @@ fn render_parser_divergence_matrix() {
         "## Remarks",
         "## Tested against",
         "unavailable",
+        // The footer: a repo link + license remark at the bottom of both variants.
+        "[gronke/kekse](https://github.com/gronke/kekse) · MIT licensed",
     ] {
         assert!(
             markdown.contains(anchor),
