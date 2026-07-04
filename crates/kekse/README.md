@@ -59,6 +59,19 @@ let value = kekse::parse_pairs_strict("SID=deadbeef; theme=dark")
 assert_eq!(value.as_deref(), Some("deadbeef"));
 ```
 
+Both readers are fail-soft — a malformed pair is skipped, never aborting the header — and every reader has a **reporting** twin, so the skip is data instead of silence.
+`try_parse_pairs*` yields `Result` items (`.collect::<Result<Vec<_>, _>>()` is fail-hard for free); `CookieJar::parse_reported` and friends return a `Reported` — the jar plus every refused pair as a `PairIssue`; `SetCookie::try_parse` / `try_parse_strict` report every dropped attribute as a `SetCookieIssue` (an ignored unknown attribute, a duplicate, a malformed known value).
+Strictness decides which issues are *fatal*; gating on `Reported::is_clean()` is stricter than strict — nothing is ever dropped silently.
+
+With the `axum` feature, that gate is one line in a handler — anything wrong with the header becomes a `400 Bad Request` that reports a count and never echoes header bytes:
+
+```rust,ignore
+async fn whoami(cookies: CookieJarBuf) -> Result<String, BadCookieHeader> {
+    let jar = cookies.try_jar_strict()?; // any malformed pair -> 400
+    Ok(jar.get("SID").map(|c| c.value().to_owned()).unwrap_or_default())
+}
+```
+
 ## Three types, two headers
 
 `parse_pairs` yields `(name, value)` tuples; `CookieJar` is the typed view over it.
@@ -92,8 +105,8 @@ Each prints its output and asserts the invariant it documents, so it doubles as 
 | `parse_request` | Reading and rewriting a `Cookie:` request header through a `CookieJar`. |
 | `encodings` | How each `ValueEncoding` escapes one tricky value for the wire. |
 | `strict_vs_lenient` | The lenient and strict readers side by side on a quoted value. |
-| `fail_soft` | Fail-soft parsing and the no-panic behaviour on hostile input. |
-| `axum_extractor` | The `CookieJarBuf` axum extractor (needs `--features axum`). |
+| `fail_soft` | Fail-soft parsing, the issue report for the same header, and the no-panic behaviour on hostile input. |
+| `axum_extractor` | The `CookieJarBuf` axum extractor, including the fail-hard `try_jar_strict` → 400 route (needs `--features axum`). |
 
 ```sh
 cargo run -p kekse --example build_set_cookie

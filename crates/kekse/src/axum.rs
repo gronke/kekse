@@ -12,12 +12,16 @@
 //! handler signature.
 
 use std::convert::Infallible;
+use std::fmt;
 
 use axum_core::extract::FromRequestParts;
+use axum_core::response::{IntoResponse, Response};
+use http::StatusCode;
 use http::header::COOKIE;
 use http::request::Parts;
 
 use crate::jar::CookieJar;
+use crate::report::{PairIssue, Reported};
 
 /// An owned request `Cookie:` header — the owned counterpart to the borrowing
 /// [`CookieJar`], as [`PathBuf`] is to [`Path`]. Use it as an axum extractor;
@@ -84,12 +88,101 @@ impl CookieJarBuf {
         CookieJar::parse_bytes_strict(&self.raw)
     }
 
+    /// The [`jar`](CookieJarBuf::jar) view, reporting: the same lenient jar,
+    /// plus every refused pair as a [`PairIssue`]. Log the issues and keep the
+    /// jar, or gate on [`is_clean`](Reported::is_clean) — the observable form
+    /// of the fail-soft read.
+    pub fn jar_reported(&self) -> Reported<CookieJar<'_>, PairIssue<'_>> {
+        CookieJar::parse_bytes_reported(&self.raw)
+    }
+
+    /// The [`jar_strict`](CookieJarBuf::jar_strict) view, reporting — see
+    /// [`jar_reported`](CookieJarBuf::jar_reported).
+    pub fn jar_strict_reported(&self) -> Reported<CookieJar<'_>, PairIssue<'_>> {
+        CookieJar::parse_bytes_strict_reported(&self.raw)
+    }
+
+    /// The fail-hard **lenient** read: the jar if every pair parsed, else a
+    /// ready-to-return [`BadCookieHeader`] rejection (`400 Bad Request`). The
+    /// one-line opt-out of fail-soft for a handler that would rather refuse a
+    /// mangled header than serve a partial jar:
+    ///
+    /// ```no_run
+    /// use axum::routing::get;
+    /// use axum::Router;
+    /// use kekse::{BadCookieHeader, CookieJarBuf};
+    ///
+    /// async fn whoami(cookies: CookieJarBuf) -> Result<String, BadCookieHeader> {
+    ///     let jar = cookies.try_jar_strict()?; // anything wrong -> 400
+    ///     Ok(jar.get("SID").map(|c| c.value().to_owned()).unwrap_or_default())
+    /// }
+    ///
+    /// let app: Router = Router::new().route("/", get(whoami));
+    /// # let _ = app;
+    /// ```
+    ///
+    /// The error is owned (a count, not the header bytes), so returning it
+    /// while the jar borrows `self` composes; for the issue details, read
+    /// [`jar_reported`](CookieJarBuf::jar_reported) first instead.
+    pub fn try_jar(&self) -> Result<CookieJar<'_>, BadCookieHeader> {
+        Self::clean_or_reject(self.jar_reported())
+    }
+
+    /// The fail-hard **strict** read — see [`try_jar`](CookieJarBuf::try_jar).
+    /// Strict counts whitespace-bearing values among the issues, so this is the
+    /// gate for a session id or any value you minted yourself.
+    pub fn try_jar_strict(&self) -> Result<CookieJar<'_>, BadCookieHeader> {
+        Self::clean_or_reject(self.jar_strict_reported())
+    }
+
+    fn clean_or_reject<'a>(
+        reported: Reported<CookieJar<'a>, PairIssue<'a>>,
+    ) -> Result<CookieJar<'a>, BadCookieHeader> {
+        match reported.into_result() {
+            Ok(jar) => Ok(jar),
+            Err((_, issues)) => Err(BadCookieHeader {
+                issues: issues.len(),
+            }),
+        }
+    }
+
     /// The raw `Cookie:` header bytes this was built from (repeats joined with
     /// `; `). Bytes, not `&str` — the buffer may carry obs-text that is not
     /// UTF-8; the parsed views ([`jar`](CookieJarBuf::jar) /
     /// [`jar_strict`](CookieJarBuf::jar_strict)) are where validated text lives.
     pub fn as_bytes(&self) -> &[u8] {
         &self.raw
+    }
+}
+
+/// The rejection [`CookieJarBuf::try_jar`] / [`try_jar_strict`](CookieJarBuf::try_jar_strict)
+/// return: the request's `Cookie:` header carried at least one malformed pair.
+/// As a response it is `400 Bad Request` with a static body — it reports the
+/// issue *count* only and never echoes header bytes, so a corrupted cookie
+/// cannot ride an error page back out.
+#[derive(Clone, Debug)]
+pub struct BadCookieHeader {
+    issues: usize,
+}
+
+impl BadCookieHeader {
+    /// How many pairs were refused.
+    pub fn issues(&self) -> usize {
+        self.issues
+    }
+}
+
+impl fmt::Display for BadCookieHeader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} malformed pair(s) in the Cookie header", self.issues)
+    }
+}
+
+impl std::error::Error for BadCookieHeader {}
+
+impl IntoResponse for BadCookieHeader {
+    fn into_response(self) -> Response {
+        (StatusCode::BAD_REQUEST, self.to_string()).into_response()
     }
 }
 

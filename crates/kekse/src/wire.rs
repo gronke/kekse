@@ -11,6 +11,8 @@
 
 use rfc_6265::grammar::{is_cookie_name_bytes, is_ws};
 
+use crate::report::PairIssue;
+
 /// Trim `SP`/`HTAB` from both ends — the byte form of `trim_matches(is_ws_char)`. Deliberately
 /// NOT `trim_ascii`, which would also strip CR/LF/FF/VT: RFC 6265 OWS is `SP`/`HTAB` only, and a
 /// control byte must *survive* into the token/octet gates to be rejected there, not be trimmed
@@ -31,11 +33,14 @@ pub(crate) fn trim_ws(mut bytes: &[u8]) -> &[u8] {
 
 /// Split one `name=value` unit at its **first** `=` (so `=` survives inside values), trim OWS
 /// around the name, and require a non-empty cookie-name token. Returns the name as `&str` — free
-/// after the token gate, since tchars are ASCII — and the raw, untrimmed value bytes. `None`
-/// (debug-logged under `tracing`) when there is no `=` at all or the name is empty / not a token.
-pub(crate) fn split_checked_pair(segment: &[u8]) -> Option<(&str, &[u8])> {
+/// after the token gate, since tchars are ASCII — and the raw, untrimmed value bytes. `Err` (the
+/// typed [`PairIssue`], debug-logged under `tracing`) when there is no `=` at all or the name is
+/// empty / not a token; the fail-soft readers skip on it, the reporting readers yield it.
+pub(crate) fn split_checked_pair(segment: &[u8]) -> Result<(&str, &[u8]), PairIssue<'_>> {
     // `slice::split_once` is still unstable; `position` + index split is the stable spelling.
-    let eq = segment.iter().position(|&b| b == b'=')?;
+    let Some(eq) = segment.iter().position(|&b| b == b'=') else {
+        return Err(PairIssue::MissingEquals { segment });
+    };
     let (raw_name, raw_value) = (&segment[..eq], &segment[eq + 1..]);
     let name = trim_ws(raw_name);
     if !is_cookie_name_bytes(name) {
@@ -44,11 +49,14 @@ pub(crate) fn split_checked_pair(segment: &[u8]) -> Option<(&str, &[u8])> {
             name = %String::from_utf8_lossy(name).escape_debug(),
             "ignoring a cookie pair with an empty or non-token name"
         );
-        return None;
+        return Err(PairIssue::InvalidName { name });
     }
-    // Infallible after the token gate (tchar ⊂ ASCII); `.ok()?` keeps the no-panic
-    // promise without reaching for `unsafe`.
-    Some((std::str::from_utf8(name).ok()?, raw_value))
+    // Infallible after the token gate (tchar ⊂ ASCII); the `Err` arm keeps the
+    // no-panic promise without reaching for `unsafe`.
+    match std::str::from_utf8(name) {
+        Ok(name) => Ok((name, raw_value)),
+        Err(_) => Err(PairIssue::InvalidName { name }),
+    }
 }
 
 #[cfg(test)]
@@ -74,21 +82,32 @@ mod tests {
     #[test]
     fn split_checked_pair_takes_the_first_equals_and_gates_the_name() {
         // `=` in the value survives; the name is OWS-trimmed.
-        assert_eq!(split_checked_pair(b" n =v=w"), Some(("n", &b"v=w"[..])));
+        assert_eq!(split_checked_pair(b" n =v=w"), Ok(("n", &b"v=w"[..])));
         // The value is handed over raw — untrimmed, unvalidated.
-        assert_eq!(split_checked_pair(b"n= v "), Some(("n", &b" v "[..])));
-        // No `=`, empty name, whitespace-only name, non-token name: all refused.
-        for bad in &[
-            &b"novalue"[..],
-            b"",
-            b"=v",
-            b" \t=v",
-            b"a b=v",
-            b"a;b=v",
-            b"caf\xc3\xa9=v",
-            b"a\xffb=v",
+        assert_eq!(split_checked_pair(b"n= v "), Ok(("n", &b" v "[..])));
+        // No `=` at all → MissingEquals, carrying the raw segment.
+        for bad in &[&b"novalue"[..], b""] {
+            assert_eq!(
+                split_checked_pair(bad),
+                Err(PairIssue::MissingEquals { segment: bad }),
+                "{bad:?}"
+            );
+        }
+        // Empty, whitespace-only, or non-token name → InvalidName, carrying the
+        // OWS-trimmed name bytes.
+        for (bad, name) in [
+            (&b"=v"[..], &b""[..]),
+            (b" \t=v", b""),
+            (b"a b=v", b"a b"),
+            (b"a;b=v", b"a;b"),
+            (b"caf\xc3\xa9=v", b"caf\xc3\xa9"),
+            (b"a\xffb=v", b"a\xffb"),
         ] {
-            assert_eq!(split_checked_pair(bad), None, "{bad:?}");
+            assert_eq!(
+                split_checked_pair(bad),
+                Err(PairIssue::InvalidName { name }),
+                "{bad:?}"
+            );
         }
     }
 }

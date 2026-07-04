@@ -24,6 +24,20 @@ fn main() {
     );
     assert_eq!(sid, Some("deadbeef"));
 
+    // Fail-soft, observed: the reporting reader recovers the same jar AND says
+    // exactly what it refused — so a skip is a log line, not a mystery. Each
+    // issue renders with its control bytes escaped, safe to print.
+    let reported = CookieJar::parse_strict_reported(hostile);
+    println!("the report for the same header:");
+    for issue in &reported.issues {
+        println!("  - {issue}");
+    }
+    assert_eq!(reported.value.len(), jar.len());
+    // A caller who would rather refuse the whole header: `into_result` is Ok
+    // only when the parse was clean — fail-hard is one method away.
+    assert!(reported.into_result().is_err());
+    println!();
+
     // Never panics: throw deliberately corrupted wire at it and watch it shrug.
     // We assert only that each call *returns* — not what it parsed.
     let long = "a=b; ".repeat(10_000);

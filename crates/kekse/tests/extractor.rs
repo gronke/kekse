@@ -12,7 +12,7 @@ use axum::response::Response;
 use axum::routing::get;
 use tower::ServiceExt; // oneshot
 
-use kekse::CookieJarBuf;
+use kekse::{BadCookieHeader, CookieJarBuf};
 
 /// Reads the session id strictly: a `SID` is cookie-octets, so a spaced or
 /// otherwise non-octet value is refused rather than trusted.
@@ -34,10 +34,21 @@ async fn read_pref(cookies: CookieJarBuf) -> String {
         .unwrap_or_else(|| "<none>".to_owned())
 }
 
+/// The fail-hard read: any malformed pair in the header turns into a 400
+/// instead of a partial jar — the `?` is the whole opt-out of fail-soft.
+async fn read_sid_or_400(cookies: CookieJarBuf) -> Result<String, BadCookieHeader> {
+    let jar = cookies.try_jar_strict()?;
+    Ok(jar
+        .get("SID")
+        .map(|c| c.value().to_owned())
+        .unwrap_or_else(|| "<none>".to_owned()))
+}
+
 fn app() -> Router {
     Router::new()
         .route("/sid", get(read_sid))
         .route("/pref", get(read_pref))
+        .route("/checked", get(read_sid_or_400))
 }
 
 async fn body_string(resp: Response) -> String {
@@ -102,6 +113,38 @@ async fn fail_soft_junk_never_hides_the_session_cookie() {
         .await
         .unwrap();
     assert_eq!(body_string(resp).await, "deadbeef");
+}
+
+#[tokio::test]
+async fn fail_hard_route_rejects_a_mangled_header_with_400() {
+    // Two malformed pairs (a spaced strict-read value, an empty name) → the
+    // whole request is refused, and the body reports a count without echoing
+    // header bytes.
+    let resp = app()
+        .oneshot(get_request("/checked", Some("SID=dead beef; =evil")))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = body_string(resp).await;
+    assert_eq!(body, "2 malformed pair(s) in the Cookie header");
+    assert!(
+        !body.contains("dead"),
+        "the body must not echo header bytes"
+    );
+}
+
+#[tokio::test]
+async fn fail_hard_route_serves_a_clean_header_normally() {
+    let resp = app()
+        .oneshot(get_request("/checked", Some("a=1; SID=deadbeef")))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_string(resp).await, "deadbeef");
+    // A missing header is clean too — fail-hard only fires on malformed pairs.
+    let resp = app().oneshot(get_request("/checked", None)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_string(resp).await, "<none>");
 }
 
 #[tokio::test]

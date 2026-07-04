@@ -24,7 +24,7 @@ Where kekse emits only honest, canonical cookies, keksbruch exercises the hard c
 
 ## Why
 
-kekse is, by design, the paranoid outlier: fail-soft (a malformed pair is skipped, never aborting the header), strict cookie-octet enforcement, case-sensitive names. The corpus makes those choices **visible and deliberate** — and a permanent regression oracle against accidental drift.
+kekse is, by design, the paranoid outlier: fail-soft (a malformed pair is skipped, never aborting the header — optionally with a report of what was skipped), strict cookie-octet enforcement, case-sensitive names. The corpus makes those choices **visible and deliberate** — and a permanent regression oracle against accidental drift.
 
 ## What keksbruch is (and is not)
 
