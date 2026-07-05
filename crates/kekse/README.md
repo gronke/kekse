@@ -1,11 +1,17 @@
 # kekse
 
 A strict, dependency-light cookie codec.
-It builds `Set-Cookie` response values from a `SetCookie`, reads *and writes* a `Cookie` request header through a `CookieJar` of typed `Cookie`s, and converts either straight into an `http::HeaderValue` — directly on the RFC 6265 §4.1.1 grammar.
-There is no cookie *store* (no persistence, eviction, or domain/path send-matching) and no signing or encryption, but dates are handled: a lifetime is `Max-Age` seconds (a `u64`) or an `Expires` timestamp, parsed and rendered through the `time` crate.
-It is designed not to panic on untrusted input, and a malformed pair in a header is skipped rather than aborting the parse, so attacker-appended junk cannot evict a later valid cookie.
 
-It depends on `percent-encoding` (the value codec), `http` (the RFC 7230 token grammar for cookie-names, borrowed rather than re-implemented as a homemade table), and `time` (`Expires` date parsing and formatting — RFC 6265 §5.1.1 and RFC 7231).
+## Highlights
+
+- **Both directions.** Build `Set-Cookie` via `SetCookie`. Read and write `Cookie` via a `CookieJar` of typed `Cookie`s. Convert either into an `http::HeaderValue`.
+- **Built to RFC 6265.** Plus RFC 7230 tokens, RFC 7231 dates, and RFC 6265bis `SameSite`.
+- **Strict and lenient readers.** Both refuse injection bytes (`;`, CR, LF, NUL, controls, non-ASCII). Strict also demands cookie-octets only.
+- **Fail-soft, never silent.** A junk pair is skipped, not fatal. It can't evict a valid cookie. Every reader has a reporting twin, plus an opt-in axum `400`.
+- **Strongly typed.** `Cookie`, `SetCookie`, `CookieJar`, and typed attributes. Never string maps.
+- **A codec, not a store.** No persistence, eviction, send-matching, signing, or encryption.
+- **Dates handled.** `Max-Age` seconds (a `u64`) or an `Expires` timestamp, via the `time` crate.
+- **Light and safe.** Three dependencies — `percent-encoding`, `http`, `time`. No default features, no `unsafe`. Rust 1.88+.
 
 ## Building a value
 
@@ -59,9 +65,13 @@ let value = kekse::parse_pairs_strict("SID=deadbeef; theme=dark")
 assert_eq!(value.as_deref(), Some("deadbeef"));
 ```
 
-Both readers are fail-soft — a malformed pair is skipped, never aborting the header — and every reader has a **reporting** twin, so the skip is data instead of silence.
-`try_parse_pairs*` yields `Result` items (`.collect::<Result<Vec<_>, _>>()` is fail-hard for free); `CookieJar::parse_reported` and friends return a `Reported` — the jar plus every refused pair as a `PairIssue`; `SetCookie::try_parse` / `try_parse_strict` report every dropped attribute as a `SetCookieIssue` (an ignored unknown attribute, a duplicate, a malformed known value).
-Strictness decides which issues are *fatal*; gating on `Reported::is_clean()` is stricter than strict — nothing is ever dropped silently.
+Both readers are fail-soft: a malformed pair is skipped, never aborting the header.
+But the drop need not be silent — every plain reader has a **reporting** twin that also hands back what it skipped.
+`try_parse_pairs*` yields `Result` items, so `.collect::<Result<Vec<_>, _>>()` is fail-hard for free.
+`CookieJar::parse_reported` and friends return a `Reported`: the jar, plus every refused pair as a `PairIssue`.
+`SetCookie::try_parse` / `try_parse_strict` report each dropped attribute as a `SetCookieIssue` — an ignored unknown, a duplicate, or a malformed known value.
+Strictness decides which issues are *fatal*.
+Gating on `Reported::is_clean()` is stricter than strict: nothing is ever dropped silently.
 
 With the `axum` feature, that gate is one line in a handler — anything wrong with the header becomes a `400 Bad Request` that reports a count and never echoes header bytes:
 
@@ -74,11 +84,13 @@ async fn whoami(cookies: CookieJarBuf) -> Result<String, BadCookieHeader> {
 
 ## Three types, two headers
 
-`parse_pairs` yields `(name, value)` tuples; `CookieJar` is the typed view over it.
-A `Cookie` is the request `Cookie:` cookie — the `name=value` a request carries (plus its wire encoding), with no attributes; it is the shared kernel a `SetCookie` composes.
-A `SetCookie` is the response `Set-Cookie:` cookie — a `Cookie` kernel plus `CookieAttributes` (`HttpOnly`, `Secure`, `SameSite`, `Path`, `Domain`, `Expires`, `Max-Age`), with plain-`bool` flags.
-Set attributes with the fluent verbs — the valueless flags `http_only()` / `secure()` are nullary, the rest take a value (`same_site(..)`, `path(..)`, …) — and read them back as fields via `set_cookie.attributes()` (e.g. `sc.attributes().secure`). The same verbs build a `CookieAttributes` on its own, so a hardened policy can be defined once and reused across cookies.
-`Cookie::into_set_cookie()` (default attributes) or `Cookie::with_attributes(..)` (a prebuilt set) completes a request cookie into a `SetCookie` to emit; `SetCookie::into_cookie()` / `cookie()` drop back to the kernel.
+| Type | What it is |
+| --- | --- |
+| `Cookie` | one `name=value` from a request `Cookie:` header — no attributes; the shared core |
+| `SetCookie` | a response `Set-Cookie:` — a `Cookie` plus typed `CookieAttributes` (`HttpOnly`, `Secure`, `SameSite`, `Path`, `Domain`, `Expires`, `Max-Age`) |
+| `CookieJar` | an ordered, writable view over a `Cookie:` header — parsed and rebuildable, not a store |
+
+A request `Cookie` completes into a `SetCookie` with `into_set_cookie()` (default attributes) or `with_attributes(..)`, and drops back with `into_cookie()`. The attribute verbs also build a standalone `CookieAttributes`, so one hardened policy can be reused across cookies.
 
 ```rust
 use kekse::CookieJar;
@@ -92,7 +104,7 @@ let sid = jar
 assert_eq!(sid.as_deref(), Some("deadbeef"));
 ```
 
-`CookieJar` reads one `Cookie:` header in order, and is writable too — `add` / `replace` / `remove`, then `jar.to_header_value(encoding)` renders the whole header back, each value re-encoded canonically from its decoded form (no raw retention). It is a parsed-and-rebuildable view, not a stateful cookie store (persistence and domain/path send-matching are out of scope).
+The jar is writable too: `add` / `replace` / `remove`, then `to_header_value(encoding)` re-encodes the whole header canonically from its decoded form.
 
 ## Examples
 
