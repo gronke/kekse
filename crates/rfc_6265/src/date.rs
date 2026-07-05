@@ -87,18 +87,28 @@ fn assemble(year: i32, parsed: &Parsed) -> Option<OffsetDateTime> {
 }
 
 /// Strictly parse the RFC 7231 §7.1.1.1 IMF-fixdate: exact casing/spacing, full-input match, always
-/// GMT. Rejects the obsolete RFC 850 / `asctime()` forms — and, per the RFC 6265 §5.1.1 sanity
-/// floor this cookie crate applies to both parsers, any `year < 1601`.
+/// GMT, and a weekday that agrees with the date. Rejects the obsolete RFC 850 / `asctime()` forms —
+/// and, per the RFC 6265 §5.1.1 sanity floor this cookie crate applies to both parsers, any
+/// `year < 1601`.
+///
+/// The leading weekday is redundant with the date; `time` parses the token but does not verify it,
+/// so this parser does: a well-formed line whose weekday disagrees with its date is rejected.
 ///
 /// ```
 /// use rfc_6265::date::parse_imf_fixdate;
 /// assert!(parse_imf_fixdate("Sun, 06 Nov 1994 08:49:37 GMT").is_some());
+/// assert!(parse_imf_fixdate("Mon, 06 Nov 1994 08:49:37 GMT").is_none()); // 06 Nov 1994 was a Sunday
 /// assert!(parse_imf_fixdate("Sunday, 06-Nov-94 08:49:37 GMT").is_none()); // RFC 850, rejected
 /// ```
 #[must_use]
 pub fn parse_imf_fixdate(value: &str) -> Option<OffsetDateTime> {
     let parsed = parse_full(value, IMF_FIXDATE)?;
-    assemble(parsed.year()?, &parsed)
+    let when = assemble(parsed.year()?, &parsed)?;
+    // The IMF-fixdate always carries a weekday. Reject one inconsistent with the date it precedes.
+    if parsed.weekday()? != when.weekday() {
+        return None;
+    }
+    Some(when)
 }
 
 // ---- RFC 6265 §5.1.1 cookie-date scan --------------------------------------
@@ -486,5 +496,166 @@ mod tests {
         }
         // The canonical form round-trips through the strict parser too.
         assert_eq!(parse_imf_fixdate(&format_imf_fixdate(WHEN)), Some(WHEN));
+    }
+
+    // ---- Enumerated finite sub-domains ------------------------------------
+
+    #[test]
+    fn every_month_token_maps_to_its_month() {
+        // A hand-written 12-arm table (match_month) is exactly where a transposition hides, and the
+        // day/month/year round-trips otherwise only ever exercise November. Pin all twelve, both at
+        // the token level and end-to-end so each arm is wired to the right calendar month.
+        for (tok, month) in [
+            ("Jan", Month::January),
+            ("Feb", Month::February),
+            ("Mar", Month::March),
+            ("Apr", Month::April),
+            ("May", Month::May),
+            ("Jun", Month::June),
+            ("Jul", Month::July),
+            ("Aug", Month::August),
+            ("Sep", Month::September),
+            ("Oct", Month::October),
+            ("Nov", Month::November),
+            ("Dec", Month::December),
+        ] {
+            assert_eq!(match_month(tok.as_bytes()), Some(month), "{tok}");
+            let d = parse_cookie_date(&format!("15 {tok} 2001 00:00:00")).unwrap();
+            assert_eq!(d.month(), month, "{tok}");
+        }
+        assert_eq!(match_month(b"Foo"), None); // not a month
+        assert_eq!(match_month(b"Ja"), None); // too short
+    }
+
+    #[test]
+    fn month_token_is_case_insensitive_in_the_lenient_scan() {
+        for tok in ["Nov", "nov", "NOV", "nOv"] {
+            assert_eq!(
+                parse_cookie_date(&format!("06 {tok} 1994 08:49:37")),
+                Some(WHEN),
+                "{tok}"
+            );
+        }
+    }
+
+    #[test]
+    fn two_digit_year_pivot_is_exhaustive() {
+        // RFC 6265 §5.1.1 steps 3–4, over every value 00..=99: 00–69 → 2000s, 70–99 → 1900s.
+        for yy in 0u8..=99 {
+            let want = if yy <= 69 {
+                2000 + i32::from(yy)
+            } else {
+                1900 + i32::from(yy)
+            };
+            let got = parse_cookie_date(&format!("06 Nov {yy:02} 08:49:37")).map(|d| d.year());
+            assert_eq!(got, Some(want), "yy={yy:02}");
+        }
+    }
+
+    #[test]
+    fn calendar_day_validity_follows_the_month_and_leap_year() {
+        // Valid: the leap day in a leap year, and day 31 in a 31-day month.
+        assert!(parse_cookie_date("29 Feb 2000 00:00:00").is_some()); // 2000 is a leap year
+        assert!(parse_cookie_date("31 Jan 2001 00:00:00").is_some());
+        assert!(parse_cookie_date("31 Mar 2001 00:00:00").is_some());
+        // Invalid: the leap day in non-leap years (incl. the 1900 century rule), day 31 in 30-day months.
+        for bad in [
+            "29 Feb 1900 00:00:00", // divisible by 100 but not 400 → not a leap year
+            "29 Feb 1994 00:00:00",
+            "31 Apr 2001 00:00:00",
+            "31 Jun 2001 00:00:00",
+            "31 Sep 2001 00:00:00",
+            "31 Nov 2001 00:00:00",
+        ] {
+            assert!(parse_cookie_date(bad).is_none(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn time_field_upper_bounds() {
+        assert!(parse_cookie_date("06 Nov 1994 23:59:59").is_some()); // the accepted upper edge
+        for bad in [
+            "06 Nov 1994 24:00:00", // hour 24
+            "06 Nov 1994 08:60:00", // minute 60
+            "06 Nov 1994 08:49:60", // second 60 — no leap-second
+        ] {
+            assert!(parse_cookie_date(bad).is_none(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn is_delimiter_matches_the_rfc_prose_over_all_bytes() {
+        // Independent oracle: RFC 6265 §5.1.1 defines the *non-delimiter* set as
+        // %x00-08 / %x0A-1F / DIGIT / ":" / ALPHA / %x7F-FF; a delimiter is its complement.
+        // This is formulated from the non-delimiter production, not the impl's delimiter ranges.
+        for b in 0u8..=0xff {
+            let non_delimiter = matches!(b,
+                0x00..=0x08 | 0x0a..=0x1f
+                | b'0'..=b'9' | b':' | b'A'..=b'Z' | b'a'..=b'z'
+                | 0x7f..=0xff
+            );
+            assert_eq!(is_delimiter(b), !non_delimiter, "0x{b:02x}");
+        }
+    }
+
+    // ---- Weekday: strict validates it, lenient ignores it -----------------
+
+    #[test]
+    fn strict_rejects_a_weekday_inconsistent_with_the_date() {
+        // 06 Nov 1994 was a Sunday.
+        assert!(parse_imf_fixdate("Sun, 06 Nov 1994 08:49:37 GMT").is_some());
+        for wrong in [
+            "Mon, 06 Nov 1994 08:49:37 GMT",
+            "Sat, 06 Nov 1994 08:49:37 GMT",
+        ] {
+            assert!(parse_imf_fixdate(wrong).is_none(), "{wrong:?}");
+        }
+    }
+
+    #[test]
+    fn lenient_ignores_the_weekday_token_entirely() {
+        // §5.1.1 treats the weekday as an unknown token: a wrong one, a nonsense one, or none at
+        // all is ignored as long as the four date components are present. (keksbruch's matrix
+        // compares this against other stacks; here we pin kekse's own §5.1.1 behaviour.)
+        for s in [
+            "Mon, 06 Nov 1994 08:49:37 GMT",      // wrong weekday
+            "Birthday, 06 Nov 1994 08:49:37 GMT", // not a weekday at all
+            "06 Nov 1994 08:49:37 GMT",           // no weekday
+        ] {
+            assert_eq!(parse_cookie_date(s), Some(WHEN), "{s:?}");
+        }
+    }
+
+    // ---- Lower-risk edges -------------------------------------------------
+
+    #[test]
+    fn lenient_keeps_the_first_match_per_field() {
+        // §5.1.1 keeps the first token matching each production; a second month token is ignored.
+        assert_eq!(
+            parse_cookie_date("08:49:37 06 Nov Dec 1994"),
+            Some(WHEN),
+            "the second month token must be ignored"
+        );
+    }
+
+    #[test]
+    fn year_token_digit_count_bounds() {
+        // year = 2*4DIGIT: a 1-digit year never matches; a 3-digit year is taken verbatim (then the
+        // 1601 floor rejects it); a 5-digit run matches no year token, so the year stays missing.
+        assert!(parse_cookie_date("06 Nov 8 08:49:37").is_none()); // 1 digit
+        assert!(parse_cookie_date("06 Nov 800 08:49:37").is_none()); // 3 digits → 800 < 1601
+        assert!(parse_cookie_date("06 Nov 19945 08:49:37").is_none()); // 5 digits
+    }
+
+    #[test]
+    fn rfc850_two_digit_year_round_trip_is_lossy_past_2069() {
+        // format_http_date documents the RFC 850 two-digit-year footgun; pin it. A 2069 instant
+        // survives the round-trip; a 2070 instant reads back as 1970 (the pivot maps "70" → 1900s).
+        let y2069 = datetime!(2069-06-15 12:00:00 UTC);
+        let rendered = format_http_date(y2069, HttpDateFormat::Rfc850);
+        assert_eq!(parse_cookie_date(&rendered), Some(y2069));
+        let y2070 = datetime!(2070-06-15 12:00:00 UTC);
+        let rendered = format_http_date(y2070, HttpDateFormat::Rfc850);
+        assert_eq!(parse_cookie_date(&rendered).map(|d| d.year()), Some(1970));
     }
 }

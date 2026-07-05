@@ -104,6 +104,38 @@ jobs:
           env: |
             RUSTDOCFLAGS=-D warnings
 
+      # rfc_6265 is published with a feature per RFC section (grammar / date / domain
+      # / path / idna / psl); the legs above only ever build them together (default =
+      # grammar+date via workspace unification, or --all-features). Test each feature
+      # in isolation too, so a downstream crate enabling exactly one gets a combination
+      # CI has actually compiled — domain-only, path-only, idna-without-psl, etc. are
+      # otherwise never built. (`cargo hack --each-feature` would fold these into one
+      # step, but the sealed image carries no extra tooling, so enumerate them.)
+      - name: rfc_6265 features — grammar only (no default)
+        uses: ./.rust-ci/.github/actions/cargo-docker
+        with:
+          args: test -p rfc_6265 --no-default-features --locked
+      - name: rfc_6265 features — date
+        uses: ./.rust-ci/.github/actions/cargo-docker
+        with:
+          args: test -p rfc_6265 --no-default-features --features date --locked
+      - name: rfc_6265 features — domain
+        uses: ./.rust-ci/.github/actions/cargo-docker
+        with:
+          args: test -p rfc_6265 --no-default-features --features domain --locked
+      - name: rfc_6265 features — path
+        uses: ./.rust-ci/.github/actions/cargo-docker
+        with:
+          args: test -p rfc_6265 --no-default-features --features path --locked
+      - name: rfc_6265 features — idna (implies domain)
+        uses: ./.rust-ci/.github/actions/cargo-docker
+        with:
+          args: test -p rfc_6265 --no-default-features --features idna --locked
+      - name: rfc_6265 features — psl (implies domain)
+        uses: ./.rust-ci/.github/actions/cargo-docker
+        with:
+          args: test -p rfc_6265 --no-default-features --features psl --locked
+
   # kekse pins MSRV 1.88.0 (workspace Cargo.toml) — the floor is the `time` crate
   # used for `Expires` dates. Build the core (default + all features) at exactly
   # that toolchain, SEALED: build-image resolves `msrv` from Cargo.toml's

@@ -77,4 +77,27 @@ mod tests {
         assert!(!path_matches("/a", "/a/b")); // cookie-path longer
         assert!(!path_matches("/x/y", "/a")); // not a prefix
     }
+
+    #[test]
+    fn path_match_is_case_sensitive() {
+        assert!(!path_matches("/A", "/a"));
+        assert!(!path_matches("/Foo/bar", "/foo"));
+    }
+
+    #[test]
+    fn default_path_handles_adjacent_slashes() {
+        assert_eq!(default_path("//"), "/");
+        assert_eq!(default_path("/a/b/"), "/a/b");
+        assert_eq!(default_path("/a//b"), "/a/");
+    }
+
+    #[test]
+    fn path_match_empty_cookie_path_prefixes_any_rooted_path() {
+        // default_path never yields "" (it returns at least "/"), but path_matches is public and
+        // unguarded: pin that an empty cookie-path prefixes any '/'-rooted request-path, and the
+        // degenerate ""/"" identity case, so the behaviour can't drift silently.
+        assert!(path_matches("/a", ""));
+        assert!(path_matches("", ""));
+        assert!(!path_matches("relative", "")); // no leading '/', rest doesn't start with '/'
+    }
 }

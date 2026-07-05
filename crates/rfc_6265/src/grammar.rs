@@ -168,14 +168,16 @@ mod tests {
     }
 
     #[test]
-    fn ws_and_ctl_boundaries() {
-        assert!(is_ws(b' ') && is_ws(b'\t'));
-        assert!(!is_ws(b'\n') && !is_ws(b'a'));
+    fn ws_and_ctl_match_the_rfc_prose_over_all_bytes() {
+        // Sweep every byte for both predicates, so the module's "each pinned by an exhaustive
+        // 0x00..=0xFF test" holds for is_ws too — SP/HTAB only, and RFC 5234 CTL.
         for b in 0u8..=0xff {
+            assert_eq!(is_ws(b), b == b' ' || b == b'\t', "0x{b:02x}");
             assert_eq!(is_ctl(b), matches!(b, 0x00..=0x1f | 0x7f), "0x{b:02x}");
         }
-        // The header-injection bytes are all CTLs.
+        // The header-injection bytes are all CTLs, and none of them are whitespace.
         assert!(is_ctl(b'\r') && is_ctl(b'\n') && is_ctl(0));
+        assert!(!is_ws(b'\n') && !is_ws(0) && !is_ws(b'a'));
     }
 
     #[test]

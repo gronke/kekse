@@ -409,6 +409,30 @@ pub fn scenarios() -> Vec<Scenario> {
             },
         ),
         s(
+            "date-wrong-weekday",
+            "a weekday inconsistent with the date parses leniently (§5.1.1 ignores it); strict rejects it — 06 Nov 1994 was a Sunday, not a Monday",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Mon, 06 Nov 1994 08:49:37 GMT"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: true,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-nonsense-weekday",
+            "a non-weekday token (\"Birthday\") where the weekday belongs parses leniently (ignored); strict rejects it as not a day-of-week name",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Birthday, 06 Nov 1994 08:49:37 GMT"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: true,
+                strict_dated: false,
+            },
+        ),
+        s(
             "date-no-timezone",
             "a cookie-date without a zone parses leniently (§5.1.1 ignores it); strict requires GMT",
             Response,

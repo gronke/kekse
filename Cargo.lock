@@ -1226,6 +1226,7 @@ name = "rfc_6265"
 version = "0.1.0"
 dependencies = [
  "idna",
+ "proptest",
  "psl",
  "time",
 ]

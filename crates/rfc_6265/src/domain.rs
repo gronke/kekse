@@ -49,7 +49,7 @@ pub fn is_host_name(s: &str) -> bool {
 /// Whether `host` **domain-matches** `domain` per RFC 6265 §5.1.3: they are identical, or `domain`
 /// is a suffix of `host` immediately preceded by a `.` (a label boundary) and `host` is not an IP
 /// literal. Both arguments should already be [`canonicalize`]d, with any leading dot stripped from
-/// `domain` (§5.2.3).
+/// `domain` (§5.2.3); an empty `host` or `domain` never matches.
 ///
 /// Beyond the identity case both sides must be valid host names ([`is_host_name`]); a host or
 /// cookie-domain carrying non-name characters (e.g. the embedded userinfo in
@@ -61,9 +61,15 @@ pub fn is_host_name(s: &str) -> bool {
 /// use rfc_6265::domain::domain_matches;
 /// assert!(domain_matches("foo.example.com", "example.com")); // label-boundary suffix
 /// assert!(!domain_matches("badexample.com", "example.com")); // not a boundary
+/// assert!(!domain_matches("", "")); // empty inputs never match, even though "" == ""
 /// ```
 #[must_use]
 pub fn domain_matches(host: &str, domain: &str) -> bool {
+    // Reject degenerate empty inputs before the identity short-circuit, so two empty strings
+    // (neither a valid host) never "match". Valid identical hosts — IP literals included — still do.
+    if host.is_empty() || domain.is_empty() {
+        return false;
+    }
     if host == domain {
         return true;
     }
@@ -269,5 +275,45 @@ mod tests {
         assert_eq!(registrable_domain("a.b.example.com"), Some("example.com"));
         assert_eq!(registrable_domain("example.co.uk"), Some("example.co.uk"));
         assert_eq!(registrable_domain("com"), None);
+    }
+
+    #[test]
+    fn is_host_name_byte_class_over_every_ascii_byte() {
+        // is_host_name is a &str predicate, so the exhaustive unit is the char, not a raw byte:
+        // sweep every ASCII byte as the middle of a label. A label byte is accepted iff it is LDH
+        // (ASCII alphanumeric or '-'); '.' is the label separator, so "a.z" is two valid labels.
+        for b in 0u8..=0x7f {
+            let host = format!("a{}z", b as char);
+            let expected = b == b'.' || b.is_ascii_alphanumeric() || b == b'-';
+            assert_eq!(is_host_name(&host), expected, "byte 0x{b:02x}");
+        }
+        // Every non-ASCII scalar lies outside LDH, so a label carrying one is rejected.
+        assert!(!is_host_name("café.example") && !is_host_name("münchen"));
+    }
+
+    #[test]
+    fn empty_inputs_never_match() {
+        assert!(!domain_matches("", ""));
+        assert!(!domain_matches("", "example.com"));
+        assert!(!domain_matches("example.com", ""));
+    }
+
+    #[test]
+    fn a_trailing_dot_host_does_not_match_the_dotless_domain() {
+        // "example.com." (the FQDN root) is not a valid LDH host name, so it never domain-matches.
+        assert!(!is_host_name("example.com."));
+        assert!(!domain_matches("example.com.", "example.com"));
+        assert!(!domain_matches("foo.example.com.", "example.com"));
+    }
+
+    #[test]
+    fn canonicalize_is_idempotent_and_folds_only_ascii() {
+        assert_eq!(canonicalize("EXAMPLE.Com"), "example.com");
+        // canonicalize is ASCII lower-casing (not IDNA), so a non-ASCII letter is left untouched.
+        assert_eq!(canonicalize("MÜNCHEN.DE"), "mÜnchen.de");
+        for s in ["EXAMPLE.Com", "MÜNCHEN.DE", "a.b.c", ""] {
+            let once = canonicalize(s);
+            assert_eq!(canonicalize(&once), once, "idempotent for {s:?}");
+        }
     }
 }

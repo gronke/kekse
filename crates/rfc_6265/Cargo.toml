@@ -35,3 +35,7 @@ time = { workspace = true, optional = true }
 idna = { version = "1", optional = true }
 # Public Suffix List (compiled in), behind the `psl` feature.
 psl = { version = "2", optional = true }
+
+[dev-dependencies]
+# Property-based invariants for the parsers and matchers (tests/property_invariants.rs).
+proptest.workspace = true
