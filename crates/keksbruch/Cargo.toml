@@ -1,6 +1,6 @@
 [package]
 name = "keksbruch"
-description = "Differential cookie-wire test harness for kekse — its chaos monkey for robustness and cross-implementation compliance."
+description = "Differential cookie-wire test harness for kekse — an adversarial harness for robustness and cross-implementation comparison."
 version.workspace = true
 authors.workspace = true
 homepage.workspace = true

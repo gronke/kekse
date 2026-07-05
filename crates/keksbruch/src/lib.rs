@@ -1,6 +1,6 @@
 //! # keksbruch
 //!
-//! kekse's *chaos monkey*. Where kekse emits only honest, canonical cookie wire,
+//! kekse's adversarial test harness. Where kekse emits only honest, canonical cookie wire,
 //! keksbruch exercises the hard cases — unbalanced quotes, spliced control bytes,
 //! truncated escapes, smuggled `;`, garbage attributes, and the malformed shapes
 //! seen in injection attempts — to verify how a cookie parser behaves on difficult

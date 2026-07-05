@@ -2,7 +2,8 @@
 //! grammar it borrows from **RFC 7230**.
 //!
 //! This crate collects the *side-effect-free* building blocks an RFC 6265 implementation needs,
-//! each defined once and exhaustively tested, so the essential bits and bytes can't drift:
+//! each defined once and thoroughly tested — the grammar byte-classes exhaustively, over all 256
+//! values — so the essential bits and bytes can't drift:
 //!
 //! - `grammar` — §4.1.1 byte classes (cookie-octet, av-octet) and the RFC 7230 token used for
 //!   cookie-names. Always available, dependency-free, all `const fn`.

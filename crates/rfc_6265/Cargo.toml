@@ -1,6 +1,6 @@
 [package]
 name = "rfc_6265"
-description = "Reusable, exhaustively-tested primitives from RFC 6265 (HTTP State Management): grammar byte-classes, cookie-date parsing, and domain/path matching."
+description = "Reusable, thoroughly tested primitives from RFC 6265 (HTTP State Management): grammar byte-classes, cookie-date parsing, and domain/path matching."
 version.workspace = true
 authors.workspace = true
 homepage.workspace = true

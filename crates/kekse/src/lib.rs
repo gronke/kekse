@@ -7,8 +7,8 @@
 //! all on the RFC 6265 §4.1.1 grammar. It carries no cookie *store* (no
 //! persistence, eviction, or domain/path send-matching) and no signing or
 //! encryption, but it does parse and render dates: a lifetime is `Max-Age`
-//! seconds (`u64`) or an `Expires` timestamp (an `OffsetDateTime`). It never
-//! panics on untrusted input.
+//! seconds (`u64`) or an `Expires` timestamp (an `OffsetDateTime`). It is
+//! designed not to panic on untrusted input.
 //!
 //! ## Three types, two headers
 //!

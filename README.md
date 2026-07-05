@@ -11,7 +11,7 @@ A strict, dependency-light cookie **codec** for Rust.
 - **Lenient mode.** Compliant and tolerant — yet, like strict, refuses injection bytes (`;`, CR, LF, NUL, controls, raw non-ASCII).
 - **Strongly typed.** `Cookie`, `SetCookie`, `CookieJar`, `SameSite`, and typed attributes — never stringly-typed maps.
 - **No `unsafe`.**
-- **Fail-soft by design.** Extensively fuzzed and pinned by [`keksbruch`](crates/keksbruch), the differential test harness, and its 40+ parser matrix — designed not to panic on, or echo injection bytes from, malformed input.
+- **Fail-soft by design.** Property-tested and pinned by [`keksbruch`](crates/keksbruch), the differential test harness, and its 30+ parser matrix — designed not to panic on, or echo injection bytes from, malformed input.
 - **Both directions.** Reads a `Cookie:` request header into a `CookieJar` of typed `Cookie`s, builds and parses `Set-Cookie:` responses through `SetCookie`, and converts either straight into an `http::HeaderValue`.
 - **A codec, not a store.** No persistence, eviction, domain/path send-matching, signing, or encryption — just a correct, fail-soft wire codec.
 - **Lightweight.** Just three dependencies (`percent-encoding`, `http`, `time`) and no default features.
@@ -52,10 +52,10 @@ More runnable programs live in [`crates/kekse/examples/`](crates/kekse/examples)
 
 ## Tested hard — keksbruch & the parser matrix
 
-[`keksbruch`](crates/keksbruch) /ˈkeːksˌbʁʊx/ ("broken biscuits") is kekse's *chaos monkey*: it feeds a broad corpus of malformed and edge-case cookie wire — unbalanced quotes, spliced control bytes, truncated escapes, smuggled `;`, garbage attributes — to many parsers and measures how they cope, so kekse's behaviour on difficult input stays correct and well understood.
+[`keksbruch`](crates/keksbruch) /ˈkeːksˌbʁʊx/ ("broken biscuits") is kekse's adversarial test harness: it feeds a broad corpus of malformed and edge-case cookie wire — unbalanced quotes, spliced control bytes, truncated escapes, smuggled `;`, garbage attributes — to many parsers and measures how they cope, so kekse's behaviour on difficult input stays correct and well understood.
 
-- **Layer A** runs in CI, pinning kekse's fail-soft behaviour (never panics, never echoes an injection byte, strict ⊆ lenient) across 80+ malformed-input scenarios.
-- The **differential matrix** feeds the same payloads to 40+ cookie parsers across Rust, Python, Node, Go, .NET, PHP, Java, and C, tabulating where they diverge from the RFC and from real-world consensus.
+- **Layer A** runs in CI, pinning kekse's fail-soft behaviour (never panics, never echoes an injection byte, strict ⊆ lenient) across 80+ malformed and edge-case scenarios.
+- The **differential matrix** feeds the same payloads to 30+ cookie parsers across Rust, Python, Node, Go, .NET, PHP, nginx/Lua, Java, and C, tabulating where they diverge from the RFC and from real-world consensus.
 
 **[Parser-divergence Matrix](https://gronke.github.io/kekse/COOKIE_MATRIX.html)**
 
@@ -63,7 +63,7 @@ More runnable programs live in [`crates/kekse/examples/`](crates/kekse/examples)
 
 - [`kekse`](crates/kekse) — the library (depend on this).
 - [`keksbruch`](crates/keksbruch) — the differential test harness (unpublished).
-- [`rfc_6265`](crates/rfc_6265) — reusable, exhaustively-tested RFC 6265 primitives (grammar byte-classes, cookie-date parsing, domain/path matching).
+- [`rfc_6265`](crates/rfc_6265) — reusable, thoroughly tested RFC 6265 primitives (grammar byte-classes, cookie-date parsing, domain/path matching).
 
 ## License
 
