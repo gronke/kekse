@@ -157,4 +157,7 @@ column), not a parse, so the harness excludes them from the cross-parser consens
    the way node's `npm ci` and the vendored `lua/resty/cookie.lua` do. A compiled, dep-bearing sidecar can
    be built once in CI into the bind-mounted `fixtures/` with its own toolchain image and then run from a
    runtime image — see Java (`fixtures/java/`): a maven image shades `target/sidecar.jar`, which the harness
-   runs with `java -jar` from a JRE image.
+   runs with `java -jar` from a JRE image. A sidecar may also carry everything inside one CI-built image
+   and keep the whole experiment on loopback under `--network=none` — see the browser driver
+   (`parse_setcookie_browsers.py` + `fixtures/browsers/Dockerfile`): loopback origin servers on 80/443
+   plus three WebDriver-driven engines in a single container.
