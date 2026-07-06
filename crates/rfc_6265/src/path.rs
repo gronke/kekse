@@ -100,4 +100,33 @@ mod tests {
         assert!(path_matches("", ""));
         assert!(!path_matches("relative", "")); // no leading '/', rest doesn't start with '/'
     }
+
+    #[test]
+    fn trailing_slash_cookie_path_never_matches_its_parent() {
+        // "/a/" covers itself and anything below it, but not the parent "/a": a longer
+        // cookie-path is never a prefix of the shorter request-path. The asymmetric pair
+        // ("/a/" request vs "/a" cookie) *does* match — the uncovered rest is exactly "/".
+        assert!(!path_matches("/a", "/a/"));
+        assert!(path_matches("/a/", "/a"));
+        assert!(path_matches("/a/b", "/a/"));
+        assert!(!path_matches("/ab", "/a/"));
+    }
+
+    #[test]
+    fn root_cookie_path_matches_every_rooted_request_path() {
+        assert!(path_matches("/x", "/"));
+        assert!(path_matches("/x/y", "/"));
+        assert!(!path_matches("x", "/")); // a relative request-path is never under "/"
+    }
+
+    #[test]
+    fn relative_cookie_path_matches_only_at_a_boundary() {
+        // A conforming store substitutes the default-path for a Path that is missing or not
+        // '/'-rooted (§5.2.4), so a relative cookie-path never arises there — but the primitive
+        // is public and total, so its boundary rule is pinned like the rooted one.
+        assert!(path_matches("abc/d", "abc"));
+        assert!(path_matches("abc", "abc"));
+        assert!(!path_matches("/abc", "abc"));
+        assert!(!path_matches("abX", "ab"));
+    }
 }

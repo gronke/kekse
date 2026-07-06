@@ -161,6 +161,8 @@ mod tests {
     fn suffix_on_a_label_boundary_matches() {
         assert!(domain_matches("foo.example.com", "example.com"));
         assert!(domain_matches("a.b.example.com", "example.com"));
+        // A single-label domain (no dot of its own) still matches at the boundary.
+        assert!(domain_matches("a.localhost", "localhost"));
     }
 
     #[test]

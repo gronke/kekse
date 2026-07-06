@@ -38,6 +38,13 @@ mod date_props {
     }
 
     proptest! {
+        /// Neither date parser panics, whatever the input — both scan untrusted `Expires` text.
+        #[test]
+        fn date_parsers_never_panic_on_arbitrary_input(s in ".*") {
+            let _ = parse_cookie_date(&s);
+            let _ = parse_imf_fixdate(&s);
+        }
+
         /// Every HTTP-date shape round-trips through the tolerant §5.1.1 parser.
         #[test]
         fn all_three_formats_round_trip(t in instants()) {
