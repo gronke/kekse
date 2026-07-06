@@ -249,6 +249,23 @@ fn each_scenario_matches_its_pinned_expectation() {
                     );
                 }
             }
+            Expect::ResponseSameSite { value, same_site } => {
+                // kekse's SameSite is a closed typed enum; a malformed value is
+                // dropped (reported, never fatal) in BOTH modes, so strict and
+                // lenient agree. The pin compares canonical `as_str()` renderings.
+                for (mode, parsed) in [
+                    ("strict", SetCookie::parse_strict(&wire)),
+                    ("default", SetCookie::parse(&wire)),
+                ] {
+                    let sc = parsed.unwrap_or_else(|| panic!("{id} {mode} must keep the cookie"));
+                    assert_eq!(sc.value(), *value, "{id} {mode} value");
+                    assert_eq!(
+                        sc.attributes().same_site.map(|s| s.as_str()),
+                        *same_site,
+                        "{id} {mode} same_site"
+                    );
+                }
+            }
             Expect::ResponseNone => {
                 assert!(SetCookie::parse_strict(&wire).is_none(), "{id} strict");
                 assert!(SetCookie::parse(&wire).is_none(), "{id} default");

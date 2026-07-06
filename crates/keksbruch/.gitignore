@@ -28,3 +28,6 @@ COOKIE_MATRIX.md
 COOKIE_MATRIX.csv
 COOKIE_MATRIX.html
 COOKIE_MATRIX.json
+
+# import-based fixture smokes compile bytecode next to the source
+fixtures/__pycache__/

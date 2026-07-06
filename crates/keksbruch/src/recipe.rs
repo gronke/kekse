@@ -102,7 +102,10 @@ impl<'a> KeksbruchRecipe<'a> {
                 format!("{n}=lo; {}=hi", n.to_uppercase()).into_bytes()
             }
 
-            (Keksbruch::EmptyName, _) => "=v; m=ok".to_string().into_bytes(),
+            (Keksbruch::EmptyName, Direction::Request) => "=v; m=ok".to_string().into_bytes(),
+            // Response: the bare `=v` alone — a trailing `; m=ok` would read as an
+            // unknown attribute and muddy the nameless-cookie question.
+            (Keksbruch::EmptyName, Direction::Response) => b"=v".to_vec(),
             (Keksbruch::EmptyValue, Direction::Request) => format!("{n}=; m=ok").into_bytes(),
             (Keksbruch::EmptyValue, Direction::Response) => format!("{n}=").into_bytes(),
 
@@ -110,7 +113,12 @@ impl<'a> KeksbruchRecipe<'a> {
                 format!("{n}=café; m=ok").into_bytes()
             }
             (Keksbruch::RawNonAsciiValue, Direction::Response) => format!("{n}=café").into_bytes(),
-            (Keksbruch::NonAsciiName, _) => "naïve=v; m=ok".to_string().into_bytes(),
+            (Keksbruch::NonAsciiName, Direction::Request) => {
+                "naïve=v; m=ok".to_string().into_bytes()
+            }
+            (Keksbruch::NonAsciiName, Direction::Response) => "naïve=v".to_string().into_bytes(),
+            (Keksbruch::SpaceInName, Direction::Request) => b"S ID=v; m=ok".to_vec(),
+            (Keksbruch::SpaceInName, Direction::Response) => b"S ID=abc".to_vec(),
 
             (Keksbruch::NulInName, _) => {
                 let mut w = n.as_bytes().to_vec();
@@ -174,6 +182,8 @@ impl<'a> KeksbruchRecipe<'a> {
                 }
             }
             (Keksbruch::EqualsOnly(k), _) => "=".repeat(*k).into_bytes(),
+            // The whole wire is the base cookie's *name*, no `=` anywhere.
+            (Keksbruch::BareValue, Direction::Response) => n.as_bytes().to_vec(),
             (Keksbruch::NulOnlyName, _) => {
                 let mut w = vec![0u8];
                 w.extend_from_slice(b"=; m=ok");
@@ -194,6 +204,11 @@ impl<'a> KeksbruchRecipe<'a> {
                 self.base.baseline(Direction::Response)
             )
             .into_bytes(),
+            (Keksbruch::SameSiteSecure(val), Direction::Response) => format!(
+                "{}; SameSite={val}; Secure",
+                self.base.baseline(Direction::Response)
+            )
+            .into_bytes(),
             (Keksbruch::ValuedFlag(flag), Direction::Response) => {
                 format!("{}; {flag}=1", self.base.baseline(Direction::Response)).into_bytes()
             }
@@ -211,6 +226,12 @@ impl<'a> KeksbruchRecipe<'a> {
             (Keksbruch::PathValue(val), Direction::Response) => {
                 format!("{}; Path={val}", self.base.baseline(Direction::Response)).into_bytes()
             }
+            (Keksbruch::OverlongPath(k), Direction::Response) => format!(
+                "{}; Path=/{}",
+                self.base.baseline(Direction::Response),
+                "a".repeat(*k)
+            )
+            .into_bytes(),
             (Keksbruch::AllAttributes, Direction::Response) => format!(
                 "{}; Path=/p; Domain=example.com; Max-Age=60; Secure; HttpOnly; SameSite=Lax",
                 self.base.baseline(Direction::Response)
@@ -241,16 +262,19 @@ impl<'a> KeksbruchRecipe<'a> {
                 Keksbruch::UnknownAttribute(_)
                 | Keksbruch::BadMaxAge(_)
                 | Keksbruch::GarbageSameSite(_)
+                | Keksbruch::SameSiteSecure(_)
                 | Keksbruch::ValuedFlag(_)
                 | Keksbruch::DuplicateAttribute(_)
                 | Keksbruch::ExpiresDate(_)
                 | Keksbruch::DomainValue(_)
                 | Keksbruch::PathValue(_)
+                | Keksbruch::OverlongPath(_)
                 | Keksbruch::AllAttributes
                 | Keksbruch::DuplicateDomain { .. }
                 | Keksbruch::NulInAttrName
                 | Keksbruch::NulInAttrValue
-                | Keksbruch::QuotedPairWithFlag,
+                | Keksbruch::QuotedPairWithFlag
+                | Keksbruch::BareValue,
                 Direction::Request,
             ) => self.base.baseline(Direction::Request).into_bytes(),
         }

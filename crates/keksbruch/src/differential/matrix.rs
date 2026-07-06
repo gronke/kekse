@@ -123,13 +123,23 @@ fn rfc_verdict(id: &str) -> Option<&'static str> {
         | "markup-name"
         | "nul-empty-name"
         | "resp-array-name"
-        | "resp-quoted-pair-flag" => Some("non-token name skipped"),
+        | "resp-quoted-pair-flag"
+        | "resp-non-ascii-name" => Some("non-token name skipped"),
         "bracket-value" | "resp-bracket-value" => Some("`[` `]` are cookie-octets"),
         "json-value" | "resp-json-value" => Some("DQUOTE is not a cookie-octet"),
-        "attr-unknown" | "attr-bad-maxage" | "attr-garbage-samesite" => {
+        "attr-unknown" | "attr-bad-maxage" | "attr-garbage-samesite" | "resp-samesite-empty" => {
             Some("keep cookie, ignore attr (§5.2)")
         }
         "attr-duplicate" => Some("keep cookie, last wins (§5.2)"),
+        "resp-samesite-strict" | "resp-samesite-lax" => Some("6265bis: samesite-av parses"),
+        "resp-samesite-none-bare" => Some("6265bis: None requires Secure"),
+        "resp-samesite-none-secure" => Some("6265bis: None + Secure"),
+        "resp-samesite-case" => Some("6265bis: value is case-insensitive"),
+        "resp-nameless-bare" => Some("no `=` → ignore the line (§5.2)"),
+        "resp-nameless-eq" => Some("empty name — spec-gray (§5.2)"),
+        "resp-space-in-name" => Some("non-token name skipped"),
+        "resp-del-byte" => Some("CTL is not a cookie-octet"),
+        "path-overlong-1025" => Some("path-av has no length cap (§4.1.1)"),
         "date-2digit-year-69" => Some("§5.1.1: 69 → 2069"),
         "date-2digit-year-70" => Some("§5.1.1: 70 → 1970"),
         "date-year-1601-boundary" => Some("§5.1.1: year ≥ 1601 is valid"),

@@ -88,8 +88,13 @@ pub enum Keksbruch {
     UnknownAttribute(&'static str),
     /// A non-numeric or negative `Max-Age`: `; Max-Age=banana`.
     BadMaxAge(&'static str),
-    /// A garbage `SameSite` token: `; SameSite=Bogus`.
+    /// A garbage `SameSite` token: `; SameSite=Bogus`. (The renderer is generic —
+    /// `; SameSite=<val>` — so the well-defined values ride this variant too.)
     GarbageSameSite(&'static str),
+    /// A `SameSite` value plus the `Secure` flag: `; SameSite=<val>; Secure`
+    /// (Response). Probes 6265bis's "SameSite=None requires Secure" policy —
+    /// engines refuse the bare form and accept this one.
+    SameSiteSecure(&'static str),
     /// A valueless flag handed a value: `; Secure=1`.
     ValuedFlag(&'static str),
     /// A duplicated attribute: `; Path=/a; Path=/b`.
@@ -109,6 +114,10 @@ pub enum Keksbruch {
     /// semantics, so kekse stores the value verbatim; the matrix shows who normalises,
     /// rejects, or applies default-path logic at parse time.
     PathValue(&'static str),
+    /// A `Path` whose value is `/` plus `a` × `n` (Response). RFC 6265 has no length
+    /// cap on an av — kekse keeps it — while 6265bis caps attribute values at 1024
+    /// bytes, so engines drop the attribute and fall back to the default-path.
+    OverlongPath(usize),
     /// Two `Domain=` attributes on one cookie: `; Domain=<first>; Domain=<second>` (Response).
     /// kekse never *emits* this (a `SetCookie` holds one `Domain`), so keksbruch hand-builds it:
     /// lenient parse takes the last value, strict parse rejects the duplicate outright.
@@ -154,6 +163,12 @@ pub enum Keksbruch {
     EqualsOnly(usize),
     /// A name that is a single NUL byte with an empty value: `\0=`.
     NulOnlyName,
+    /// A bare token with no `=` at all — the whole wire is the name: `justvalue`
+    /// (Response). RFC 6265 §5.2 ignores a set-cookie-string without `=`; 6265bis
+    /// reads it as a nameless cookie.
+    BareValue,
+    /// A raw SP inside the cookie *name*: `S ID=…` — SP is not a token character.
+    SpaceInName,
     /// A whole `name=value` wrapped in DQUOTEs plus a flag attribute:
     /// `"sid=..." ; Secure` (Response).
     QuotedPairWithFlag,

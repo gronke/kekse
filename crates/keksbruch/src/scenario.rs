@@ -70,6 +70,16 @@ pub enum Expect {
         value: &'static str,
         path: Option<&'static str>,
     },
+    /// Response: both modes keep a cookie with `value` and this parsed `SameSite`.
+    /// kekse's `SameSite` is a closed typed enum parsed ASCII-case-insensitively;
+    /// a malformed value is dropped with a report — never fatal — in BOTH modes,
+    /// so strict and lenient agree and both are asserted. The pin is the canonical
+    /// `as_str()` rendering (`Strict`/`Lax`/`None`), or `None` when the attribute
+    /// must be dropped.
+    ResponseSameSite {
+        value: &'static str,
+        same_site: Option<&'static str>,
+    },
     /// Response: both modes reject (`None`).
     ResponseNone,
     /// The wire is not valid UTF-8, so it can never reach a `&str` parser.
@@ -366,6 +376,83 @@ pub fn scenarios() -> Vec<Scenario> {
             "SID",
             Keksbruch::DuplicateAttribute("Path"),
             Expect::ResponseStrictRejectsLenientKeeps { value: "abc" },
+        ),
+        // ── SameSite values (Response) ──────────────────────────────────────
+        // The three well-defined tokens (RFC 6265bis samesite-av), case-folding,
+        // the empty value, and the None-requires-Secure policy split. kekse's
+        // SameSite is a closed typed enum: a well-defined token parses
+        // (case-insensitively), anything else is dropped with a report while the
+        // cookie survives — identically in both modes, so kekse never assumes a
+        // default. Browser columns answer with their *stored* stance instead: an
+        // engaged degenerate value reveals each engine's assumption, and the
+        // None-without-Secure row shows storage policy, not parsing.
+        s(
+            "resp-samesite-strict",
+            "SameSite=Strict parses to the typed variant in both modes",
+            Response,
+            "SID",
+            Keksbruch::GarbageSameSite("Strict"),
+            Expect::ResponseSameSite {
+                value: "abc",
+                same_site: Some("Strict"),
+            },
+        ),
+        s(
+            "resp-samesite-lax",
+            "SameSite=Lax parses to the typed variant in both modes",
+            Response,
+            "SID",
+            Keksbruch::GarbageSameSite("Lax"),
+            Expect::ResponseSameSite {
+                value: "abc",
+                same_site: Some("Lax"),
+            },
+        ),
+        s(
+            "resp-samesite-none-bare",
+            "SameSite=None without Secure — kekse keeps the typed value (parse time has no \
+             storage policy); the matrix shows who refuses the pairing",
+            Response,
+            "SID",
+            Keksbruch::GarbageSameSite("None"),
+            Expect::ResponseSameSite {
+                value: "abc",
+                same_site: Some("None"),
+            },
+        ),
+        s(
+            "resp-samesite-none-secure",
+            "SameSite=None; Secure — the 6265bis-conformant pairing",
+            Response,
+            "SID",
+            Keksbruch::SameSiteSecure("None"),
+            Expect::ResponseSameSite {
+                value: "abc",
+                same_site: Some("None"),
+            },
+        ),
+        s(
+            "resp-samesite-case",
+            "the SameSite value is ASCII-case-insensitive: lAx parses as Lax",
+            Response,
+            "SID",
+            Keksbruch::GarbageSameSite("lAx"),
+            Expect::ResponseSameSite {
+                value: "abc",
+                same_site: Some("Lax"),
+            },
+        ),
+        s(
+            "resp-samesite-empty",
+            "an empty SameSite= is dropped and the cookie kept — the row where jars \
+             reveal what they assume when the attribute says nothing",
+            Response,
+            "SID",
+            Keksbruch::GarbageSameSite(""),
+            Expect::ResponseSameSite {
+                value: "abc",
+                same_site: None,
+            },
         ),
         // ── Expires dates (Response) ────────────────────────────────────────
         // Lenient parse = RFC 6265 §5.1.1 cookie-date (accepts the IMF-fixdate, the
@@ -976,6 +1063,21 @@ pub fn scenarios() -> Vec<Scenario> {
                 path: Some("."),
             },
         ),
+        s(
+            "path-overlong-1025",
+            "a 1025-byte Path value: RFC 6265 puts no length cap on an av (kekse keeps it \
+             verbatim); 6265bis caps attribute values at 1024 bytes, so engines drop the \
+             attribute and fall back to the request's default-path",
+            Response,
+            "SID",
+            Keksbruch::OverlongPath(1024),
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: false,
+            },
+        ),
         // ── attribute fidelity (Response) ───────────────────────────────────
         // A "kitchen-sink" cookie that sets all six attributes at once. kekse parses
         // every one; the matrix renders an explicit per-attribute grid (the "Attribute
@@ -1064,6 +1166,51 @@ pub fn scenarios() -> Vec<Scenario> {
             Response,
             "SID",
             Keksbruch::RawNonAsciiValue,
+            Expect::ResponseNone,
+        ),
+        // ── engine edges (Response) ─────────────────────────────────────────
+        // Shapes where the browser engines' §5.2/6265bis readings differ most
+        // from a grammar-strict parser: nameless forms, non-token names, DEL.
+        // kekse refuses each in both modes; the matrix records who stores what.
+        s(
+            "resp-nameless-bare",
+            "a bare token with no `=` at all: RFC 6265 §5.2 ignores the whole \
+             set-cookie-string; 6265bis reads a nameless cookie",
+            Response,
+            "justvalue",
+            Keksbruch::BareValue,
+            Expect::ResponseNone,
+        ),
+        s(
+            "resp-nameless-eq",
+            "an empty name (`=v`) is refused by kekse; nameless-tolerant parsers keep a value-only cookie",
+            Response,
+            "SID",
+            Keksbruch::EmptyName,
+            Expect::ResponseNone,
+        ),
+        s(
+            "resp-non-ascii-name",
+            "a non-token (non-ASCII) Set-Cookie name is refused by kekse",
+            Response,
+            "SID",
+            Keksbruch::NonAsciiName,
+            Expect::ResponseNone,
+        ),
+        s(
+            "resp-space-in-name",
+            "a raw SP inside the Set-Cookie name — SP is not a token character",
+            Response,
+            "SID",
+            Keksbruch::SpaceInName,
+            Expect::ResponseNone,
+        ),
+        s(
+            "resp-del-byte",
+            "DEL (0x7F) in the Set-Cookie value is a CTL, not a cookie-octet",
+            Response,
+            "SID",
+            Keksbruch::ControlInValue(0x7F),
             Expect::ResponseNone,
         ),
         // ── extra coverage: NUL positions, HTAB, multibyte UTF-8 ────────────
