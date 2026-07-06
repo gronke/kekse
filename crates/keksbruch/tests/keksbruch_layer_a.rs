@@ -177,6 +177,34 @@ fn each_scenario_matches_its_pinned_expectation() {
                     );
                 }
             }
+            Expect::ResponseDatedAt {
+                value,
+                lenient,
+                strict,
+            } => {
+                // Each pin is decoded through the strict IMF-fixdate parser, so a mistyped
+                // pin (wrong pivot year, wrong weekday, non-canonical form) panics here
+                // instead of silently pinning nothing.
+                let decode = |pin: Option<&str>, mode: &str| {
+                    pin.map(|p| {
+                        rfc_6265::date::parse_imf_fixdate(p).unwrap_or_else(|| {
+                            panic!("{id} {mode}: pin {p:?} is not a canonical IMF-fixdate")
+                        })
+                    })
+                };
+                for (mode, parsed, want) in [
+                    ("strict", SetCookie::parse_strict(&wire), *strict),
+                    ("default", SetCookie::parse(&wire), *lenient),
+                ] {
+                    let sc = parsed.unwrap_or_else(|| panic!("{id} {mode} must keep the cookie"));
+                    assert_eq!(sc.value(), *value, "{id} {mode} value");
+                    assert_eq!(
+                        sc.attributes().expires,
+                        decode(want, mode),
+                        "{id} {mode} expires instant"
+                    );
+                }
+            }
             Expect::ResponseDomain {
                 value,
                 default_domain,

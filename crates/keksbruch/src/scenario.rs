@@ -44,6 +44,16 @@ pub enum Expect {
         lenient_dated: bool,
         strict_dated: bool,
     },
+    /// Response: both modes keep a cookie with `value`; the parsed `Expires` *instant* is
+    /// pinned exactly, per mode. Each pin is the expected instant's canonical IMF-fixdate
+    /// rendering — Layer A decodes it with `rfc_6265::date::parse_imf_fixdate`, so a mistyped
+    /// pin (wrong pivot year, wrong weekday) fails loudly — or `None` when that mode must not
+    /// parse a date (the attribute is dropped, the cookie survives).
+    ResponseDatedAt {
+        value: &'static str,
+        lenient: Option<&'static str>,
+        strict: Option<&'static str>,
+    },
     /// Response: both modes keep a cookie with `value`; its resolved `Domain` is `default_domain`
     /// in the pure-codec build and `hardened_domain` under the `hardened` feature (where `psl` /
     /// `idna` may refuse a public-suffix or malformed value, leaving it `None`). For a single
@@ -607,6 +617,180 @@ pub fn scenarios() -> Vec<Scenario> {
                 value: "abc",
                 lenient_dated: false,
                 strict_dated: false,
+            },
+        ),
+        // §5.1.1 semantics pinned to the *instant* (ResponseDatedAt): the two-digit-year pivot
+        // edges, the year floor's accept side, and the scan's per-token rules. Every pin is the
+        // expected instant's canonical IMF-fixdate rendering, decoded — and thereby verified —
+        // in Layer A, so a wrong pivot or a hand-typo'd date fails loudly. Wire literals that
+        // carry a weekday carry the *true* one (see `date_formatters.rs`), so each row isolates
+        // exactly the variable it names.
+        s(
+            "date-2digit-year-69",
+            "the two-digit-year pivot's upper edge: 69 → 2069 (§5.1.1 steps 3–4); strict wants four digits",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Tue, 01 Jan 69 00:00:00 GMT"),
+            Expect::ResponseDatedAt {
+                value: "abc",
+                lenient: Some("Tue, 01 Jan 2069 00:00:00 GMT"),
+                strict: None,
+            },
+        ),
+        s(
+            "date-2digit-year-70",
+            "the pivot's lower edge: 70 → 1970 — the parsed instant is exactly the Unix epoch",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Thu, 01 Jan 70 00:00:00 GMT"),
+            Expect::ResponseDatedAt {
+                value: "abc",
+                lenient: Some("Thu, 01 Jan 1970 00:00:00 GMT"),
+                strict: None,
+            },
+        ),
+        s(
+            "date-year-1601-boundary",
+            "the accept side of the §5.1.1 year floor: 1601 parses in both modes (1600 does not)",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Mon, 01 Jan 1601 00:00:00 GMT"),
+            Expect::ResponseDatedAt {
+                value: "abc",
+                lenient: Some("Mon, 01 Jan 1601 00:00:00 GMT"),
+                strict: Some("Mon, 01 Jan 1601 00:00:00 GMT"),
+            },
+        ),
+        s(
+            "date-hour-out-of-range",
+            "an hour past 23 is rejected by both modes (completes the minute/second family)",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun, 06 Nov 1994 24:00:00 GMT"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: false,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-1-digit-day",
+            "a one-digit day is 1*2DIGIT, so it parses leniently; strict requires two digits",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun, 6 Nov 1994 08:49:37 GMT"),
+            Expect::ResponseDatedAt {
+                value: "abc",
+                lenient: Some("Sun, 06 Nov 1994 08:49:37 GMT"),
+                strict: None,
+            },
+        ),
+        s(
+            "date-month-case",
+            "an upper-cased month parses leniently (the month token is case-insensitive); strict wants canonical casing",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun, 06 NOV 1994 08:49:37 GMT"),
+            Expect::ResponseDatedAt {
+                value: "abc",
+                lenient: Some("Sun, 06 Nov 1994 08:49:37 GMT"),
+                strict: None,
+            },
+        ),
+        s(
+            "date-month-overlong",
+            "a spelled-out month matches on its first three letters (§5.1.1); strict refuses it",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("06 Novembre 1994 08:49:37"),
+            Expect::ResponseDatedAt {
+                value: "abc",
+                lenient: Some("Sun, 06 Nov 1994 08:49:37 GMT"),
+                strict: None,
+            },
+        ),
+        s(
+            "date-year-trailing-alpha",
+            "a year with a non-digit tail (`1994AD`) parses leniently — year = 2*4DIGIT ( non-digit *OCTET )",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("06 Nov 1994AD 08:49:37"),
+            Expect::ResponseDatedAt {
+                value: "abc",
+                lenient: Some("Sun, 06 Nov 1994 08:49:37 GMT"),
+                strict: None,
+            },
+        ),
+        s(
+            "date-5-digit-year",
+            "five leading digits match no year token (2*4DIGIT), so both modes drop the date",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("06 Nov 19940 08:49:37"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: false,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-missing-year",
+            "a date missing its year is dropped by both modes; parsers that default a year diverge",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun, 06 Nov 08:49:37 GMT"),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: false,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-empty",
+            "an empty Expires value carries no date; the attribute is dropped and the cookie survives",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate(""),
+            Expect::ResponseDated {
+                value: "abc",
+                lenient_dated: false,
+                strict_dated: false,
+            },
+        ),
+        s(
+            "date-zone-offset",
+            "a numeric zone offset is ignored leniently (§5.1.1 reads no zone); offset-honouring parsers shift the instant",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun, 06 Nov 1994 08:49:37 GMT+0100"),
+            Expect::ResponseDatedAt {
+                value: "abc",
+                lenient: Some("Sun, 06 Nov 1994 08:49:37 GMT"),
+                strict: None,
+            },
+        ),
+        s(
+            "date-tab-delims",
+            "HTAB is a §5.1.1 delimiter, so a tab-separated date parses leniently; strict wants single spaces",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("Sun,\t06\tNov\t1994\t08:49:37\tGMT"),
+            Expect::ResponseDatedAt {
+                value: "abc",
+                lenient: Some("Sun, 06 Nov 1994 08:49:37 GMT"),
+                strict: None,
+            },
+        ),
+        s(
+            "date-first-token-wins",
+            "§5.1.1 binds each field to the FIRST matching token: the second time-shaped token becomes the day (8), the bare `06` the year (2006)",
+            Response,
+            "SID",
+            Keksbruch::ExpiresDate("07:00:00 08:49:37 06 Nov 1994"),
+            Expect::ResponseDatedAt {
+                value: "abc",
+                lenient: Some("Wed, 08 Nov 2006 07:00:00 GMT"),
+                strict: None,
             },
         ),
         // ── domain: supercookie defense + IDN notation (Response) ───────────
