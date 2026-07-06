@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# Cancel a superseded run when a new commit lands on the same ref — a fresh push to a
+# pull request, or to main. The gate only cares about the newest commit, so an in-flight
+# run for an older one just burns CI minutes (the advisory audit leg alone is minutes
+# long). The matrix workflow already cancels per-ref; this covers the whole gate.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # Least privilege: the jobs only read the repo. The sealed Docker pipeline needs
 # no registry/push credentials.
 permissions:
