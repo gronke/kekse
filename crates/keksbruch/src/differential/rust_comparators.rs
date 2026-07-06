@@ -299,6 +299,78 @@ fn biscotti_cookies(jar: &biscotti::RequestCookies, wire: &str) -> Vec<CookieVie
     out
 }
 
+/// An in-process client jar for the jar probes: store one `Set-Cookie` as if
+/// received from `origin_url` (§5.3), then report the cookies it would attach to a
+/// request to `request_url` (§5.4) as [`ParseOutcome::Cookies`] — an empty list
+/// (`∅`) meaning "not sent", whether storage refused the cookie or the match
+/// failed. The wire-parsing [`RustComparator`] axis stays separate; a type may
+/// implement both (cookie_store does), landing in one column.
+pub trait JarComparator {
+    /// `(lang, dependency)` — the matrix column identity. Matching a
+    /// [`RustComparator`] id merges the probe cells into that column.
+    fn id(&self) -> (&'static str, &'static str);
+    fn probe(&self, set_cookie: &str, origin_url: &str, request_url: &str) -> ParseOutcome;
+
+    /// Run one probe, catching a panic as a `Panicked` finding.
+    fn run(&self, set_cookie: &str, origin_url: &str, request_url: &str) -> ParseOutcome {
+        catch_unwind(AssertUnwindSafe(|| {
+            self.probe(set_cookie, origin_url, request_url)
+        }))
+        .unwrap_or_else(|_| ParseOutcome::Panicked {
+            message: "jar panicked".to_string(),
+        })
+    }
+}
+
+/// The in-process jar comparators, in matrix-column order.
+pub fn jar_comparators() -> Vec<Box<dyn JarComparator>> {
+    vec![Box::new(Rfc6265Reference), Box::new(CookieStore)]
+}
+
+/// The RFC 6265 §5.3/§5.4 algorithm executed directly from rfc_6265's primitives
+/// (`crate::reference`) — the jar-probe table's baseline column, and a subject
+/// (like kekse) kept off the consensus vote.
+pub struct Rfc6265Reference;
+
+impl JarComparator for Rfc6265Reference {
+    fn id(&self) -> (&'static str, &'static str) {
+        ("rust", "rfc_6265 (reference)")
+    }
+    fn probe(&self, set_cookie: &str, origin_url: &str, request_url: &str) -> ParseOutcome {
+        ParseOutcome::Cookies {
+            cookies: crate::reference::probe_retrieval(set_cookie, origin_url, request_url)
+                .into_iter()
+                .map(|(n, v)| CookieView::new(n, v))
+                .collect(),
+        }
+    }
+}
+
+impl JarComparator for CookieStore {
+    fn id(&self) -> (&'static str, &'static str) {
+        // The same column as its wire (RustComparator) identity — one tool, two axes.
+        ("rust", "cookie_store")
+    }
+    fn probe(&self, set_cookie: &str, origin_url: &str, request_url: &str) -> ParseOutcome {
+        let (Ok(origin), Ok(request)) = (url::Url::parse(origin_url), url::Url::parse(request_url))
+        else {
+            return ParseOutcome::Rejected {
+                error: "bad probe url".to_string(),
+            };
+        };
+        let mut store = cookie_store::CookieStore::new();
+        // A storage refusal (domain mismatch, public suffix) is "not sent" — ∅ —
+        // exactly like a stored cookie the request then fails to match.
+        let _ = store.parse(set_cookie, &origin);
+        ParseOutcome::Cookies {
+            cookies: store
+                .get_request_values(&request)
+                .map(|(n, v)| CookieView::new(n, v))
+                .collect(),
+        }
+    }
+}
+
 impl RustComparator for AxumExtra {
     fn id(&self) -> (&'static str, &'static str) {
         ("rust", "axum-extra")

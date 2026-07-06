@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::differential::matrix::Column;
 use crate::differential::result::ParseOutcome;
+use crate::probe::JarProbe;
 use crate::scenario::Scenario;
 use crate::taxonomy::Direction;
 
@@ -31,6 +32,52 @@ struct InputRecord<'a> {
     id: &'a str,
     direction: &'a str,
     wire_b64: String,
+    /// Jar probes only (`direction: "jar"`): the URL the Set-Cookie is stored from.
+    /// Skipped when absent, so wire records serialize byte-identically to protocol v1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    origin_url: Option<&'a str>,
+    /// Jar probes only: the URL of the later request the jar attaches cookies to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_url: Option<&'a str>,
+}
+
+/// One record to stream to a sidecar: a wire scenario, or a jar probe (protocol v2's
+/// `direction: "jar"` record). Ids are disjoint (`jar-*` prefixes the probes), so the
+/// id-keyed answer map and crash isolation work unchanged across both kinds.
+enum Payload<'a> {
+    Wire(&'a Scenario),
+    Probe(&'a JarProbe),
+}
+
+impl<'a> Payload<'a> {
+    fn id(&self) -> &'a str {
+        match self {
+            Payload::Wire(s) => s.id,
+            Payload::Probe(p) => p.id,
+        }
+    }
+
+    fn record(&self) -> InputRecord<'a> {
+        match self {
+            Payload::Wire(s) => InputRecord {
+                id: s.id,
+                direction: match s.direction {
+                    Direction::Request => "request",
+                    Direction::Response => "response",
+                },
+                wire_b64: BASE64_STANDARD.encode(s.recipe.render()),
+                origin_url: None,
+                request_url: None,
+            },
+            Payload::Probe(p) => InputRecord {
+                id: p.id,
+                direction: "jar",
+                wire_b64: BASE64_STANDARD.encode(p.set_cookie.as_bytes()),
+                origin_url: Some(p.origin_url),
+                request_url: Some(p.request_url),
+            },
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -311,9 +358,16 @@ const SIDECARS: &[SidecarSpec] = &[
 ];
 
 /// Build every sidecar-backed column (graceful SKIP where unavailable), plus a
-/// human version line per sidecar for the matrix's "tested against" footer.
-pub fn sidecar_columns(scenarios: &[Scenario]) -> (Vec<Column>, Vec<String>) {
+/// human version line per sidecar for the matrix's "tested against" footer. One
+/// process per sidecar answers the whole stream — the wire scenarios, then the
+/// jar probes; the id-keyed answers split back into `cells` and `probe_cells`.
+pub fn sidecar_columns(scenarios: &[Scenario], probes: &[JarProbe]) -> (Vec<Column>, Vec<String>) {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+    let payloads: Vec<Payload<'_>> = scenarios
+        .iter()
+        .map(Payload::Wire)
+        .chain(probes.iter().map(Payload::Probe))
+        .collect();
     let mut columns = Vec::new();
     let mut versions = Vec::new();
     for spec in SIDECARS {
@@ -321,7 +375,7 @@ pub fn sidecar_columns(scenarios: &[Scenario]) -> (Vec<Column>, Vec<String>) {
         let check = selfcheck(spec, &script);
         versions.push(version_line(spec, &check));
         let results = if check.is_some() {
-            run_sidecar(spec, &script, scenarios)
+            run_sidecar(spec, &script, &payloads)
         } else {
             None
         };
@@ -330,24 +384,22 @@ pub fn sidecar_columns(scenarios: &[Scenario]) -> (Vec<Column>, Vec<String>) {
                 .as_ref()
                 .and_then(|c| c.available.get(*dep).copied())
                 .unwrap_or(false);
-            let cells = scenarios
-                .iter()
-                .map(|s| {
-                    if !dep_ok {
-                        return ParseOutcome::Skipped;
-                    }
-                    results
-                        .as_ref()
-                        .and_then(|m| m.get(s.id))
-                        .and_then(|by_dep| by_dep.get(*dep))
-                        .cloned()
-                        .unwrap_or(ParseOutcome::Skipped)
-                })
-                .collect();
+            let outcome_of = |id: &str| {
+                if !dep_ok {
+                    return ParseOutcome::Skipped;
+                }
+                results
+                    .as_ref()
+                    .and_then(|m| m.get(id))
+                    .and_then(|by_dep| by_dep.get(*dep))
+                    .cloned()
+                    .unwrap_or(ParseOutcome::Skipped)
+            };
             columns.push(Column {
                 lang: spec.lang.to_string(),
                 dep: dep.to_string(),
-                cells,
+                cells: scenarios.iter().map(|s| outcome_of(s.id)).collect(),
+                probe_cells: probes.iter().map(|p| outcome_of(p.id)).collect(),
             });
         }
     }
@@ -507,10 +559,10 @@ struct BatchOutcome {
 fn run_sidecar(
     spec: &SidecarSpec,
     script: &Path,
-    scenarios: &[Scenario],
+    payloads: &[Payload<'_>],
 ) -> Option<BTreeMap<String, BTreeMap<String, ParseOutcome>>> {
     let mut answered: BTreeMap<String, BTreeMap<String, ParseOutcome>> = BTreeMap::new();
-    let mut remaining: Vec<&Scenario> = scenarios.iter().collect();
+    let mut remaining: Vec<&Payload<'_>> = payloads.iter().collect();
 
     // Each iteration runs the pending records in one process; it either answers
     // some (progress) or pins exactly one crasher (also progress), so `remaining`
@@ -526,10 +578,10 @@ fn run_sidecar(
         for (id, by_dep) in answers {
             answered.insert(id, by_dep);
         }
-        let next: Vec<&Scenario> = remaining
+        let next: Vec<&Payload<'_>> = remaining
             .iter()
             .copied()
-            .filter(|s| !answered.contains_key(s.id))
+            .filter(|p| !answered.contains_key(p.id()))
             .collect();
         if next.is_empty() {
             return Some(answered);
@@ -549,9 +601,9 @@ fn run_sidecar(
         // re-run it alone (below), the solo run's streams are exactly its own.
         let (crash_reason, crash_stdout, crash_stderr) = if !made_progress && next.len() > 1 {
             let solo = run_batch(spec, script, &[crasher])?;
-            if let Some(by_dep) = solo.answers.get(crasher.id) {
+            if let Some(by_dep) = solo.answers.get(crasher.id()) {
                 // Parses fine alone — the true crasher is later in the batch.
-                answered.insert(crasher.id.to_string(), by_dep.clone());
+                answered.insert(crasher.id().to_string(), by_dep.clone());
                 remaining = next[1..].to_vec();
                 continue;
             }
@@ -560,7 +612,7 @@ fn run_sidecar(
             (reason, stdout, stderr)
         };
         answered.insert(
-            crasher.id.to_string(),
+            crasher.id().to_string(),
             crash_map(
                 spec,
                 &crash_reason,
@@ -577,7 +629,7 @@ fn run_sidecar(
 /// read result lines off stdout with an inactivity timeout (a reader thread feeds
 /// a channel, so a full stdout pipe can never deadlock the writer), and classify
 /// how the process ended.
-fn run_batch(spec: &SidecarSpec, script: &Path, batch: &[&Scenario]) -> Option<BatchOutcome> {
+fn run_batch(spec: &SidecarSpec, script: &Path, batch: &[&Payload<'_>]) -> Option<BatchOutcome> {
     let mut child = launch(spec, script, true)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -616,15 +668,8 @@ fn run_batch(spec: &SidecarSpec, script: &Path, batch: &[&Scenario]) -> Option<B
 
     {
         let mut stdin = child.stdin.take()?;
-        for s in batch {
-            let record = InputRecord {
-                id: s.id,
-                direction: match s.direction {
-                    Direction::Request => "request",
-                    Direction::Response => "response",
-                },
-                wire_b64: BASE64_STANDARD.encode(s.recipe.render()),
-            };
+        for payload in batch {
+            let record = payload.record();
             if let Ok(line) = serde_json::to_string(&record) {
                 // A write error (EPIPE) means the child already died — Rust ignores
                 // SIGPIPE, so this returns rather than killing us. Stop feeding it
@@ -809,10 +854,10 @@ for line in sys.stdin:
 
         let all = crate::scenario::scenarios();
         assert!(all.len() >= 6, "corpus should have at least 6 scenarios");
-        let batch = &all[..6];
-        let crash_id = batch[2].id; // crash on the 3rd record
-        let earlier_id = batch[0].id; // answered before the crash
-        let later_id = batch[5].id; // answered only if the replay runs
+        let batch: Vec<Payload<'_>> = all[..6].iter().map(Payload::Wire).collect();
+        let crash_id = batch[2].id(); // crash on the 3rd record
+        let earlier_id = batch[0].id(); // answered before the crash
+        let later_id = batch[5].id(); // answered only if the replay runs
 
         let path = std::env::temp_dir().join(format!("keksbruch_faux_{}.py", std::process::id()));
         std::fs::write(
@@ -830,7 +875,7 @@ for line in sys.stdin:
             script: "unused", // run_sidecar takes the script path explicitly
             deps: &["faux"],
         };
-        let result = run_sidecar(&spec, &path, batch);
+        let result = run_sidecar(&spec, &path, &batch);
         let _ = std::fs::remove_file(&path);
         let result = result.expect("run_sidecar returns Some even when a payload crashes");
 

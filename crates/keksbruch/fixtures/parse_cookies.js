@@ -107,6 +107,28 @@ function toughResponse(wire) {
   }
 }
 
+// tough-cookie as a *jar* (protocol v2 "jar" records): store the Set-Cookie as if
+// received from origin_url, then report the cookies the jar would attach to a
+// request to request_url. An empty list means "not sent" — a storage refusal
+// (domain mismatch, public suffix) and a match failure read the same, per PROTOCOL.md.
+function toughJarProbe(wire, originUrl, requestUrl) {
+  try {
+    const { CookieJar } = require("tough-cookie");
+    const jar = new CookieJar();
+    try {
+      jar.setCookieSync(wire.toString("latin1"), originUrl);
+    } catch (e) {
+      return { outcome: "Cookies", cookies: [] };
+    }
+    const cookies = jar
+      .getCookiesSync(requestUrl)
+      .map((c) => ({ name: c.key, value: c.value }));
+    return { outcome: "Cookies", cookies };
+  } catch (e) {
+    return { outcome: "Rejected", error: String((e && e.message) || e) };
+  }
+}
+
 // `set-cookie-parser` parses one Set-Cookie string; absent attributes are omitted.
 function setCookieParserResponse(wire) {
   try {
@@ -188,7 +210,7 @@ function main() {
         "universal-cookie": avail["universal-cookie"] ? universalCookieRequest(wire) : skip,
         "js-cookie": avail["js-cookie"] ? jsCookieRequest(wire) : skip,
       };
-    } else {
+    } else if (record.direction === "response") {
       by_dep = {
         cookie: na,
         "tough-cookie": avail["tough-cookie"] ? toughResponse(wire) : skip,
@@ -196,6 +218,21 @@ function main() {
         "universal-cookie": na,
         "js-cookie": na,
       };
+    } else if (record.direction === "jar") {
+      by_dep = {
+        cookie: na,
+        "tough-cookie": avail["tough-cookie"]
+          ? toughJarProbe(wire, record.origin_url, record.request_url)
+          : skip,
+        "set-cookie-parser": na,
+        "universal-cookie": na,
+        "js-cookie": na,
+      };
+    } else {
+      // An unrecognized record kind (a newer protocol than this checkout):
+      // NotApplicable across the board, per PROTOCOL.md.
+      by_dep = {};
+      for (const d of DEPS) by_dep[d] = na;
     }
     process.stdout.write(JSON.stringify({ id: record.id, by_dep }) + "\n");
   });

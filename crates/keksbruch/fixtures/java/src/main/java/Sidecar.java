@@ -204,7 +204,7 @@ public final class Sidecar {
                 // Both Set-Cookie parsers are response-only.
                 byDep.add(JDK_HTTPCOOKIE, notApplicable());
                 byDep.add(APACHE_HC5, notApplicable());
-            } else {
+            } else if ("response".equals(direction)) {
                 byDep.add(TOMCAT_RFC, notApplicable());
                 byDep.add(TOMCAT_LEGACY, notApplicable());
                 byDep.add(JAKARTA_RESTEASY,
@@ -213,6 +213,16 @@ public final class Sidecar {
                     jerseyNewCookie != null ? jakartaResponse(jerseyNewCookie, wire) : skipped());
                 byDep.add(JDK_HTTPCOOKIE, jdkHttpCookieResponse(wire));
                 byDep.add(APACHE_HC5, hc5 != null ? hc5Response(wire) : skipped());
+            } else {
+                // An unrecognized record kind (e.g. protocol v2 "jar" probes — no
+                // CookieManager column here yet): NotApplicable across the board,
+                // per PROTOCOL.md.
+                byDep.add(TOMCAT_RFC, notApplicable());
+                byDep.add(TOMCAT_LEGACY, notApplicable());
+                byDep.add(JAKARTA_RESTEASY, notApplicable());
+                byDep.add(JAKARTA_JERSEY, notApplicable());
+                byDep.add(JDK_HTTPCOOKIE, notApplicable());
+                byDep.add(APACHE_HC5, notApplicable());
             }
             JsonObject result = new JsonObject();
             result.addProperty("id", id);

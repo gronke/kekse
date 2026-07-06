@@ -55,13 +55,35 @@ Read stdin as **base64-JSONL**: one record per line, blank lines skipped, until 
 { "id": "<scenario-id>", "direction": "request" | "response", "wire_b64": "<base64 of the raw bytes>" }
 ```
 
+or (protocol v2) a **jar probe**:
+
+```json
+{ "id": "<probe-id>", "direction": "jar", "wire_b64": "<base64 of the Set-Cookie bytes>",
+  "origin_url": "https://sub.example.com/dir/page", "request_url": "https://example.com/dir/other" }
+```
+
 - `wire_b64` is base64 (standard alphabet, padded) of the **raw** wire bytes — which may include
   `;`, CR, LF, NUL, and non-UTF-8 bytes. Decode it, then view the bytes as **latin-1** (each byte → one
   codepoint). Output JSON must be valid UTF-8, so widen latin-1 → UTF-8; a non-UTF-8 wire then renders
   as the *same* mojibake across every sidecar.
-- `direction` is `"request"` (a `Cookie:` request-header value, possibly many pairs) or `"response"` (a
-  single `Set-Cookie:` header value, one cookie). A dep that does not handle a direction returns
-  `NotApplicable` for it.
+- `direction` is `"request"` (a `Cookie:` request-header value, possibly many pairs), `"response"` (a
+  single `Set-Cookie:` header value, one cookie), or `"jar"` (below). A dep that does not handle a
+  direction returns `NotApplicable` for it — and a sidecar **must** answer any record whose
+  `direction` it does not recognize with `NotApplicable` for every dep, so a stale checkout degrades
+  gracefully instead of misreading a new record kind as a response.
+
+### `direction: "jar"` — the store-then-retrieve probe
+
+A two-input experiment for client *jars* (RFC 6265 §5.3 storage + §5.4 retrieval): store the decoded
+`Set-Cookie` as if it was received in a response from `origin_url`, then answer with the cookies the
+dep's jar would attach to a request to `request_url`, as `{"outcome":"Cookies","cookies":[…]}`.
+
+- An **empty list** (`∅`) means "would not be sent" — whether the jar refused storage (a domain
+  mismatch, a public-suffix `Domain`) or the match failed. One observable, so the consensus vote
+  works unchanged.
+- A dep with no jar semantics (a pure codec) answers `NotApplicable`.
+- The URLs are harness-authored ASCII of the shape `scheme://host/path` (no port, userinfo, or
+  query); only `wire_b64` is adversarial.
 
 For each input record print **one** result line to stdout:
 

@@ -165,6 +165,8 @@ function main($argv)
             continue;
         }
         $wire = base64_decode($rec['wire_b64']);
+        // Only the request direction parses here; responses — and any unrecognized
+        // record kind, e.g. protocol v2 "jar" probes — are NotApplicable (PROTOCOL.md).
         $outcome = $rec['direction'] === 'request'
             ? parse_request($wire)
             : ['outcome' => 'NotApplicable'];

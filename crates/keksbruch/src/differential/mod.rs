@@ -11,23 +11,73 @@ pub mod table;
 
 use std::path::Path;
 
+use crate::probe::jar_probes;
 use crate::scenario::scenarios;
 use matrix::Column;
 use result::ParseOutcome;
-use rust_comparators::rust_comparators;
+use rust_comparators::{jar_comparators, rust_comparators};
 
 /// Run the whole matrix: every scenario through the in-process Rust comparators
-/// and the language sidecars; render it to Markdown, CSV, a self-contained HTML
-/// report, and a machine-readable JSON document; print the Markdown; and write
+/// and the language sidecars, every jar probe through the jar-capable ones;
+/// render it to Markdown, CSV, a self-contained HTML report, and a
+/// machine-readable JSON document; print the Markdown; and write
 /// `COOKIE_MATRIX.{md,csv,html,json}` next to the crate (the HTML report is the
 /// GitHub Pages view; the JSON is the source of truth for later stats/probing).
 /// Returns the Markdown.
 pub fn run_matrix() -> String {
     let scenarios = scenarios();
+    let probes = jar_probes();
+    let mut columns = in_process_columns(&scenarios, &probes);
+
+    // Language sidecars (graceful SKIP if an interpreter or dependency is absent).
+    let (sidecar_cols, sidecar_versions) = sidecar::sidecar_columns(&scenarios, &probes);
+    columns.extend(sidecar_cols);
+
+    // Record exactly what was tested against: the Rust comparator versions from
+    // the lockfile, plus the runtimes/deps each sidecar reported.
+    let mut versions = vec![rust_versions()];
+    versions.extend(sidecar_versions);
+
+    let markdown = matrix::render(&scenarios, &probes, &columns, &versions);
+    println!("{markdown}");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    if let Err(e) = std::fs::write(dir.join("COOKIE_MATRIX.md"), &markdown) {
+        eprintln!("could not write COOKIE_MATRIX.md: {e}");
+    }
+    // The transposed CSV companion (tool rows × test columns) for analysis.
+    let csv = matrix::render_csv(&scenarios, &probes, &columns);
+    if let Err(e) = std::fs::write(dir.join("COOKIE_MATRIX.csv"), &csv) {
+        eprintln!("could not write COOKIE_MATRIX.csv: {e}");
+    }
+    // The self-contained HTML report — the well-readable, publishable view (the
+    // matrix's GitHub Pages page). Not printed; the Markdown is the stdout view.
+    let html = matrix::render_html(&scenarios, &probes, &columns, &versions);
+    if let Err(e) = std::fs::write(dir.join("COOKIE_MATRIX.html"), &html) {
+        eprintln!("could not write COOKIE_MATRIX.html: {e}");
+    }
+    // The machine-readable JSON — scenario → target → full ParseOutcome, plus
+    // per-scenario metadata (direction, wire, RFC verdict, consensus). The source
+    // of truth for later statistics and proxy-probing.
+    let json = matrix::render_json(&scenarios, &probes, &columns, &versions);
+    if let Err(e) = std::fs::write(dir.join("COOKIE_MATRIX.json"), &json) {
+        eprintln!("could not write COOKIE_MATRIX.json: {e}");
+    }
+    markdown
+}
+
+/// The in-process columns: every Rust wire comparator run over the scenarios, then
+/// the jar comparators over the probes — filling the probe cells of an existing
+/// column (the cookie_store jar is also a wire comparator) or adding a probe-only
+/// column (the rfc_6265 reference, which the wire tables then drop as all-n/a).
+/// Shared by [`run_matrix`] and the hermetic JSON unit test.
+pub(super) fn in_process_columns(
+    scenarios: &[crate::scenario::Scenario],
+    probes: &[crate::probe::JarProbe],
+) -> Vec<Column> {
     let mut columns: Vec<Column> = Vec::new();
 
-    // In-process Rust comparators. A &str parser cannot see a non-UTF-8 wire, so
-    // those payloads are n/a for the Rust side (the http layer rejects them).
+    // A &str parser cannot see a non-UTF-8 wire, so those payloads are n/a for the
+    // Rust side (the http layer rejects them).
     for comparator in rust_comparators() {
         let (lang, dep) = comparator.id();
         let cells = scenarios
@@ -41,43 +91,27 @@ pub fn run_matrix() -> String {
             lang: lang.to_string(),
             dep: dep.to_string(),
             cells,
+            probe_cells: vec![ParseOutcome::NotApplicable; probes.len()],
         });
     }
 
-    // Language sidecars (graceful SKIP if an interpreter or dependency is absent).
-    let (sidecar_cols, sidecar_versions) = sidecar::sidecar_columns(&scenarios);
-    columns.extend(sidecar_cols);
-
-    // Record exactly what was tested against: the Rust comparator versions from
-    // the lockfile, plus the runtimes/deps each sidecar reported.
-    let mut versions = vec![rust_versions()];
-    versions.extend(sidecar_versions);
-
-    let markdown = matrix::render(&scenarios, &columns, &versions);
-    println!("{markdown}");
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    if let Err(e) = std::fs::write(dir.join("COOKIE_MATRIX.md"), &markdown) {
-        eprintln!("could not write COOKIE_MATRIX.md: {e}");
+    for comparator in jar_comparators() {
+        let (lang, dep) = comparator.id();
+        let probe_cells: Vec<ParseOutcome> = probes
+            .iter()
+            .map(|p| comparator.run(p.set_cookie, p.origin_url, p.request_url))
+            .collect();
+        match columns.iter_mut().find(|c| c.lang == lang && c.dep == dep) {
+            Some(column) => column.probe_cells = probe_cells,
+            None => columns.push(Column {
+                lang: lang.to_string(),
+                dep: dep.to_string(),
+                cells: vec![ParseOutcome::NotApplicable; scenarios.len()],
+                probe_cells,
+            }),
+        }
     }
-    // The transposed CSV companion (tool rows × test columns) for analysis.
-    let csv = matrix::render_csv(&scenarios, &columns);
-    if let Err(e) = std::fs::write(dir.join("COOKIE_MATRIX.csv"), &csv) {
-        eprintln!("could not write COOKIE_MATRIX.csv: {e}");
-    }
-    // The self-contained HTML report — the well-readable, publishable view (the
-    // matrix's GitHub Pages page). Not printed; the Markdown is the stdout view.
-    let html = matrix::render_html(&scenarios, &columns, &versions);
-    if let Err(e) = std::fs::write(dir.join("COOKIE_MATRIX.html"), &html) {
-        eprintln!("could not write COOKIE_MATRIX.html: {e}");
-    }
-    // The machine-readable JSON — scenario → target → full ParseOutcome, plus
-    // per-scenario metadata (direction, wire, RFC verdict, consensus). The source
-    // of truth for later statistics and proxy-probing.
-    let json = matrix::render_json(&scenarios, &columns, &versions);
-    if let Err(e) = std::fs::write(dir.join("COOKIE_MATRIX.json"), &json) {
-        eprintln!("could not write COOKIE_MATRIX.json: {e}");
-    }
-    markdown
+    columns
 }
 
 /// The Rust comparator versions, read from the committed workspace `Cargo.lock`

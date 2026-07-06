@@ -206,12 +206,14 @@ def main():
             continue
         record = json.loads(line)
         wire = base64.b64decode(record["wire_b64"])
-        if record["direction"] == "request":
-            by_dep = {"curl": {"outcome": "NotApplicable"},
-                      "wget": {"outcome": "NotApplicable"}}
-        else:
+        if record["direction"] == "response":
             by_dep = {"curl": curl_response(port, wire, have_curl),
                       "wget": wget_response(port, wire, have_wget)}
+        else:
+            # Requests — and any unrecognized record kind, e.g. protocol v2 "jar"
+            # probes (no jar-replay mode here yet) — are NotApplicable (PROTOCOL.md).
+            by_dep = {"curl": {"outcome": "NotApplicable"},
+                      "wget": {"outcome": "NotApplicable"}}
         print(json.dumps({"id": record["id"], "by_dep": by_dep}))
         sys.stdout.flush()
 

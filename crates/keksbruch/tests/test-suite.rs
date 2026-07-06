@@ -24,6 +24,7 @@ fn render_parser_divergence_matrix() {
         "parser divergence matrix",
         "## Legend",
         "## Request `Cookie:` parsers",
+        "## Jar probes",
         "## Attribute fidelity",
         "## Tested scenarios",
         "## Remarks",

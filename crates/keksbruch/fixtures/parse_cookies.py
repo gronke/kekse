@@ -175,6 +175,37 @@ def cookiejar_response(wire):
         return {"outcome": "SetCookieRejected", "error": type(e).__name__ + ": " + str(e)}
 
 
+def cookiejar_probe(wire, origin_url, request_url):
+    # Protocol v2 "jar": store the Set-Cookie as if received from origin_url, then report
+    # the cookies the jar would attach to a request to request_url (see PROTOCOL.md). An
+    # empty list means "not sent" — a storage refusal and a match failure read the same.
+    try:
+        import http.cookiejar
+        import urllib.request
+        import email.message
+        jar = http.cookiejar.CookieJar()
+        origin = urllib.request.Request(origin_url)
+        msg = email.message.Message()
+        msg["Set-Cookie"] = wire.decode("latin-1")
+
+        class FakeResponse:
+            def info(self_inner):
+                return msg
+
+        jar.extract_cookies(FakeResponse(), origin)
+        request = urllib.request.Request(request_url)
+        jar.add_cookie_header(request)
+        header = request.get_header("Cookie")
+        cookies = []
+        if header:
+            for part in header.split("; "):
+                name, _, value = part.partition("=")
+                cookies.append({"name": name, "value": value})
+        return {"outcome": "Cookies", "cookies": cookies}
+    except Exception as e:
+        return {"outcome": "Rejected", "error": type(e).__name__ + ": " + str(e)}
+
+
 def werkzeug_request(wire):
     try:
         from werkzeug.http import parse_cookie
@@ -244,20 +275,34 @@ def main():
             continue
         record = json.loads(line)
         wire = base64.b64decode(record["wire_b64"])
+        na = {"outcome": "NotApplicable"}
         if record["direction"] == "request":
             by_dep = {
                 "SimpleCookie": simplecookie_request(wire),
-                "http.cookiejar": {"outcome": "NotApplicable"},
+                "http.cookiejar": na,
                 "Werkzeug": werkzeug_request(wire) if werkzeug else {"outcome": "Skipped"},
                 "mitmproxy": mitmproxy_request(wire) if mitmproxy else {"outcome": "Skipped"},
             }
-        else:
+        elif record["direction"] == "response":
             by_dep = {
                 "SimpleCookie": simplecookie_response(wire),
                 "http.cookiejar": cookiejar_response(wire) if cookiejar else {"outcome": "Skipped"},
-                "Werkzeug": {"outcome": "NotApplicable"},
+                "Werkzeug": na,
                 "mitmproxy": mitmproxy_response(wire) if mitmproxy else {"outcome": "Skipped"},
             }
+        elif record["direction"] == "jar":
+            by_dep = {
+                "SimpleCookie": na,
+                "http.cookiejar": cookiejar_probe(wire, record["origin_url"], record["request_url"])
+                if cookiejar
+                else {"outcome": "Skipped"},
+                "Werkzeug": na,
+                "mitmproxy": na,
+            }
+        else:
+            # An unrecognized record kind (a newer protocol than this checkout):
+            # NotApplicable across the board, per PROTOCOL.md.
+            by_dep = {d: na for d in ("SimpleCookie", "http.cookiejar", "Werkzeug", "mitmproxy")}
         print(json.dumps({"id": record["id"], "by_dep": by_dep}))
         sys.stdout.flush()
 

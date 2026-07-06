@@ -43,7 +43,14 @@ while ((line = Console.In.ReadLine()) is not null)
     catch { continue; }
     var wire = Encoding.Latin1.GetString(raw); // byte-faithful, like the py/node sidecars
 
-    object outcome = direction == "request" ? ParseRequest(wire) : ParseResponse(wire);
+    object outcome = direction switch
+    {
+        "request" => ParseRequest(wire),
+        "response" => ParseResponse(wire),
+        // An unrecognized record kind (e.g. protocol v2 "jar" probes — no client-jar
+        // column here yet): NotApplicable across the board, per PROTOCOL.md.
+        _ => new Dictionary<string, object> { ["outcome"] = "NotApplicable" },
+    };
     var result = new Dictionary<string, object>
     {
         ["id"] = id,

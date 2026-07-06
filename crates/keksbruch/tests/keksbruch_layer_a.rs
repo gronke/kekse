@@ -6,7 +6,8 @@ use keksbruch::{
     Direction, Expect, assert_baseline_parses_clean, assert_no_injection_echo,
     assert_no_injection_echo_bytes, assert_report_consistency, assert_report_consistency_bytes,
     assert_set_cookie_report_consistency, assert_strict_subset_of_lenient,
-    assert_strict_subset_of_lenient_bytes, drive, drive_bytes, payloads, scenarios,
+    assert_strict_subset_of_lenient_bytes, drive, drive_bytes, jar_probes, payloads,
+    probe_retrieval, scenarios,
 };
 use kekse::{SetCookie, is_cookie_name, parse_pairs, parse_pairs_strict};
 
@@ -254,5 +255,24 @@ fn each_scenario_matches_its_pinned_expectation() {
             }
             Expect::Unrepresentable => unreachable!("handled before the value match"),
         }
+    }
+}
+
+#[test]
+fn each_jar_probe_matches_its_pinned_expectation() {
+    // The §5.3/§5.4 reference retrieval, pinned per probe. The default build pins the bare
+    // RFC algorithm; the `hardened` build pins it with §5.3 step 5's public-suffix rejection
+    // — the only probe where the two differ is the deliberate supercookie row.
+    for probe in jar_probes() {
+        let want: Vec<(String, String)> = if cfg!(feature = "hardened") {
+            probe.expect_attached_hardened
+        } else {
+            probe.expect_attached
+        }
+        .iter()
+        .map(|(n, v)| (n.to_string(), v.to_string()))
+        .collect();
+        let got = probe_retrieval(probe.set_cookie, probe.origin_url, probe.request_url);
+        assert_eq!(got, want, "{} attached pairs", probe.id);
     }
 }

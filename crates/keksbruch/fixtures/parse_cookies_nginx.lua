@@ -330,7 +330,13 @@ local function has_pair(arr, name, value)
 end
 
 local function parse_record(rec)
-    if rec.direction ~= "request" then
+    if rec.direction ~= "request" and rec.direction ~= "response" then
+        -- An unrecognized record kind (e.g. protocol v2 "jar" probes — nginx has no
+        -- client jar): NotApplicable across the board, per PROTOCOL.md.
+        return { ["$cookie_<name>"] = NA, ["lua-resty-cookie"] = NA, ["proxy"] = NA,
+                 ["proxy (Set-Cookie)"] = NA }
+    end
+    if rec.direction == "response" then
         -- Response: only the Set-Cookie forwarding-fidelity column applies; the three
         -- request columns are n/a. nginx exposes no *parsed* Set-Cookie to Lua, so this
         -- measures whether a proxy_pass forwards the upstream's Set-Cookie verbatim (≡),

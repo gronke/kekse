@@ -31,7 +31,9 @@
 #[cfg(feature = "differential")]
 pub mod differential;
 mod invariants;
+mod probe;
 mod recipe;
+mod reference;
 mod scenario;
 mod taxonomy;
 
@@ -41,7 +43,9 @@ pub use invariants::{
     assert_set_cookie_report_consistency, assert_strict_subset_of_lenient,
     assert_strict_subset_of_lenient_bytes, drive, drive_bytes,
 };
+pub use probe::{JarProbe, jar_probes};
 pub use recipe::{KeksbruchRecipe, LogicalCookie};
+pub use reference::probe_retrieval;
 pub use scenario::{Expect, Scenario, scenarios};
 pub use taxonomy::{Direction, Keksbruch};
 

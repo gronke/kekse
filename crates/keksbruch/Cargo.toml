@@ -18,7 +18,9 @@ kekse = { path = "../kekse" }
 # RFC 6265 byte-class constants (e.g. `is_ctl`) for the universal invariants — one shared
 # definition rather than an ad-hoc inline pool of control bytes — plus the `date` feature's
 # HTTP-date formatters, used to build and pin `Expires` payloads in a selected variant.
-rfc_6265 = { path = "../rfc_6265", features = ["date"] }
+# `domain` + `path` feed the jar-probe reference (`src/reference.rs`), the §5.3/§5.4
+# retrieval built from the crate's own matching primitives; they add no transitive deps.
+rfc_6265 = { path = "../rfc_6265", features = ["date", "domain", "path"] }
 
 # --- differential harness (opt-in; never built on the default / MSRV CI legs) ---
 # All optional and gated behind `differential`: the matrix is opt-in tooling, so
@@ -68,7 +70,9 @@ differential = [
 ]
 # Build the system under test (kekse) with its Domain-hardening suite, so Layer A asserts the
 # enforced behaviour (public-suffix / malformed-IDN `Domain`s refused) rather than the pure codec.
-hardened = ["kekse/hardened"]
+# The explicit rfc_6265 features let the jar-probe reference apply the same policy (§5.3 step 5's
+# optional public-suffix rejection) under keksbruch's own `cfg(feature = "hardened")`.
+hardened = ["kekse/hardened", "rfc_6265/psl", "rfc_6265/idna"]
 
 [dev-dependencies]
 # Layer A asserts the Set-Cookie HeaderValue gate rejects injection that a raw

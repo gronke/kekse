@@ -124,10 +124,15 @@ func main() {
 		wire := string(runes)
 
 		var outcome map[string]any
-		if rec.Direction == "request" {
+		switch rec.Direction {
+		case "request":
 			outcome = parseRequest(wire)
-		} else {
+		case "response":
 			outcome = parseResponse(wire)
+		default:
+			// An unrecognized record kind (e.g. protocol v2 "jar" probes — no
+			// net/http/cookiejar column here yet): NotApplicable, per PROTOCOL.md.
+			outcome = map[string]any{"outcome": "NotApplicable"}
 		}
 		_ = enc.Encode(map[string]any{
 			"id":     rec.ID,

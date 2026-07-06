@@ -33,6 +33,7 @@ use tera::{Context, Tera};
 
 use crate::differential::result::ParseOutcome;
 use crate::differential::table::{self, Cell, CellKind, CellText, Row, Table};
+use crate::probe::JarProbe;
 use crate::scenario::Scenario;
 use crate::taxonomy::Direction;
 
@@ -85,11 +86,13 @@ table:not(.matrix-scroll table) td:last-child{white-space:normal}
 .tt-btn:hover ~ [role=tooltip],.tt-btn:focus ~ [role=tooltip],.tt [role=tooltip]:hover,.tt [role=tooltip]:focus-within{visibility:visible;opacity:1;transition-delay:0s}"#;
 
 /// One matrix column: a parser, with one [`ParseOutcome`] per scenario (aligned
-/// to the scenario order).
+/// to the scenario order) and one per jar probe (aligned to the probe order).
+/// A wire-only parser carries all-`NotApplicable` `probe_cells`, and vice versa.
 pub struct Column {
     pub lang: String,
     pub dep: String,
     pub cells: Vec<ParseOutcome>,
+    pub probe_cells: Vec<ParseOutcome>,
 }
 
 impl Column {
@@ -97,10 +100,11 @@ impl Column {
         format!("{}/{}", self.lang, self.dep)
     }
 
-    /// kekse is the *subject* under test, excluded from the consensus vote so
-    /// we can judge it against the rest of the field.
+    /// The *subjects* under test — kekse, and the rfc_6265 reference on the jar
+    /// probes — excluded from the consensus vote so each is judged against the
+    /// rest of the field.
     fn is_subject(&self) -> bool {
-        self.dep.starts_with("kekse")
+        self.dep.starts_with("kekse") || self.dep.starts_with("rfc_6265")
     }
 }
 
@@ -140,6 +144,27 @@ fn rfc_verdict(id: &str) -> Option<&'static str> {
         "date-zone-offset" => Some("§5.1.1: zone tokens ignored"),
         "date-tab-delims" => Some("§5.1.1: HTAB is a delimiter"),
         "date-first-token-wins" => Some("§5.1.1: first match binds each field"),
+        "jar-host-only-exact" => Some("host-only: the same host attaches (§5.4)"),
+        "jar-host-only-subdomain" => Some("host-only never flows to subdomains (§5.4)"),
+        "jar-domain-exact" | "jar-domain-parent" => {
+            Some("a Domain cookie flows to matching hosts (§5.1.3)")
+        }
+        "jar-domain-superset" => Some("the origin must domain-match Domain (§5.3 step 6)"),
+        "jar-domain-label-boundary" => Some("a suffix counts only at a label boundary (§5.1.3)"),
+        "jar-domain-case" => Some("Domain is canonicalized lower-case (§5.1.2)"),
+        "jar-domain-leading-dot" => Some("a leading dot is stripped (§5.2.3)"),
+        "jar-domain-ip" => Some("an IP host matches only by identity (§5.1.3)"),
+        "jar-domain-supercookie" => {
+            Some("rejecting a public-suffix Domain is *optional* (§5.3 step 5)")
+        }
+        "jar-path-prefix-boundary" => Some("a path prefix matches at a `/` boundary (§5.1.4)"),
+        "jar-path-non-boundary" => Some("a prefix without a boundary never matches (§5.1.4)"),
+        "jar-path-trailing-slash" => Some("`/a/` does not match its parent `/a` (§5.1.4)"),
+        "jar-path-default-sibling" | "jar-path-default-outside" => {
+            Some("no Path → the origin's default-path (§5.3 step 7)")
+        }
+        "jar-path-not-absolute" => Some("a non-`/` Path is ignored → default-path (§5.2.4)"),
+        "jar-secure-on-http" => Some("Secure needs a secure channel (§5.4)"),
         "resp-crlf" => Some("CR/LF must not be smuggled"),
         "resp-ws-surrounding" => Some("trim leading/trailing WSP"),
         "resp-empty-value" => Some("empty value is valid"),
@@ -150,15 +175,17 @@ fn rfc_verdict(id: &str) -> Option<&'static str> {
     }
 }
 
-/// The modal outcome across the non-subject, applicable columns — the empirical
-/// "expectation". `None` if every real-world parser was n/a or skipped.
-fn consensus(row: usize, columns: &[Column]) -> Option<String> {
+/// The modal outcome across a row's non-subject, applicable cells — the empirical
+/// "expectation". `None` if every real-world parser was n/a or skipped. Shared by
+/// the wire rows ([`consensus`]) and the jar-probe rows ([`probe_consensus`]), so
+/// both vote by exactly the same abstention rules.
+fn consensus_of<'a>(cells: impl Iterator<Item = (&'a ParseOutcome, bool)>) -> Option<String> {
     let mut votes: BTreeMap<String, usize> = BTreeMap::new();
-    for column in columns {
-        if column.is_subject() {
+    for (outcome, is_subject) in cells {
+        if is_subject {
             continue;
         }
-        match &column.cells[row] {
+        match outcome {
             // n/a and SKIP never vote; nor do the proxy *forwarding* verdicts —
             // they measure transit fidelity, a different axis than parsing, so
             // they must not sway (or read as) the parse consensus. A crash (an
@@ -175,6 +202,20 @@ fn consensus(row: usize, columns: &[Column]) -> Option<String> {
         }
     }
     votes.into_iter().max_by_key(|(_, n)| *n).map(|(k, _)| k)
+}
+
+/// The consensus for one wire-scenario row.
+fn consensus(row: usize, columns: &[Column]) -> Option<String> {
+    consensus_of(columns.iter().map(|c| (&c.cells[row], c.is_subject())))
+}
+
+/// The consensus for one jar-probe row.
+fn probe_consensus(row: usize, columns: &[Column]) -> Option<String> {
+    consensus_of(
+        columns
+            .iter()
+            .map(|c| (&c.probe_cells[row], c.is_subject())),
+    )
 }
 
 /// Escape control bytes to visible text: `\r` `\n` `\t` `\0`, else `\xNN`. Keeps
@@ -255,18 +296,22 @@ fn payload_full(scenario: &Scenario) -> String {
     }
 }
 
-/// [`payload_full`] capped to a single readable cell: a long (scale) payload
+/// Cap an already-escaped payload to a single readable cell: a long (scale) value
 /// collapses to a head plus a length marker. The HTML report carries the full text
 /// in a `title` tooltip (see [`build_section`]).
-fn payload_of(scenario: &Scenario) -> String {
-    let full = payload_full(scenario);
+fn cap_payload(full: &str) -> String {
     let count = full.chars().count();
     if count > 36 {
         let head: String = full.chars().take(28).collect();
         format!("{head}…<{count}>")
     } else {
-        full
+        full.to_string()
     }
+}
+
+/// [`payload_full`], capped via [`cap_payload`].
+fn payload_of(scenario: &Scenario) -> String {
+    cap_payload(&payload_full(scenario))
 }
 
 /// Whether a cell's outcome diverges from the real-world `consensus` — true only
@@ -337,6 +382,16 @@ fn column_participates(column: &Column, rows: &[usize]) -> bool {
             ParseOutcome::NotApplicable | ParseOutcome::Skipped
         )
     })
+}
+
+/// [`column_participates`] for the jar-probe table: a column joins it only if it
+/// answered at least one probe — codec-only parsers (all-`n/a` probe cells) and
+/// absent tools drop out, so the table lists just the jars.
+fn probe_column_participates(column: &Column) -> bool {
+    column
+        .probe_cells
+        .iter()
+        .any(|c| !matches!(c, ParseOutcome::NotApplicable | ParseOutcome::Skipped))
 }
 
 /// A document-unique, deterministic element id for a cell's tooltip — the trigger's
@@ -417,6 +472,89 @@ fn build_section(
 
     Table {
         corner: "tool".to_string(),
+        col_headers,
+        rows: body,
+    }
+}
+
+/// Build the jar-probe table model: a column per probe; `Set-Cookie`/`origin`/`request`
+/// reference rows framing the two-input experiment, then the RFC verdict and the
+/// cross-jar consensus; then one row per participating jar. `cons` is indexed by
+/// probe order (see [`probe_consensus`]).
+fn build_probe_section(probes: &[JarProbe], columns: &[&Column], cons: &[Option<String>]) -> Table {
+    let col_headers = probes
+        .iter()
+        .map(|p| CellText::Code(p.id.to_string()))
+        .collect();
+
+    let mut body = Vec::with_capacity(columns.len() + 5);
+    body.push(Row {
+        header: "Set-Cookie".to_string(),
+        is_ref: true,
+        cells: probes
+            .iter()
+            .map(|p| {
+                let full = escape_controls(p.set_cookie);
+                Cell::payload(cap_payload(&full), full)
+            })
+            .collect(),
+    });
+    body.push(Row {
+        header: "origin".to_string(),
+        is_ref: true,
+        cells: probes
+            .iter()
+            .map(|p| Cell::code(p.origin_url.to_string(), CellKind::Plain))
+            .collect(),
+    });
+    body.push(Row {
+        header: "request".to_string(),
+        is_ref: true,
+        cells: probes
+            .iter()
+            .map(|p| Cell::code(p.request_url.to_string(), CellKind::Plain))
+            .collect(),
+    });
+    body.push(Row {
+        header: "RFC (standard)".to_string(),
+        is_ref: true,
+        cells: probes
+            .iter()
+            .map(|p| Cell::inline(rfc_verdict(p.id).unwrap_or("—").to_string()))
+            .collect(),
+    });
+    body.push(Row {
+        header: "consensus".to_string(),
+        is_ref: true,
+        cells: cons
+            .iter()
+            .map(|c| {
+                Cell::code(
+                    c.clone().unwrap_or_else(|| "—".to_string()),
+                    CellKind::Plain,
+                )
+            })
+            .collect(),
+    });
+
+    for column in columns {
+        body.push(Row {
+            header: column.header(),
+            is_ref: false,
+            cells: probes
+                .iter()
+                .enumerate()
+                .map(|(r, p)| {
+                    let outcome = &column.probe_cells[r];
+                    Cell::code(outcome.cell(), cell_kind(outcome, cons[r].as_ref()))
+                        .with_detail(tooltip_id(column, p.id), outcome.diagnostics())
+                })
+                .collect(),
+        });
+    }
+
+    Table {
+        corner: "jar".to_string(),
         col_headers,
         rows: body,
     }
@@ -519,6 +657,33 @@ fn html_scenario_index(rows: &[usize], scenarios: &[Scenario]) -> Markup {
                     strong { code { (scenarios[r].id) } }
                     " — "
                     (PreEscaped(md_inline(scenarios[r].description)))
+                    "."
+                }
+            }
+        }
+    }
+}
+
+/// The jar-probe index as Markdown bullets — the probes' analogue of
+/// [`md_scenario_index`].
+fn md_probe_index(probes: &[JarProbe]) -> String {
+    probes
+        .iter()
+        .map(|p| format!("- **`{}`** — {}.", p.id, p.description))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The jar-probe index as an HTML `<ul>` — the probes' analogue of
+/// [`html_scenario_index`].
+fn html_probe_index(probes: &[JarProbe]) -> Markup {
+    html! {
+        ul {
+            @for p in probes {
+                li {
+                    strong { code { (p.id) } }
+                    " — "
+                    (PreEscaped(md_inline(p.description)))
                     "."
                 }
             }
@@ -656,11 +821,19 @@ fn template_title(template: &str) -> &str {
 /// Render the whole matrix as a Markdown document: the prose template with the
 /// Markdown fragments spliced in. `versions` is the "tested against" footer — the
 /// exact comparator versions of this run.
-pub fn render(scenarios: &[Scenario], columns: &[Column], versions: &[String]) -> String {
+pub fn render(
+    scenarios: &[Scenario],
+    probes: &[JarProbe],
+    columns: &[Column],
+    versions: &[String],
+) -> String {
     // The consensus per test, computed once over every column (n/a, SKIP and crashes
     // already abstain), so each section's filtered columns vote identically.
     let cons: Vec<Option<String>> = (0..scenarios.len())
         .map(|row| consensus(row, columns))
+        .collect();
+    let probe_cons: Vec<Option<String>> = (0..probes.len())
+        .map(|row| probe_consensus(row, columns))
         .collect();
     let (req_rows, resp_rows) = partition_rows(scenarios);
 
@@ -671,11 +844,19 @@ pub fn render(scenarios: &[Scenario], columns: &[Column], versions: &[String]) -
             .collect();
         table::to_markdown(&build_section(rows, scenarios, &cols, &cons))
     };
+    let jar_cols: Vec<&Column> = columns
+        .iter()
+        .filter(|c| probe_column_participates(c))
+        .collect();
 
     let mut ctx = Context::new();
     ctx.insert("downloads", ""); // no download links in the Markdown view
     ctx.insert("request_table", &section_md(&req_rows));
     ctx.insert("response_table", &section_md(&resp_rows));
+    ctx.insert(
+        "jar_table",
+        &table::to_markdown(&build_probe_section(probes, &jar_cols, &probe_cons)),
+    );
     ctx.insert(
         "fidelity_table",
         &table::to_markdown(&build_fidelity(&attribute_fidelity(scenarios, columns))),
@@ -688,6 +869,7 @@ pub fn render(scenarios: &[Scenario], columns: &[Column], versions: &[String]) -
         "response_scenarios",
         &md_scenario_index(&resp_rows, scenarios),
     );
+    ctx.insert("jar_scenarios", &md_probe_index(probes));
     ctx.insert("versions", &md_versions(versions));
 
     Tera::one_off(TEMPLATE, &ctx, false).expect("matrix Markdown template renders")
@@ -696,9 +878,17 @@ pub fn render(scenarios: &[Scenario], columns: &[Column], versions: &[String]) -
 /// Render the whole matrix as a self-contained HTML report — the GitHub Pages view.
 /// The template's prose is converted to HTML, the precompiled (entity-encoded) HTML
 /// fragments are spliced in, and the body is wrapped in the inlined-CSS scaffold.
-pub fn render_html(scenarios: &[Scenario], columns: &[Column], versions: &[String]) -> String {
+pub fn render_html(
+    scenarios: &[Scenario],
+    probes: &[JarProbe],
+    columns: &[Column],
+    versions: &[String],
+) -> String {
     let cons: Vec<Option<String>> = (0..scenarios.len())
         .map(|row| consensus(row, columns))
+        .collect();
+    let probe_cons: Vec<Option<String>> = (0..probes.len())
+        .map(|row| probe_consensus(row, columns))
         .collect();
     let (req_rows, resp_rows) = partition_rows(scenarios);
 
@@ -709,6 +899,10 @@ pub fn render_html(scenarios: &[Scenario], columns: &[Column], versions: &[Strin
             .collect();
         table::to_html(&build_section(rows, scenarios, &cols, &cons)).into_string()
     };
+    let jar_cols: Vec<&Column> = columns
+        .iter()
+        .filter(|c| probe_column_participates(c))
+        .collect();
 
     // 1. Convert the template's prose (markers intact) to HTML, then unwrap any
     //    `<p>{{ marker }}</p>` so a block fragment is not nested inside a `<p>`.
@@ -719,6 +913,10 @@ pub fn render_html(scenarios: &[Scenario], columns: &[Column], versions: &[Strin
     ctx.insert("downloads", DOWNLOADS_HTML);
     ctx.insert("request_table", &section_html(&req_rows));
     ctx.insert("response_table", &section_html(&resp_rows));
+    ctx.insert(
+        "jar_table",
+        &table::to_html(&build_probe_section(probes, &jar_cols, &probe_cons)).into_string(),
+    );
     ctx.insert(
         "fidelity_table",
         &table::to_html(&build_fidelity(&attribute_fidelity(scenarios, columns))).into_string(),
@@ -731,6 +929,7 @@ pub fn render_html(scenarios: &[Scenario], columns: &[Column], versions: &[Strin
         "response_scenarios",
         &html_scenario_index(&resp_rows, scenarios).into_string(),
     );
+    ctx.insert("jar_scenarios", &html_probe_index(probes).into_string());
     ctx.insert("versions", &html_versions(versions).into_string());
     let body = Tera::one_off(&converted, &ctx, false).expect("matrix HTML template renders");
 
@@ -756,9 +955,12 @@ pub fn render_html(scenarios: &[Scenario], columns: &[Column], versions: &[Strin
 /// each, `payload`/`RFC`/`consensus` lead as reference rows. The `csv` writer owns
 /// quoting and escaping; cells only need control bytes made visible first. The
 /// blocks have different widths, so the writer is `flexible`.
-pub fn render_csv(scenarios: &[Scenario], columns: &[Column]) -> String {
+pub fn render_csv(scenarios: &[Scenario], probes: &[JarProbe], columns: &[Column]) -> String {
     let cons: Vec<Option<String>> = (0..scenarios.len())
         .map(|row| consensus(row, columns))
+        .collect();
+    let probe_cons: Vec<Option<String>> = (0..probes.len())
+        .map(|row| probe_consensus(row, columns))
         .collect();
     let (req_rows, resp_rows) = partition_rows(scenarios);
 
@@ -813,6 +1015,54 @@ pub fn render_csv(scenarios: &[Scenario], columns: &[Column]) -> String {
             }
             record("", Vec::new());
         }
+
+        // The jar-probe block: same transposed orientation, with the two-input
+        // experiment (Set-Cookie + origin + request) as reference rows.
+        record(
+            "== Jar probes (store from origin, attach to request) ==",
+            Vec::new(),
+        );
+        record("jar", probes.iter().map(|p| p.id.to_string()).collect());
+        record(
+            "Set-Cookie",
+            probes
+                .iter()
+                .map(|p| escape_controls(p.set_cookie))
+                .collect(),
+        );
+        record(
+            "origin",
+            probes.iter().map(|p| p.origin_url.to_string()).collect(),
+        );
+        record(
+            "request",
+            probes.iter().map(|p| p.request_url.to_string()).collect(),
+        );
+        record(
+            "RFC (standard)",
+            probes
+                .iter()
+                .map(|p| rfc_verdict(p.id).unwrap_or("—").to_string())
+                .collect(),
+        );
+        record(
+            "consensus",
+            probe_cons
+                .iter()
+                .map(|c| escape_controls(&c.clone().unwrap_or_else(|| "—".to_string())))
+                .collect(),
+        );
+        for column in columns.iter().filter(|c| probe_column_participates(c)) {
+            record(
+                &column.header(),
+                column
+                    .probe_cells
+                    .iter()
+                    .map(|c| escape_controls(&c.cell()))
+                    .collect(),
+            );
+        }
+        record("", Vec::new());
     }
     let bytes = writer
         .into_inner()
@@ -827,7 +1077,12 @@ pub fn render_csv(scenarios: &[Scenario], columns: &[Column]) -> String {
 /// cross-parser consensus, and a `results` map of every target's full
 /// [`ParseOutcome`] — the error / crash reason and captured stdout/stderr ride along
 /// verbatim.
-pub fn render_json(scenarios: &[Scenario], columns: &[Column], versions: &[String]) -> String {
+pub fn render_json(
+    scenarios: &[Scenario],
+    probes: &[JarProbe],
+    columns: &[Column],
+    versions: &[String],
+) -> String {
     let mut out = BTreeMap::new();
     for (row, s) in scenarios.iter().enumerate() {
         let bytes = s.recipe.render();
@@ -844,8 +1099,32 @@ pub fn render_json(scenarios: &[Scenario], columns: &[Column], versions: &[Strin
                 },
                 wire: String::from_utf8_lossy(&bytes).into_owned(),
                 wire_b64: BASE64_STANDARD.encode(&bytes),
+                origin_url: None,
+                request_url: None,
                 rfc: rfc_verdict(s.id),
                 consensus: consensus(row, columns),
+                results,
+            },
+        );
+    }
+    // The jar probes join the same map (ids are disjoint by the `jar-` prefix), with
+    // their two extra inputs; the URL fields stay absent on wire scenarios, so those
+    // entries serialize byte-identically to a probe-less run.
+    for (row, p) in probes.iter().enumerate() {
+        let results = columns
+            .iter()
+            .map(|c| (format!("{}/{}", c.lang, c.dep), &c.probe_cells[row]))
+            .collect();
+        out.insert(
+            p.id,
+            JsonScenario {
+                direction: "jar",
+                wire: p.set_cookie.to_string(),
+                wire_b64: BASE64_STANDARD.encode(p.set_cookie.as_bytes()),
+                origin_url: Some(p.origin_url),
+                request_url: Some(p.request_url),
+                rfc: rfc_verdict(p.id),
+                consensus: probe_consensus(row, columns),
                 results,
             },
         );
@@ -882,6 +1161,13 @@ struct JsonScenario<'a> {
     wire: String,
     /// The exact wire bytes, base64 (standard alphabet), for faithful replay/probing.
     wire_b64: String,
+    /// Jar probes only (`direction: "jar"`): the URL the Set-Cookie is stored from.
+    /// Absent on wire scenarios, so their entries serialize unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    origin_url: Option<&'a str>,
+    /// Jar probes only: the URL of the later request the jar attaches cookies to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_url: Option<&'a str>,
     /// The RFC verdict, or null where 6265 is not prescriptive.
     rfc: Option<&'a str>,
     /// The modal real-world outcome (the cell string), or null when there is none.
@@ -893,50 +1179,47 @@ struct JsonScenario<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::differential::rust_comparators::rust_comparators;
+    use crate::probe::jar_probes;
     use crate::scenario::scenarios;
 
     #[test]
     fn render_json_is_valid_and_self_describing() {
-        // Columns from the in-process Rust comparators alone (no sidecars), so this
+        // Columns from the in-process comparators alone (no sidecars), so this
         // stays a fast, hermetic unit test.
         let scenarios = scenarios();
-        let columns: Vec<Column> = rust_comparators()
-            .iter()
-            .map(|c| {
-                let (lang, dep) = c.id();
-                Column {
-                    lang: lang.to_string(),
-                    dep: dep.to_string(),
-                    cells: scenarios
-                        .iter()
-                        .map(|s| match s.recipe.render_str() {
-                            Some(wire) => c.run(&wire, s.direction),
-                            None => ParseOutcome::NotApplicable,
-                        })
-                        .collect(),
-                }
-            })
-            .collect();
+        let probes = jar_probes();
+        let columns = crate::differential::in_process_columns(&scenarios, &probes);
         let versions = vec!["Rust: test".to_string()];
 
-        let json = render_json(&scenarios, &columns, &versions);
+        let json = render_json(&scenarios, &probes, &columns, &versions);
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
         // Run metadata is present.
         assert!(v["meta"]["versions"].is_array(), "{v}");
 
-        // Every scenario is keyed by id and carries direction + wire + results.
+        // Every scenario and probe is keyed by id and carries direction + wire + results.
         let objs = v["scenarios"].as_object().expect("scenarios object");
-        assert_eq!(objs.len(), scenarios.len());
+        assert_eq!(objs.len(), scenarios.len() + probes.len());
         let first = scenarios[0].id;
         let entry = &v["scenarios"][first];
         assert!(entry["direction"].is_string(), "{entry}");
         assert!(entry["wire_b64"].is_string(), "{entry}");
-        // The kekse (lenient) target reports an outcome for this scenario.
+        // The kekse (lenient) target reports an outcome for this scenario — and a
+        // wire scenario carries no probe URLs (absent, not null).
         assert!(
             entry["results"]["rust/kekse (lenient)"]["outcome"].is_string(),
             "{entry}"
+        );
+        assert!(entry.get("origin_url").is_none(), "{entry}");
+
+        // A jar probe carries its two inputs and the reference column's outcome.
+        let probe_entry = &v["scenarios"][probes[0].id];
+        assert_eq!(probe_entry["direction"], "jar", "{probe_entry}");
+        assert!(probe_entry["origin_url"].is_string(), "{probe_entry}");
+        assert!(probe_entry["request_url"].is_string(), "{probe_entry}");
+        assert!(
+            probe_entry["results"]["rust/rfc_6265 (reference)"]["outcome"].is_string(),
+            "{probe_entry}"
         );
     }
 }
