@@ -31,7 +31,7 @@ use pulldown_cmark::{Options, Parser, html as cmark_html};
 use serde::Serialize;
 use tera::{Context, Tera};
 
-use crate::differential::result::ParseOutcome;
+use crate::differential::result::{ParseOutcome, PathRender};
 use crate::differential::table::{self, Cell, CellKind, CellText, Row, Table};
 use crate::probe::JarProbe;
 use crate::scenario::Scenario;
@@ -440,6 +440,115 @@ fn cap_diff(s: &str) -> String {
     }
 }
 
+// ── jar default-path resolution ──────────────────────────────────────────────────
+// A jar reports the *effective* scope it stored a cookie at, not the parsed `Path`
+// attribute. When a cookie's `Path` is absent or unusable, that scope is the request
+// default-path (RFC 6265 §5.1.4) — the directory of the URL the harness served the wire
+// from, i.e. our own plumbing (`/r` for the browser origin `…/r/<n>`, `/` for the client
+// and Java origins served from root), never a value read off the wire. Rendering it as
+// `Path=/r` misrepresents the engine and manufactures a false ☢️ Path-contradiction
+// against kekse (a pure parser, which keeps the wire's `.`/``/`file://…` verbatim). We
+// recognise a column's own substituted default and render `Path⇒default` (an engaged wire
+// Path) or nothing (no Path on the wire), uniformly across every jar column.
+
+/// The request default-path a jar column substitutes for an absent/unusable `Path`, or
+/// `None` for a pure parser (which never substitutes). Keyed by [`Column::header`].
+/// **Keep in sync with each harness's serving path**: the browser sidecar serves from
+/// `…/r/<n>` (`fixtures/parse_setcookie_browsers.py`), so its default-path is `/r`; the
+/// curl/wget sidecar (`fixtures/parse_setcookie_clients.py`), the offline libcurl engine
+/// (`fixtures/parse_cookies.c`), and the Java `HttpClient5` parser
+/// (`fixtures/java/.../Sidecar.java`) resolve to root `/`.
+fn jar_default_path(header: &str) -> Option<&'static str> {
+    match header {
+        "browser/chromium" | "browser/firefox" | "browser/edge" => Some("/r"),
+        "client/curl" | "client/wget" | "c/libcurl" | "java/Apache HttpClient5" => Some("/"),
+        _ => None,
+    }
+}
+
+/// Trim leading/trailing OWS (space/tab only, as RFC 6265 §5.2 does) from a byte slice.
+fn trim_ows(mut s: &[u8]) -> &[u8] {
+    while let [b' ' | b'\t', rest @ ..] = s {
+        s = rest;
+    }
+    while let [rest @ .., b' ' | b'\t'] = s {
+        s = rest;
+    }
+    s
+}
+
+/// Every `Path` attribute value on the wire (trimmed), in order — absolute, relative, or
+/// empty alike. Lets a jar's *substituted* default be told apart from a value the wire
+/// actually set (so a hypothetical explicit `Path=/` renders verbatim, not as a default).
+fn wire_path_values(wire: &[u8]) -> Vec<String> {
+    wire.split(|&b| b == b';')
+        .skip(1)
+        .filter_map(|seg| {
+            let (name, value) = match seg.iter().position(|&b| b == b'=') {
+                Some(i) => (&seg[..i], &seg[i + 1..]),
+                None => (seg, &b""[..]),
+            };
+            trim_ows(name)
+                .eq_ignore_ascii_case(b"path")
+                .then(|| String::from_utf8_lossy(trim_ows(value)).into_owned())
+        })
+        .collect()
+}
+
+/// Whether the wire engaged a `Path` attribute at all (any value, usable or not).
+fn wire_engages_path(wire: &[u8]) -> bool {
+    wire.split(|&b| b == b';').skip(1).any(|seg| {
+        let name = match seg.iter().position(|&b| b == b'=') {
+            Some(i) => &seg[..i],
+            None => seg,
+        };
+        trim_ows(name).eq_ignore_ascii_case(b"path")
+    })
+}
+
+/// How a column's stored `Path` should render, resolving a jar's substituted request
+/// default-path away from the harness value. A path is a *substitution* only when it
+/// equals this column's own default ([`jar_default_path`]) and the wire did not set exactly
+/// that value — so a normalized wire path (e.g. `http.cookiejar`'s `/a%00b`) or an explicit
+/// `Path=/` stays [`PathRender::Verbatim`].
+fn resolve_jar_path(header: &str, wire: &[u8], raw: Option<&str>) -> PathRender {
+    let Some(p) = raw else {
+        return PathRender::Verbatim; // nothing stored → renders nothing anyway
+    };
+    let Some(default) = jar_default_path(header) else {
+        return PathRender::Verbatim; // a pure parser never substitutes
+    };
+    if p != default || wire_path_values(wire).iter().any(|v| v == default) {
+        return PathRender::Verbatim; // a genuine wire path (incl. an explicit `Path=<default>`)
+    }
+    if wire_engages_path(wire) {
+        PathRender::Defaulted // engaged but unusable → fell back to the default-path
+    } else {
+        PathRender::Hidden // no Path on the wire → the mundane default, stay silent
+    }
+}
+
+/// The tool's `Path` as it counts for the ☢️ comparison: a substituted default-path is a
+/// storage effect, not a parse, so it compares as absent (an omission vs a kekse path,
+/// never a contradiction). A genuine parsed path compares verbatim.
+fn effective_tool_path<'a>(header: &str, wire: &[u8], raw: Option<&'a str>) -> Option<&'a str> {
+    match resolve_jar_path(header, wire, raw) {
+        PathRender::Verbatim => raw,
+        PathRender::Defaulted | PathRender::Hidden => None,
+    }
+}
+
+/// The display cell for a tool outcome, resolving a jar's substituted default-path. Only a
+/// stored `Set-Cookie` carries a path; every other outcome renders as [`ParseOutcome::cell`].
+fn display_cell(outcome: &ParseOutcome, header: &str, wire: &[u8]) -> String {
+    match outcome {
+        ParseOutcome::SetCookie { set_cookie } => {
+            set_cookie.cell(resolve_jar_path(header, wire, set_cookie.path.as_deref()))
+        }
+        other => other.cell(),
+    }
+}
+
 /// Append an optional-attribute diff (SameSite/Path/Domain), comparing with `eq`:
 /// both `Some` and unequal → contradiction; tool-only → `tool_only` (an *invention*
 /// for a pure-parse attribute like SameSite, but merely *effective* for Path/Domain,
@@ -474,7 +583,12 @@ fn push_opt_diff(
 
 /// Compare a tool's outcome against kekse (lenient)'s for one response row — see the
 /// section comment. Empty ⇒ no disagreement (or the tool made no positive claim).
-fn field_diffs(kekse: &ParseOutcome, tool: &ParseOutcome) -> Vec<FieldDiff> {
+fn field_diffs(
+    kekse: &ParseOutcome,
+    tool: &ParseOutcome,
+    tool_header: &str,
+    wire: &[u8],
+) -> Vec<FieldDiff> {
     let ParseOutcome::SetCookie { set_cookie: t } = tool else {
         return Vec::new(); // only a stored cookie is a claim to check
     };
@@ -536,15 +650,16 @@ fn field_diffs(kekse: &ParseOutcome, tool: &ParseOutcome) -> Vec<FieldDiff> {
                 DiffKind::Invention,
                 |a, b| a.eq_ignore_ascii_case(b),
             );
-            // Path: an av-octet string has no normalization — compare exactly. A
-            // tool-only Path is a jar's default-path (effective, not a parse), so it
-            // does not flag; both-parsed-differently still does (e.g. a jar folding an
-            // over-long or relative Path down to the default where kekse kept it).
+            // Path: an av-octet string has no normalization — compare exactly. The tool's
+            // path goes through `effective_tool_path`, so a jar's substituted request
+            // default-path counts as absent — an omission beside a kekse path, never a
+            // false contradiction; a genuine both-parsed-differently Path still flags, and
+            // a genuine tool-only Path is a storage effect that does not flag.
             push_opt_diff(
                 &mut diffs,
                 "Path",
                 k.path.as_deref(),
-                t.path.as_deref(),
+                effective_tool_path(tool_header, wire, t.path.as_deref()),
                 DiffKind::Effective,
                 |a, b| a == b,
             );
@@ -584,15 +699,20 @@ fn baseline_cells(columns: &[Column]) -> Option<&[ParseOutcome]> {
 fn marked_cell(
     outcome: &ParseOutcome,
     baseline: Option<&ParseOutcome>,
+    header: &str,
+    wire: &[u8],
 ) -> (String, Vec<FieldDiff>) {
     let diffs = baseline
-        .map(|b| field_diffs(b, outcome))
+        .map(|b| field_diffs(b, outcome, header, wire))
         .unwrap_or_default();
     let flagged = diffs.iter().any(|d| d.kind.flags());
+    // `display_cell` resolves a jar's substituted default-path to `Path⇒default` (or hides
+    // it) so the harness value (`/r` / `/`) never reaches the cell.
+    let cell = display_cell(outcome, header, wire);
     let text = if flagged {
-        format!("{} ☢️", outcome.cell())
+        format!("{cell} ☢️")
     } else {
-        outcome.cell()
+        cell
     };
     (text, diffs)
 }
@@ -601,7 +721,7 @@ fn marked_cell(
 /// diffs. Subjects (kekse itself, the rfc_6265 reference) are never compared. Empty
 /// on rows where the crowd agrees with us — so a probe/request row, and any clean
 /// response row, carries no `mismatches` in the JSON.
-fn row_mismatches(row: usize, columns: &[Column]) -> BTreeMap<String, Vec<FieldDiff>> {
+fn row_mismatches(row: usize, columns: &[Column], wire: &[u8]) -> BTreeMap<String, Vec<FieldDiff>> {
     let Some(baseline) = baseline_cells(columns) else {
         return BTreeMap::new();
     };
@@ -609,11 +729,12 @@ fn row_mismatches(row: usize, columns: &[Column]) -> BTreeMap<String, Vec<FieldD
         .iter()
         .filter(|c| !c.is_subject())
         .filter_map(|c| {
-            let diffs = field_diffs(&baseline[row], &c.cells[row]);
+            let header = c.header();
+            let diffs = field_diffs(&baseline[row], &c.cells[row], &header, wire);
             diffs
                 .iter()
                 .any(|d| d.kind.flags())
-                .then(|| (c.header(), diffs))
+                .then_some((header, diffs))
         })
         .collect()
 }
@@ -773,7 +894,8 @@ fn build_section(
                 .map(|&r| {
                     let outcome = &column.cells[r];
                     let base = (!subject).then_some(baseline).flatten().map(|b| &b[r]);
-                    let (text, diffs) = marked_cell(outcome, base);
+                    let wire = scenarios[r].recipe.render();
+                    let (text, diffs) = marked_cell(outcome, base, &label, &wire);
                     // A flagged cell carries the ☢️ field-by-field comparison in its
                     // tooltip; otherwise a ❌/☠️ cell carries its error/crash detail
                     // (a stored cookie has no diagnostics, so the two never collide).
@@ -1329,12 +1451,14 @@ pub fn render_csv(scenarios: &[Scenario], probes: &[JarProbe], columns: &[Column
             );
             for column in &cols {
                 let subject = column.is_subject();
+                let header = column.header();
                 record(
-                    &column.header(),
+                    &header,
                     rows.iter()
                         .map(|&r| {
                             let base = (!subject).then_some(baseline).flatten().map(|b| &b[r]);
-                            escape_controls(&marked_cell(&column.cells[r], base).0)
+                            let wire = scenarios[r].recipe.render();
+                            escape_controls(&marked_cell(&column.cells[r], base, &header, &wire).0)
                         })
                         .collect(),
                 );
@@ -1419,7 +1543,7 @@ pub fn render_json(
         // Per-column ☢️ diffs vs kekse (lenient), keyed by column header. Empty on a
         // request row or a clean response row, so `skip_serializing_if` keeps those
         // entries byte-identical to a run without the semantic pass.
-        let mismatches = row_mismatches(row, columns)
+        let mismatches = row_mismatches(row, columns, &bytes)
             .into_iter()
             .map(|(header, diffs)| (header, diffs.iter().map(JsonFieldDiff::from).collect()))
             .collect();
@@ -1563,25 +1687,156 @@ mod tests {
         }
     }
 
+    /// A stored-cookie outcome with the given value and `Path`; other fields default.
+    fn stored_path(value: &str, path: Option<&str>) -> ParseOutcome {
+        ParseOutcome::SetCookie {
+            set_cookie: SetCookieView {
+                name: "SID".into(),
+                value: value.into(),
+                http_only: false,
+                secure: false,
+                same_site: None,
+                path: path.map(str::to_string),
+                domain: None,
+                max_age: None,
+                expires: None,
+            },
+        }
+    }
+
+    #[test]
+    fn resolve_jar_path_recognizes_a_columns_substituted_default() {
+        // Browser default-path `/r` for an engaged-but-unusable Path → the marker; for a
+        // wire with no Path token → silent (a plain no-Path cookie).
+        assert_eq!(
+            resolve_jar_path("browser/chromium", b"SID=abc; Path=.", Some("/r")),
+            PathRender::Defaulted
+        );
+        assert_eq!(
+            resolve_jar_path("browser/chromium", b"SID=abc", Some("/r")),
+            PathRender::Hidden
+        );
+        // The client/HttpClient5 default is `/`: silent on a no-Path wire, marker on `Path=`.
+        assert_eq!(
+            resolve_jar_path("client/curl", b"SID=abc", Some("/")),
+            PathRender::Hidden
+        );
+        assert_eq!(
+            resolve_jar_path("java/Apache HttpClient5", b"SID=abc; Path=", Some("/")),
+            PathRender::Defaulted
+        );
+        // A jar that KEEPS a wire path (curl stores `.` verbatim) is a genuine parse.
+        assert_eq!(
+            resolve_jar_path("client/curl", b"SID=abc; Path=.", Some(".")),
+            PathRender::Verbatim
+        );
+        // A normalized wire path (http.cookiejar's `/a%00b`) is not the column's default.
+        assert_eq!(
+            resolve_jar_path(
+                "python/http.cookiejar",
+                b"SID=abc; Path=/a\0b",
+                Some("/a%00b")
+            ),
+            PathRender::Verbatim
+        );
+        // A pure parser has no substituted default — always verbatim.
+        assert_eq!(
+            resolve_jar_path("rust/kekse (lenient)", b"SID=abc", Some("/r")),
+            PathRender::Verbatim
+        );
+        // A hypothetical explicit `Path=/` (the wire set exactly the default) is verbatim.
+        assert_eq!(
+            resolve_jar_path("client/curl", b"SID=abc; Path=/", Some("/")),
+            PathRender::Verbatim
+        );
+    }
+
+    #[test]
+    fn field_diffs_does_not_flag_a_jars_defaulted_path() {
+        // kekse keeps the wire's `.`; the browser fell back to its default-path `/r`. That
+        // is a storage effect, not a contradiction — it degrades to a non-flagging omission.
+        let kekse = stored_path("abc", Some("."));
+        let browser = stored_path("abc", Some("/r"));
+        let d = field_diffs(&kekse, &browser, "browser/chromium", b"SID=abc; Path=.");
+        assert!(
+            d.iter().all(|d| !d.kind.flags()),
+            "a jar's substituted default-path must not flag: {d:?}"
+        );
+        // But a genuine both-parsed-differently Path still flags.
+        let other = stored_path("abc", Some("/b"));
+        let d = field_diffs(&kekse, &other, "node/tough-cookie", b"SID=abc; Path=.");
+        assert!(
+            d.iter()
+                .any(|d| d.field == "Path" && d.kind == DiffKind::Contradiction),
+            "a genuine differing Path must flag: {d:?}"
+        );
+    }
+
+    #[test]
+    fn display_cell_renders_the_defaulted_marker_not_the_harness_value() {
+        let browser = stored_path("abc", Some("/r"));
+        assert_eq!(
+            display_cell(&browser, "browser/chromium", b"SID=abc; Path=."),
+            "SID=abc ;Path⇒default"
+        );
+        // No Path on the wire → the default stays silent.
+        assert_eq!(
+            display_cell(&browser, "browser/chromium", b"SID=abc"),
+            "SID=abc"
+        );
+        // A non-jar column shows whatever it stored, verbatim.
+        assert_eq!(
+            display_cell(
+                &stored_path("abc", Some("/b")),
+                "node/cookie",
+                b"SID=abc; Path=/b"
+            ),
+            "SID=abc ;Path=/b"
+        );
+    }
+
     #[test]
     fn field_diffs_flags_contradiction_invention_and_stored_over_rejected() {
         // Invention: the tool asserts a SameSite kekse never parsed.
-        let d = field_diffs(&stored("abc", None), &stored("abc", Some("Lax")));
+        let d = field_diffs(
+            &stored("abc", None),
+            &stored("abc", Some("Lax")),
+            "node/tough-cookie",
+            b"",
+        );
         assert!(
             d.iter()
                 .any(|d| d.field == "SameSite" && d.kind == DiffKind::Invention),
             "expected a SameSite invention"
         );
         // Contradiction: both stored, but the value differs.
-        let d = field_diffs(&stored("abc", None), &stored("xyz", None));
+        let d = field_diffs(
+            &stored("abc", None),
+            &stored("xyz", None),
+            "node/tough-cookie",
+            b"",
+        );
         assert!(
             d.iter()
                 .any(|d| d.field == "value" && d.kind == DiffKind::Contradiction)
         );
         // SameSite compares case-insensitively — "Lax" vs "lax" is agreement.
-        assert!(field_diffs(&stored("abc", Some("Lax")), &stored("abc", Some("lax"))).is_empty());
+        assert!(
+            field_diffs(
+                &stored("abc", Some("Lax")),
+                &stored("abc", Some("lax")),
+                "node/tough-cookie",
+                b"",
+            )
+            .is_empty()
+        );
         // Omission never flags: the tool drops a SameSite kekse kept.
-        let d = field_diffs(&stored("abc", Some("Lax")), &stored("abc", None));
+        let d = field_diffs(
+            &stored("abc", Some("Lax")),
+            &stored("abc", None),
+            "node/tough-cookie",
+            b"",
+        );
         assert!(
             d.iter().all(|d| !d.kind.flags()),
             "an omission must not flag"
@@ -1590,6 +1845,8 @@ mod tests {
         let d = field_diffs(
             &ParseOutcome::SetCookieRejected { error: "no".into() },
             &stored("abc", None),
+            "node/tough-cookie",
+            b"",
         );
         assert!(
             d.iter()
@@ -1599,7 +1856,9 @@ mod tests {
         assert!(
             field_diffs(
                 &stored("abc", None),
-                &ParseOutcome::SetCookieRejected { error: "x".into() }
+                &ParseOutcome::SetCookieRejected { error: "x".into() },
+                "node/tough-cookie",
+                b"",
             )
             .is_empty()
         );
@@ -1623,7 +1882,7 @@ mod tests {
             // A subject column that also "stores where kekse rejects" must NOT appear.
             col("rust", "kekse (strict)", stored("abc", None)),
         ];
-        let m = row_mismatches(0, &columns);
+        let m = row_mismatches(0, &columns, b"");
         assert!(m.contains_key("browser/chromium"), "tool should be flagged");
         assert_eq!(m["browser/chromium"][0].kind.as_str(), "outcome");
         assert!(

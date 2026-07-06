@@ -148,7 +148,9 @@ impl ParseOutcome {
         match self {
             ParseOutcome::Cookies { cookies } => render_cookies(cookies),
             ParseOutcome::Rejected { .. } => "❌".to_string(),
-            ParseOutcome::SetCookie { set_cookie } => set_cookie.cell(),
+            // Context-free rendering (consensus key, jar-probe cells): the raw stored path.
+            // The response table resolves a jar's substituted default-path via `display_cell`.
+            ParseOutcome::SetCookie { set_cookie } => set_cookie.cell(PathRender::Verbatim),
             ParseOutcome::SetCookieRejected { .. } => "❌".to_string(),
             ParseOutcome::ForwardedVerbatim => "≡".to_string(),
             ParseOutcome::ForwardedAltered { forwarded } => format!("≠ {}", short(forwarded)),
@@ -217,8 +219,28 @@ impl ParseOutcome {
     }
 }
 
+/// How a jar column's stored `Path` renders in a cell. A jar reports the *effective*
+/// scope it stored, which for a cookie whose `Path` it could not use is the request
+/// default-path (§5.1.4) — a harness artifact (`/r` for the browser origin, `/` for the
+/// client/HttpClient5 origins), never a value read off the wire. The matrix resolves that
+/// away rather than printing our own plumbing; see [`matrix::resolve_jar_path`].
+///
+/// [`matrix::resolve_jar_path`]: super::matrix
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PathRender {
+    /// Render `self.path` verbatim (`Path=<value>`), or nothing when it is `None` — the
+    /// context-free default, used by every non-jar column and every genuine wire path.
+    Verbatim,
+    /// The stored path is the request default-path the jar substituted for an *engaged but
+    /// unusable* wire `Path` — render `Path⇒default`, stating the fall-back without the value.
+    Defaulted,
+    /// The stored path is the substituted default and the wire engaged no `Path` at all —
+    /// render nothing (a plain no-Path cookie stays silent).
+    Hidden,
+}
+
 impl SetCookieView {
-    fn cell(&self) -> String {
+    pub(crate) fn cell(&self, path: PathRender) -> String {
         let mut flags = Vec::new();
         if self.http_only {
             flags.push("HttpOnly".to_string());
@@ -229,8 +251,16 @@ impl SetCookieView {
         if let Some(s) = &self.same_site {
             flags.push(format!("SameSite={s}"));
         }
-        if let Some(p) = &self.path {
-            flags.push(format!("Path={p}"));
+        match path {
+            PathRender::Verbatim => {
+                if let Some(p) = &self.path {
+                    flags.push(format!("Path={p}"));
+                }
+            }
+            // The jar substituted its request default-path for an engaged-but-unusable
+            // Path; state the fall-back, not the harness value (`/r` / `/`).
+            PathRender::Defaulted => flags.push("Path⇒default".to_string()),
+            PathRender::Hidden => {}
         }
         if let Some(d) = &self.domain {
             flags.push(format!("Domain={d}"));
@@ -379,14 +409,14 @@ mod tests {
             .unwrap()
             .unix_timestamp();
         assert_eq!(
-            set_cookie(Some(epoch)).cell(),
+            set_cookie(Some(epoch)).cell(PathRender::Verbatim),
             "SID=abc ;Expires=Sun, 06 Nov 1994 08:49:37 GMT"
         );
     }
 
     #[test]
     fn cell_without_expires_is_unchanged() {
-        assert_eq!(set_cookie(None).cell(), "SID=abc");
+        assert_eq!(set_cookie(None).cell(PathRender::Verbatim), "SID=abc");
     }
 
     #[test]
