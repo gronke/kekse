@@ -355,6 +355,34 @@ const SIDECARS: &[SidecarSpec] = &[
         script: "parse_setcookie_clients.py",
         deps: &["curl", "wget"],
     },
+    SidecarSpec {
+        lang: "browser",
+        // Three real browser engines — Chromium, Firefox (Gecko), and Edge —
+        // driven headless over classic WebDriver by a Python driver. Like the
+        // client sidecar, a loopback server replies `Set-Cookie: <wire>`
+        // verbatim, so each engine's real header parser and cookie pipeline
+        // answers, RFC 6265bis policy included (Edge shares Chromium's
+        // net/cookies — its column exists to demonstrate that equivalence).
+        // The response direction reads the stored cookie back through the
+        // driver; the jar direction reports what the engine attaches to the
+        // request URL. Runs in a CI-built image (pinned browsers + drivers +
+        // their WebDrivers; see fixtures/browsers/Dockerfile) with
+        // `--network=none` — the servers bind loopback 80/443 inside the
+        // container. Locally, with no docker, it falls back to host `python3`;
+        // without the browsers (or the privileged ports) the selfcheck
+        // honestly reports every column unavailable → SKIP.
+        command: "python3",
+        image: Some(ImageSpec {
+            repo: "keksbruch-browsers",
+            default_version: "local",
+            tag_suffix: "",
+            version_env: "BROWSERS_IMAGE_VERSION",
+        }),
+        args: &[],
+        post_args: &[],
+        script: "parse_setcookie_browsers.py",
+        deps: &["chromium", "firefox", "edge"],
+    },
 ];
 
 /// Build every sidecar-backed column (graceful SKIP where unavailable), plus a
@@ -920,6 +948,12 @@ for line in sys.stdin:
         assert_eq!(
             image_of("java").resolve_with(None),
             "eclipse-temurin:25-jre"
+        );
+        // CI-built images pin their contents in their Dockerfiles; the tag
+        // stays `local` unless BROWSERS_IMAGE_VERSION retags it.
+        assert_eq!(
+            image_of("browser").resolve_with(None),
+            "keksbruch-browsers:local"
         );
     }
 
