@@ -43,6 +43,8 @@ let header = SetCookie::new("SID", "deadbeef")
 assert_eq!(header, "SID=deadbeef; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age=3600");
 ```
 
+The verbs are optional sugar over `CookieAttributes`, a plain `Default` struct; the [`build_set_cookie`](examples/build_set_cookie.rs) example builds the same cookie three ways.
+
 Attributes are emitted in a fixed order: `HttpOnly`, `SameSite`, `Secure`, `Path`, `Domain`, `Expires`, `Max-Age`, each only when set.
 
 To hand the cookie straight to `http`, use `HeaderValue::try_from(set_cookie)` (or `&set_cookie`) instead of `.to_set_cookie()`: the managed encodings are always valid header bytes, so it fails only for a `Raw` value the caller deliberately built with non-header bytes.
@@ -113,7 +115,7 @@ Each prints its output and asserts the invariant it documents, so it doubles as 
 
 | Example | Shows |
 | --- | --- |
-| `build_set_cookie` | The `SetCookie` builder, the `HeaderValue` conversion, a reusable `CookieAttributes` policy, and a parse round-trip. |
+| `build_set_cookie` | Three ways to build a `SetCookie` — inline builder, a reusable `CookieAttributes` policy, a struct literal — plus the `HeaderValue` conversion and a parse round-trip. |
 | `parse_request` | Reading and rewriting a `Cookie:` request header through a `CookieJar`. |
 | `encodings` | How each `ValueEncoding` escapes one tricky value for the wire. |
 | `strict_vs_lenient` | The lenient and strict readers side by side on a quoted value. |

@@ -2,7 +2,7 @@
 //!
 //! Run with: `cargo run -p kekse --example build_set_cookie`
 
-use kekse::{Cookie, CookieAttributes, SameSite, SetCookie, ValueEncoding};
+use kekse::{Cookie, CookieAttributes, Path, SameSite, SetCookie, ValueEncoding};
 
 fn main() {
     // 1. The fluent builder. The nullary flags (`http_only`, `secure`) and the
@@ -43,7 +43,27 @@ fn main() {
         println!("3. policy:      {line}");
     }
 
-    // 4. Round-trip: render a cookie, parse the line back, and confirm it
+    // 4. The same attributes as a plain struct literal — `CookieAttributes` has
+    //    public fields and derives `Default`, so the verbs are optional sugar.
+    //    (`path`/`domain` are validated newtypes: `Path::new` already returns an `Option`.)
+    let attrs = CookieAttributes {
+        http_only: true,
+        secure: true,
+        same_site: Some(SameSite::Strict),
+        path: Path::new("/"),
+        max_age: Some(3600),
+        ..Default::default()
+    };
+    let literal = SetCookie::new("SID", "deadbeef")
+        .with_attributes(attrs)
+        .to_set_cookie();
+    println!("4. literal:     {literal}");
+    assert_eq!(
+        literal,
+        "SID=deadbeef; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age=3600"
+    );
+
+    // 5. Round-trip: render a cookie, parse the line back, and confirm it
     //    survives. The `Percent` value `a%20b` decodes back to `a b`.
     let wire = SetCookie::new("pref", "a b")
         .with_encoding(ValueEncoding::Percent)
@@ -51,7 +71,7 @@ fn main() {
         .to_set_cookie();
     let parsed = SetCookie::parse(&wire).expect("our own output round-trips");
     println!(
-        "4. round-trip:  {wire:?} -> name={:?} value={:?} max_age={:?}",
+        "5. round-trip:  {wire:?} -> name={:?} value={:?} max_age={:?}",
         parsed.name(),
         parsed.value(),
         parsed.attributes().max_age
