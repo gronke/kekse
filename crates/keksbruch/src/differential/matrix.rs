@@ -357,6 +357,303 @@ fn cell_kind(outcome: &ParseOutcome, consensus: Option<&String>) -> CellKind {
     }
 }
 
+// ── semantic mismatch (☢️) ───────────────────────────────────────────────────────
+// The consensus vote asks "does this tool render the same *cell* as the crowd". This
+// is the mirror axis: for a response `Set-Cookie`, does the tool's parse *contradict
+// kekse's own typed reading*? kekse's `SetCookie`/`CookieAttributes` is the reference
+// — the parse we assert is correct — so a tool that stores a cookie kekse refuses, or
+// reads an attribute value kekse reads differently, or invents an attribute kekse
+// never parsed, is a ☢️: a place where a real client's understanding of the wire
+// diverges from ours, worth an explicit look. Only a tool's *positive* claim (a stored
+// cookie) is examined; a tool that rejected, abstained, or crashed makes no claim to
+// contradict. `Max-Age`/`Expires` are out of scope — a jar folds them into one
+// run-relative instant, so a difference there is not a parse disagreement.
+
+/// How one field-level reading disagrees with kekse's.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DiffKind {
+    /// Both parsed the field, to different values.
+    Contradiction,
+    /// The tool asserts a field kekse did not parse at all.
+    Invention,
+    /// kekse parsed a field the tool dropped — loss of information; never a ☢️.
+    Omission,
+    /// The tool reports a *storage-effective* value (a jar's default-path, a derived
+    /// host) where kekse — a parser — reports only the parsed attribute (absent). Not
+    /// a parse disagreement, so never a ☢️; shown in the tooltip for context.
+    Effective,
+    /// The tool stored a cookie kekse rejected outright.
+    Outcome,
+}
+
+impl DiffKind {
+    /// Whether this disagreement raises the ☢️ marker. An omission (the tool can't
+    /// represent a field) and an effective value (a jar reporting stored state, not
+    /// the parsed attribute) are lossy/adjacent, not *wrong*, so neither flags.
+    fn flags(self) -> bool {
+        matches!(
+            self,
+            DiffKind::Contradiction | DiffKind::Invention | DiffKind::Outcome
+        )
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            DiffKind::Contradiction => "contradiction",
+            DiffKind::Invention => "invention",
+            DiffKind::Omission => "omission",
+            DiffKind::Effective => "effective",
+            DiffKind::Outcome => "outcome",
+        }
+    }
+
+    /// A short parenthetical for the tooltip's tool column, marking the non-flagging
+    /// kinds so a lossy/effective field reads distinctly from a real contradiction.
+    fn annotation(self) -> &'static str {
+        match self {
+            DiffKind::Omission => " (omitted)",
+            DiffKind::Effective => " (effective)",
+            _ => "",
+        }
+    }
+}
+
+/// One field where a tool's `Set-Cookie` parse disagrees with kekse (lenient)'s.
+#[derive(Debug)]
+struct FieldDiff {
+    field: &'static str,
+    kind: DiffKind,
+    kekse: String,
+    tool: String,
+}
+
+/// A diff value made short and control-safe for the tooltip/JSON (kept off the raw
+/// cell width). `result::short` is private, so this is its local peer.
+fn cap_diff(s: &str) -> String {
+    let esc = escape_controls(s);
+    let n = esc.chars().count();
+    if n > 40 {
+        let prefix: String = esc.chars().take(28).collect();
+        format!("{prefix}…<{n} chars>")
+    } else {
+        esc
+    }
+}
+
+/// Append an optional-attribute diff (SameSite/Path/Domain), comparing with `eq`:
+/// both `Some` and unequal → contradiction; tool-only → `tool_only` (an *invention*
+/// for a pure-parse attribute like SameSite, but merely *effective* for Path/Domain,
+/// where a jar reports stored default-path/derived-host state kekse's attribute-parse
+/// leaves absent); kekse-only → omission; agreement (incl. both absent) → nothing.
+fn push_opt_diff(
+    diffs: &mut Vec<FieldDiff>,
+    field: &'static str,
+    kekse: Option<&str>,
+    tool: Option<&str>,
+    tool_only: DiffKind,
+    eq: impl Fn(&str, &str) -> bool,
+) {
+    let kind = match (kekse, tool) {
+        (Some(k), Some(t)) => {
+            if eq(k, t) {
+                return;
+            }
+            DiffKind::Contradiction
+        }
+        (None, Some(_)) => tool_only,
+        (Some(_), None) => DiffKind::Omission,
+        (None, None) => return,
+    };
+    diffs.push(FieldDiff {
+        field,
+        kind,
+        kekse: kekse.map(cap_diff).unwrap_or_else(|| "—".to_string()),
+        tool: tool.map(cap_diff).unwrap_or_else(|| "—".to_string()),
+    });
+}
+
+/// Compare a tool's outcome against kekse (lenient)'s for one response row — see the
+/// section comment. Empty ⇒ no disagreement (or the tool made no positive claim).
+fn field_diffs(kekse: &ParseOutcome, tool: &ParseOutcome) -> Vec<FieldDiff> {
+    let ParseOutcome::SetCookie { set_cookie: t } = tool else {
+        return Vec::new(); // only a stored cookie is a claim to check
+    };
+    match kekse {
+        // kekse refused the wire, the tool kept it — the sharpest divergence.
+        ParseOutcome::SetCookieRejected { .. } => vec![FieldDiff {
+            field: "(stored)",
+            kind: DiffKind::Outcome,
+            kekse: "rejected".to_string(),
+            tool: "stored".to_string(),
+        }],
+        ParseOutcome::SetCookie { set_cookie: k } => {
+            let mut diffs = Vec::new();
+            // name/value are always present on both — any difference is a contradiction.
+            if t.name != k.name {
+                diffs.push(FieldDiff {
+                    field: "name",
+                    kind: DiffKind::Contradiction,
+                    kekse: cap_diff(&k.name),
+                    tool: cap_diff(&t.name),
+                });
+            }
+            if t.value != k.value {
+                diffs.push(FieldDiff {
+                    field: "value",
+                    kind: DiffKind::Contradiction,
+                    kekse: cap_diff(&k.value),
+                    tool: cap_diff(&t.value),
+                });
+            }
+            // A flag the tool set but kekse did not is an invention; the reverse is an
+            // omission (kekse saw a flag the tool dropped).
+            for (field, tv, kv) in [
+                ("HttpOnly", t.http_only, k.http_only),
+                ("Secure", t.secure, k.secure),
+            ] {
+                if tv != kv {
+                    diffs.push(FieldDiff {
+                        field,
+                        kind: if tv {
+                            DiffKind::Invention
+                        } else {
+                            DiffKind::Omission
+                        },
+                        kekse: kv.to_string(),
+                        tool: tv.to_string(),
+                    });
+                }
+            }
+            // SameSite: value is ASCII-case-insensitive (kekse's canonical `as_str`
+            // vs a Debug-formatted or raw-echoed token from another column). A tool
+            // asserting a SameSite kekse dropped is a real invention (the motivating
+            // case: an engine assuming a default where the wire said nothing usable).
+            push_opt_diff(
+                &mut diffs,
+                "SameSite",
+                k.same_site.as_deref(),
+                t.same_site.as_deref(),
+                DiffKind::Invention,
+                |a, b| a.eq_ignore_ascii_case(b),
+            );
+            // Path: an av-octet string has no normalization — compare exactly. A
+            // tool-only Path is a jar's default-path (effective, not a parse), so it
+            // does not flag; both-parsed-differently still does (e.g. a jar folding an
+            // over-long or relative Path down to the default where kekse kept it).
+            push_opt_diff(
+                &mut diffs,
+                "Path",
+                k.path.as_deref(),
+                t.path.as_deref(),
+                DiffKind::Effective,
+                |a, b| a == b,
+            );
+            // Domain: case-insensitive, one leading dot stripped on each side (§5.2.3).
+            // A tool-only Domain is a jar's derived host (effective), so it does not flag.
+            push_opt_diff(
+                &mut diffs,
+                "Domain",
+                k.domain.as_deref(),
+                t.domain.as_deref(),
+                DiffKind::Effective,
+                |a, b| {
+                    let norm = |d: &str| d.strip_prefix('.').unwrap_or(d).to_ascii_lowercase();
+                    norm(a) == norm(b)
+                },
+            );
+            diffs
+        }
+        // kekse made no Set-Cookie claim here (a request `Cookies`, n/a, …) — nothing
+        // of ours for the tool to contradict.
+        _ => Vec::new(),
+    }
+}
+
+/// kekse (lenient)'s per-scenario cells — the baseline the ☢️ pass compares against.
+/// `None` if that column is absent (it never is in a real run).
+fn baseline_cells(columns: &[Column]) -> Option<&[ParseOutcome]> {
+    columns
+        .iter()
+        .find(|c| c.dep == "kekse (lenient)")
+        .map(|c| c.cells.as_slice())
+}
+
+/// The display cell text for a tool outcome plus its field diffs vs kekse: the ☢️
+/// marker is appended when any diff flags. `baseline` is kekse (lenient)'s outcome for
+/// this same row, or `None` (no baseline, or a subject column, which is never marked).
+fn marked_cell(
+    outcome: &ParseOutcome,
+    baseline: Option<&ParseOutcome>,
+) -> (String, Vec<FieldDiff>) {
+    let diffs = baseline
+        .map(|b| field_diffs(b, outcome))
+        .unwrap_or_default();
+    let flagged = diffs.iter().any(|d| d.kind.flags());
+    let text = if flagged {
+        format!("{} ☢️", outcome.cell())
+    } else {
+        outcome.cell()
+    };
+    (text, diffs)
+}
+
+/// Every non-subject tool that contradicts kekse on this response row → its flagged
+/// diffs. Subjects (kekse itself, the rfc_6265 reference) are never compared. Empty
+/// on rows where the crowd agrees with us — so a probe/request row, and any clean
+/// response row, carries no `mismatches` in the JSON.
+fn row_mismatches(row: usize, columns: &[Column]) -> BTreeMap<String, Vec<FieldDiff>> {
+    let Some(baseline) = baseline_cells(columns) else {
+        return BTreeMap::new();
+    };
+    columns
+        .iter()
+        .filter(|c| !c.is_subject())
+        .filter_map(|c| {
+            let diffs = field_diffs(&baseline[row], &c.cells[row]);
+            diffs
+                .iter()
+                .any(|d| d.kind.flags())
+                .then(|| (c.header(), diffs))
+        })
+        .collect()
+}
+
+/// The ☢️ tooltip body: a monospace-aligned `field / kekse / tool` table for the
+/// HTML `<pre>` (maud entity-encodes it, so an untrusted value stays inert).
+fn mismatch_tooltip(tool_label: &str, diffs: &[FieldDiff]) -> String {
+    let headers = ["field", "kekse (lenient)", tool_label];
+    let width = |i: usize, pick: &dyn Fn(&FieldDiff) -> &str| {
+        headers[i].chars().count().max(
+            diffs
+                .iter()
+                .map(|d| pick(d).chars().count())
+                .max()
+                .unwrap_or(0),
+        )
+    };
+    let w0 = width(0, &|d| d.field);
+    let w1 = width(1, &|d| d.kekse.as_str());
+    let pad = |s: &str, w: usize| format!("{s}{}", " ".repeat(w.saturating_sub(s.chars().count())));
+    let mut lines = vec![format!(
+        "{}  {}  {}",
+        pad(headers[0], w0),
+        pad(headers[1], w1),
+        headers[2]
+    )];
+    for d in diffs {
+        // Annotate the non-flagging kinds so a lossy/effective field reads distinctly
+        // from a genuine contradiction or invention.
+        let tool = format!("{}{}", d.tool, d.kind.annotation());
+        lines.push(format!(
+            "{}  {}  {}",
+            pad(d.field, w0),
+            pad(&d.kekse, w1),
+            tool
+        ));
+    }
+    lines.join("\n")
+}
+
 // ── section split ──────────────────────────────────────────────────────────────
 // The matrix is split by `Direction` into two tables — the request-`Cookie:`
 // parsers and the response-`Set-Cookie:` parsers — so each reads as a dense table
@@ -422,6 +719,7 @@ fn build_section(
     scenarios: &[Scenario],
     columns: &[&Column],
     cons: &[Option<String>],
+    baseline: Option<&[ParseOutcome]>,
 ) -> Table {
     let col_headers = rows
         .iter()
@@ -463,18 +761,29 @@ fn build_section(
     });
 
     for column in columns {
+        let label = column.header();
+        // A subject (kekse itself, the rfc_6265 reference) is never compared to the
+        // baseline — it is not a tool whose reading we assert against ours.
+        let subject = column.is_subject();
         body.push(Row {
-            header: column.header(),
+            header: label.clone(),
             is_ref: false,
             cells: rows
                 .iter()
                 .map(|&r| {
                     let outcome = &column.cells[r];
-                    // On ❌ (reject) and ☠️ (crash) cells, carry the error / crash
-                    // reason plus any captured stdout/stderr into a role="tooltip"
-                    // panel, keyed by a document-unique id.
-                    Cell::code(outcome.cell(), cell_kind(outcome, cons[r].as_ref()))
-                        .with_detail(tooltip_id(column, scenarios[r].id), outcome.diagnostics())
+                    let base = (!subject).then_some(baseline).flatten().map(|b| &b[r]);
+                    let (text, diffs) = marked_cell(outcome, base);
+                    // A flagged cell carries the ☢️ field-by-field comparison in its
+                    // tooltip; otherwise a ❌/☠️ cell carries its error/crash detail
+                    // (a stored cookie has no diagnostics, so the two never collide).
+                    let detail = if diffs.iter().any(|d| d.kind.flags()) {
+                        Some(mismatch_tooltip(&label, &diffs))
+                    } else {
+                        outcome.diagnostics()
+                    };
+                    Cell::code(text, cell_kind(outcome, cons[r].as_ref()))
+                        .with_detail(tooltip_id(column, scenarios[r].id), detail)
                 })
                 .collect(),
         });
@@ -847,12 +1156,13 @@ pub fn render(
         .collect();
     let (req_rows, resp_rows) = partition_rows(scenarios);
 
+    let baseline = baseline_cells(columns);
     let section_md = |rows: &[usize]| {
         let cols: Vec<&Column> = columns
             .iter()
             .filter(|c| column_participates(c, rows))
             .collect();
-        table::to_markdown(&build_section(rows, scenarios, &cols, &cons))
+        table::to_markdown(&build_section(rows, scenarios, &cols, &cons, baseline))
     };
     let jar_cols: Vec<&Column> = columns
         .iter()
@@ -902,12 +1212,13 @@ pub fn render_html(
         .collect();
     let (req_rows, resp_rows) = partition_rows(scenarios);
 
+    let baseline = baseline_cells(columns);
     let section_html = |rows: &[usize]| {
         let cols: Vec<&Column> = columns
             .iter()
             .filter(|c| column_participates(c, rows))
             .collect();
-        table::to_html(&build_section(rows, scenarios, &cols, &cons)).into_string()
+        table::to_html(&build_section(rows, scenarios, &cols, &cons, baseline)).into_string()
     };
     let jar_cols: Vec<&Column> = columns
         .iter()
@@ -972,6 +1283,7 @@ pub fn render_csv(scenarios: &[Scenario], probes: &[JarProbe], columns: &[Column
     let probe_cons: Vec<Option<String>> = (0..probes.len())
         .map(|row| probe_consensus(row, columns))
         .collect();
+    let baseline = baseline_cells(columns);
     let (req_rows, resp_rows) = partition_rows(scenarios);
 
     let mut writer = csv::WriterBuilder::new()
@@ -1016,10 +1328,14 @@ pub fn render_csv(scenarios: &[Scenario], probes: &[JarProbe], columns: &[Column
                     .collect(),
             );
             for column in &cols {
+                let subject = column.is_subject();
                 record(
                     &column.header(),
                     rows.iter()
-                        .map(|&r| escape_controls(&column.cells[r].cell()))
+                        .map(|&r| {
+                            let base = (!subject).then_some(baseline).flatten().map(|b| &b[r]);
+                            escape_controls(&marked_cell(&column.cells[r], base).0)
+                        })
                         .collect(),
                 );
             }
@@ -1100,6 +1416,13 @@ pub fn render_json(
             .iter()
             .map(|c| (format!("{}/{}", c.lang, c.dep), &c.cells[row]))
             .collect();
+        // Per-column ☢️ diffs vs kekse (lenient), keyed by column header. Empty on a
+        // request row or a clean response row, so `skip_serializing_if` keeps those
+        // entries byte-identical to a run without the semantic pass.
+        let mismatches = row_mismatches(row, columns)
+            .into_iter()
+            .map(|(header, diffs)| (header, diffs.iter().map(JsonFieldDiff::from).collect()))
+            .collect();
         out.insert(
             s.id,
             JsonScenario {
@@ -1114,6 +1437,7 @@ pub fn render_json(
                 rfc: rfc_verdict(s.id),
                 consensus: consensus(row, columns),
                 results,
+                mismatches,
             },
         );
     }
@@ -1136,6 +1460,9 @@ pub fn render_json(
                 rfc: rfc_verdict(p.id),
                 consensus: probe_consensus(row, columns),
                 results,
+                // The ☢️ pass compares against kekse (lenient), which does not answer
+                // jar probes — so a probe entry carries no mismatches.
+                mismatches: BTreeMap::new(),
             },
         );
     }
@@ -1184,13 +1511,126 @@ struct JsonScenario<'a> {
     consensus: Option<String>,
     /// `"<lang>/<dep>"` → that target's full outcome.
     results: BTreeMap<String, &'a ParseOutcome>,
+    /// Response rows only: `"<lang>/<dep>"` → the field-level ways that tool's parse
+    /// contradicts kekse (lenient)'s typed reading (the ☢️ marker's backing data).
+    /// Empty (and so omitted) on request/probe rows and on any response row where no
+    /// tool disagrees with kekse — keeping those entries byte-identical.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    mismatches: BTreeMap<String, Vec<JsonFieldDiff>>,
+}
+
+/// One field-level disagreement in the JSON `mismatches` map.
+#[derive(Serialize)]
+struct JsonFieldDiff {
+    field: &'static str,
+    kind: &'static str,
+    kekse: String,
+    tool: String,
+}
+
+impl From<&FieldDiff> for JsonFieldDiff {
+    fn from(d: &FieldDiff) -> Self {
+        JsonFieldDiff {
+            field: d.field,
+            kind: d.kind.as_str(),
+            kekse: d.kekse.clone(),
+            tool: d.tool.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::differential::result::SetCookieView;
     use crate::probe::jar_probes;
     use crate::scenario::scenarios;
+
+    /// A stored-cookie outcome with the given SameSite and value; other fields default.
+    fn stored(value: &str, same_site: Option<&str>) -> ParseOutcome {
+        ParseOutcome::SetCookie {
+            set_cookie: SetCookieView {
+                name: "SID".into(),
+                value: value.into(),
+                http_only: false,
+                secure: false,
+                same_site: same_site.map(str::to_string),
+                path: None,
+                domain: None,
+                max_age: None,
+                expires: None,
+            },
+        }
+    }
+
+    #[test]
+    fn field_diffs_flags_contradiction_invention_and_stored_over_rejected() {
+        // Invention: the tool asserts a SameSite kekse never parsed.
+        let d = field_diffs(&stored("abc", None), &stored("abc", Some("Lax")));
+        assert!(
+            d.iter()
+                .any(|d| d.field == "SameSite" && d.kind == DiffKind::Invention),
+            "expected a SameSite invention"
+        );
+        // Contradiction: both stored, but the value differs.
+        let d = field_diffs(&stored("abc", None), &stored("xyz", None));
+        assert!(
+            d.iter()
+                .any(|d| d.field == "value" && d.kind == DiffKind::Contradiction)
+        );
+        // SameSite compares case-insensitively — "Lax" vs "lax" is agreement.
+        assert!(field_diffs(&stored("abc", Some("Lax")), &stored("abc", Some("lax"))).is_empty());
+        // Omission never flags: the tool drops a SameSite kekse kept.
+        let d = field_diffs(&stored("abc", Some("Lax")), &stored("abc", None));
+        assert!(
+            d.iter().all(|d| !d.kind.flags()),
+            "an omission must not flag"
+        );
+        // The sharpest divergence: the tool stores a cookie kekse rejected.
+        let d = field_diffs(
+            &ParseOutcome::SetCookieRejected { error: "no".into() },
+            &stored("abc", None),
+        );
+        assert!(
+            d.iter()
+                .any(|d| d.kind == DiffKind::Outcome && d.kind.flags())
+        );
+        // A tool that itself rejected makes no positive claim — nothing to check.
+        assert!(
+            field_diffs(
+                &stored("abc", None),
+                &ParseOutcome::SetCookieRejected { error: "x".into() }
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn row_mismatches_flags_tools_but_never_the_subject_baseline() {
+        let col = |lang: &str, dep: &str, o: ParseOutcome| Column {
+            lang: lang.into(),
+            dep: dep.into(),
+            cells: vec![o],
+            probe_cells: Vec::new(),
+        };
+        let columns = vec![
+            col(
+                "rust",
+                "kekse (lenient)",
+                ParseOutcome::SetCookieRejected { error: "no".into() },
+            ),
+            col("browser", "chromium", stored("abc", None)),
+            // A subject column that also "stores where kekse rejects" must NOT appear.
+            col("rust", "kekse (strict)", stored("abc", None)),
+        ];
+        let m = row_mismatches(0, &columns);
+        assert!(m.contains_key("browser/chromium"), "tool should be flagged");
+        assert_eq!(m["browser/chromium"][0].kind.as_str(), "outcome");
+        assert!(
+            !m.keys().any(|k| k.contains("kekse")),
+            "no kekse subject column is ever a mismatch key: {m:?}"
+        );
+    }
 
     #[test]
     fn render_json_is_valid_and_self_describing() {
