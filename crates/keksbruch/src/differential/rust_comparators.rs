@@ -1,4 +1,4 @@
-//! The in-process Rust comparators: kekse itself (both modes), the `cookie`
+//! The in-process Rust comparators: kekse itself (all three modes), the `cookie`
 //! crate, and `biscotti`. Called directly — they are Rust — with each call
 //! wrapped in `catch_unwind` so a panic becomes a recorded finding, not a crash.
 
@@ -31,6 +31,7 @@ pub fn rust_comparators() -> Vec<Box<dyn RustComparator>> {
     vec![
         Box::new(KekseLenient),
         Box::new(KekseStrict),
+        Box::new(KekseFailHard),
         Box::new(CookieCrate),
         Box::new(CookieStore),
         Box::new(Biscotti),
@@ -40,6 +41,7 @@ pub fn rust_comparators() -> Vec<Box<dyn RustComparator>> {
 
 pub struct KekseLenient;
 pub struct KekseStrict;
+pub struct KekseFailHard;
 pub struct CookieCrate;
 pub struct CookieStore;
 pub struct Biscotti;
@@ -87,6 +89,44 @@ impl RustComparator for KekseStrict {
             },
             None => ParseOutcome::SetCookieRejected {
                 error: "None".to_string(),
+            },
+        }
+    }
+}
+
+impl RustComparator for KekseFailHard {
+    fn id(&self) -> (&'static str, &'static str) {
+        ("rust", "kekse (fail-hard)")
+    }
+    fn parse_request(&self, wire: &str) -> ParseOutcome {
+        // Opt-in fail-hard read: any refused pair rejects the whole header (the
+        // `try_jar_strict` / `Reported::is_clean` gate), where the strict *reader*
+        // would fail-soft and drop it. A clean header yields the same cookies as strict.
+        let reported = kekse::CookieJar::parse_strict_reported(wire);
+        if reported.is_clean() {
+            ParseOutcome::Cookies {
+                cookies: kekse::parse_pairs_strict(wire)
+                    .map(|(n, v)| CookieView::new(n, v))
+                    .collect(),
+            }
+        } else {
+            ParseOutcome::Rejected {
+                error: format!("{} refused pair(s)", reported.issues.len()),
+            }
+        }
+    }
+    fn parse_response(&self, wire: &str) -> ParseOutcome {
+        // Stricter than strict: a fatal issue *or* any reported (dropped) attribute
+        // rejects the cookie, rather than keeping it and dropping the bad piece.
+        match kekse::SetCookie::try_parse_strict(wire) {
+            Ok(reported) if reported.is_clean() => ParseOutcome::SetCookie {
+                set_cookie: kekse_view(&reported.value),
+            },
+            Ok(reported) => ParseOutcome::SetCookieRejected {
+                error: format!("{} issue(s)", reported.issues.len()),
+            },
+            Err(e) => ParseOutcome::SetCookieRejected {
+                error: e.to_string(),
             },
         }
     }
