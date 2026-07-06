@@ -56,14 +56,16 @@ const DOWNLOADS_HTML: &str = "<p class=\"downloads\">Download the same matrix: \
 /// first column stick so a tool/test stays identifiable across ~60 columns. The
 /// dense table rules are scoped under `.matrix-scroll` so the class-less legend table
 /// (converted from the template's Markdown pipe table) keeps a plain, readable grid.
-const CSS: &str = r#":root{--fg:#1f2933;--muted:#9aa5b1;--line:#e1e6eb;--head:#1f2933;--head-fg:#f5f7fa;--rowhead:#f4f6f9;--ref:#eaf1f8;--diverge:#fff3bf;--accent:#1565c0}
+/// Every colour is a CSS variable, so a `prefers-color-scheme: dark` block reskins the
+/// whole report to the system theme without duplicating a single rule body.
+const CSS: &str = r#":root{color-scheme:light dark;--fg:#1f2933;--fg-soft:#3e4c59;--bg:#fff;--muted:#9aa5b1;--line:#e1e6eb;--head:#1f2933;--head-fg:#f5f7fa;--rowhead:#f4f6f9;--ref:#eaf1f8;--diverge:#fff3bf;--accent:#1565c0;--danger:#c92a2a;--tt-bg:#1f2933;--tt-fg:#f5f7fa;--tt-line:#3e4c59}
 *{box-sizing:border-box}
-body{margin:0;padding:0 0 4rem;font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--fg);background:#fff}
+body{margin:0;padding:0 0 4rem;font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--fg);background:var(--bg)}
 h1,h2,h3,p,ul{padding-left:1.5rem;padding-right:1.5rem}
 h1{margin:1.6rem 0 .3rem;font-size:1.55rem}
 h2{margin:2.2rem 0 .6rem;font-size:1.2rem}
 h3{margin:1.6rem 0 .4rem;font-size:1.05rem}
-p{margin:.55rem 0;color:#3e4c59}
+p{margin:.55rem 0;color:var(--fg-soft)}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.85em}
 table:not(.matrix-scroll table){margin:.6rem 1.5rem 1.2rem;border-collapse:collapse;font-size:13px}
@@ -77,13 +79,14 @@ table:not(.matrix-scroll table) td:last-child{white-space:normal}
 .matrix-scroll thead th:first-child{z-index:3}
 .matrix-scroll tr.ref td,.matrix-scroll tr.ref th:first-child{background:var(--ref)}
 .matrix-scroll td.diverge{background:var(--diverge);font-weight:700}
-.matrix-scroll td.reject{color:#c92a2a}
+.matrix-scroll td.reject{color:var(--danger)}
 .matrix-scroll td.muted{color:var(--muted)}
-.matrix-scroll td.crash{color:#c92a2a;font-weight:700;text-decoration:underline}
+.matrix-scroll td.crash{color:var(--danger);font-weight:700;text-decoration:underline}
 .tt-btn{cursor:pointer}
-.tt [role=tooltip]{position:fixed;left:50%;bottom:1rem;transform:translateX(-50%);z-index:10;max-width:min(92vw,64rem);visibility:hidden;opacity:0;transition:visibility 0s .35s,opacity .12s .35s;background:#1f2933;color:#f5f7fa;border:1px solid #3e4c59;border-radius:.4rem;box-shadow:0 .4rem 1.4rem rgba(0,0,0,.35);padding:.5rem .7rem}
-.tt [role=tooltip] pre{margin:0;max-height:60vh;overflow:auto;white-space:pre;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45;color:#f5f7fa}
-.tt-btn:hover ~ [role=tooltip],.tt-btn:focus ~ [role=tooltip],.tt [role=tooltip]:hover,.tt [role=tooltip]:focus-within{visibility:visible;opacity:1;transition-delay:0s}"#;
+.tt [role=tooltip]{position:fixed;left:50%;bottom:1rem;transform:translateX(-50%);z-index:10;max-width:min(92vw,64rem);visibility:hidden;opacity:0;transition:visibility 0s .35s,opacity .12s .35s;background:var(--tt-bg);color:var(--tt-fg);border:1px solid var(--tt-line);border-radius:.4rem;box-shadow:0 .4rem 1.4rem rgba(0,0,0,.35);padding:.5rem .7rem}
+.tt [role=tooltip] pre{margin:0;max-height:60vh;overflow:auto;white-space:pre;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45;color:var(--tt-fg)}
+.tt-btn:hover ~ [role=tooltip],.tt-btn:focus ~ [role=tooltip],.tt [role=tooltip]:hover,.tt [role=tooltip]:focus-within{visibility:visible;opacity:1;transition-delay:0s}
+@media (prefers-color-scheme:dark){:root{--fg:#e6e8eb;--fg-soft:#b8c1cc;--bg:#14181c;--muted:#7a8592;--line:#2b333b;--head:#2a323a;--rowhead:#1c2126;--ref:#1b2632;--diverge:#463c17;--accent:#5aa3f0;--danger:#ff6b6b;--tt-bg:#262d34;--tt-line:#454f5b}}"#;
 
 /// One matrix column: a parser, with one [`ParseOutcome`] per scenario (aligned
 /// to the scenario order) and one per jar probe (aligned to the probe order).
@@ -2006,5 +2009,24 @@ mod tests {
             html.contains(&"a".repeat(1024)),
             "the payload tooltip must keep the full wire"
         );
+    }
+
+    #[test]
+    fn render_html_carries_a_dark_theme_that_follows_the_system() {
+        let scenarios = scenarios();
+        let probes = jar_probes();
+        let columns = crate::differential::in_process_columns(&scenarios, &probes);
+        let html = render_html(&scenarios, &probes, &columns, &["Rust: test".to_string()]);
+        // Opt into both schemes, then reskin through a prefers-color-scheme block that
+        // only overrides the CSS variables — no rule body is duplicated.
+        assert!(
+            html.contains("color-scheme:light dark"),
+            "no color-scheme opt-in"
+        );
+        assert!(
+            html.contains("@media (prefers-color-scheme:dark)"),
+            "no dark-mode media query"
+        );
+        assert!(html.contains("--bg:#14181c"), "no dark palette override");
     }
 }
