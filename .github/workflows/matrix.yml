@@ -104,6 +104,7 @@ jobs:
           echo "DOTNET_IMAGE=mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION:-8.0}" >> "$GITHUB_ENV"
           echo "BUILDPACK_DEPS_IMAGE=buildpack-deps:${BUILDPACK_DEPS_VERSION:-trixie}" >> "$GITHUB_ENV"
           echo "CLIENTS_IMAGE=keksbruch-clients:local" >> "$GITHUB_ENV"
+          echo "BROWSERS_IMAGE=keksbruch-browsers:local" >> "$GITHUB_ENV"
 
       # Every sidecar runs containerized: the harness shells out to `docker run
       # --network=none` against these images (Docker is preinstalled on ubuntu-latest),
@@ -141,6 +142,26 @@ jobs:
               && apt-get install -y --no-install-recommends curl wget python3 ca-certificates \
               && rm -rf /var/lib/apt/lists/*
           DOCKERFILE
+
+      # The browser sidecar's image bakes three pinned engines (Chromium via
+      # Chrome for Testing, Firefox from Mozilla's release archive, Edge from
+      # Microsoft's apt pool) plus their WebDrivers — see its Dockerfile for the
+      # pins. Its layers change only when an ARG bumps, so buildx's GitHub
+      # Actions cache backend makes rebuilds cheap: a push to main writes the
+      # cache (mode=max), while pull requests only read it (a PR's cache scope
+      # can read the default branch's cache but never write it). `load:` puts
+      # the result in the local docker engine, where the harness `docker run`s
+      # it with --network=none like every other sidecar.
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the browser image (buildx, gha cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: crates/keksbruch/fixtures/browsers
+          tags: keksbruch-browsers:local
+          load: true
+          cache-from: type=gha,scope=browsers
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,scope=browsers,mode=max' || '' }}
 
       # ── Prepare each sidecar's dependencies with network ON, baked into the
       # bind-mounted fixtures (or the image), so the harness can then run every sidecar
@@ -201,6 +222,7 @@ jobs:
           run "$DOTNET_IMAGE" dotnet "$fix/dotnet/publish/parse_cookies.dll" --selfcheck
           run "$BUILDPACK_DEPS_IMAGE" sh "$fix/parse_cookies_c.sh" --selfcheck
           run "$CLIENTS_IMAGE" python3 "$fix/parse_setcookie_clients.py" --selfcheck
+          run "$BROWSERS_IMAGE" python3 "$fix/parse_setcookie_browsers.py" --selfcheck
 
       # The matrix test is #[ignore]d, so --ignored runs exactly it. The harness runs
       # each sidecar in its image with `--network=none`; a sidecar whose offline setup is
