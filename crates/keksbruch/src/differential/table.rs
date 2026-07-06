@@ -13,7 +13,7 @@
 
 use maud::{Markup, PreEscaped, html};
 
-use super::matrix::{code, esc, escape_controls, md_inline};
+use super::matrix::{abbreviate_runs, code, esc, escape_controls, md_inline};
 
 /// The visual kind of a data cell — the divergence/rejection/etc. signal. Drives the
 /// Markdown **bold** mark and the HTML CSS class (the old `cell_class` outputs).
@@ -154,7 +154,7 @@ fn header_md(ch: &CellText) -> String {
 fn cell_md(cell: &Cell) -> String {
     match &cell.text {
         CellText::Code(s) => {
-            let span = code(&esc(s));
+            let span = code(&esc(&abbreviate_runs(s)));
             if cell.kind == CellKind::Diverge {
                 format!("**{span}**")
             } else {
@@ -214,21 +214,24 @@ fn cell_html(cell: &Cell) -> Markup {
         // glyph itself is focusable (pointer cursor) and `aria-describedby` points at
         // a `role="tooltip"` panel holding the `<pre>` — a CSS-only reveal (see the
         // stylesheet). Without detail it is a plain code cell, as before.
-        CellText::Code(s) => match &cell.detail {
-            None => html! {
-                td class=[cell.kind.class()] { code { (escape_controls(s)) } }
-            },
-            Some(d) => html! {
-                td class=[cell.kind.class()] {
-                    span class="tt" {
-                        span class="tt-btn" tabindex="0" aria-describedby=(d.id) {
-                            code { (escape_controls(s)) }
+        CellText::Code(s) => {
+            let shown = escape_controls(&abbreviate_runs(s));
+            match &cell.detail {
+                None => html! {
+                    td class=[cell.kind.class()] { code { (shown) } }
+                },
+                Some(d) => html! {
+                    td class=[cell.kind.class()] {
+                        span class="tt" {
+                            span class="tt-btn" tabindex="0" aria-describedby=(d.id) {
+                                code { (shown) }
+                            }
+                            span role="tooltip" id=(d.id) { pre { (d.body) } }
                         }
-                        span role="tooltip" id=(d.id) { pre { (d.body) } }
                     }
-                }
-            },
-        },
+                },
+            }
+        }
         CellText::Inline(s) => html! {
             td { (PreEscaped(md_inline(s))) }
         },
@@ -314,5 +317,18 @@ mod tests {
         .into_string();
         assert!(!html.contains("role=\"tooltip\""), "{html}");
         assert!(!html.contains("aria-describedby"), "{html}");
+    }
+
+    #[test]
+    fn html_code_cell_abbreviates_a_long_identical_run() {
+        // The `path-overlong` answer: a 1024-character run collapses so the cell
+        // cannot stretch the row, while the surrounding text is preserved.
+        let answer = format!("SID=abc ;Path=/{}", "a".repeat(1024));
+        let html = to_html(&one_cell_table(Cell::code(answer, CellKind::Plain))).into_string();
+        assert!(html.contains("Path=/aaa...aaa"), "{html}");
+        assert!(
+            !html.contains(&"a".repeat(10)),
+            "the long run must not survive the render: {html}"
+        );
     }
 }

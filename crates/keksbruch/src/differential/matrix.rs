@@ -247,6 +247,38 @@ pub(super) fn escape_controls(s: &str) -> String {
     out
 }
 
+/// Collapse any run of **more than nine** identical characters to `ccc...ccc` —
+/// three of the character, an ellipsis, three of the character — so a scale value
+/// (the 1025-byte `path-overlong` Path, say) reads as a compact cell instead of
+/// stretching the whole row across the table. Display-only: applied by the table
+/// renderers in [`table`](super::table), so the JSON `results`, the CSV export, and
+/// the payload tooltip keep the value in full.
+pub(super) fn abbreviate_runs(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        let mut run = 1;
+        while chars.peek() == Some(&c) {
+            chars.next();
+            run += 1;
+        }
+        if run > 9 {
+            for _ in 0..3 {
+                out.push(c);
+            }
+            out.push_str("...");
+            for _ in 0..3 {
+                out.push(c);
+            }
+        } else {
+            for _ in 0..run {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
 /// Escape a cell for a markdown table: control bytes plus the `|` column
 /// delimiter. (The CSV path uses [`escape_controls`] and lets the `csv` writer
 /// handle quoting.)
@@ -1705,6 +1737,28 @@ mod tests {
     }
 
     #[test]
+    fn abbreviate_runs_collapses_only_runs_over_nine() {
+        // Nine identical characters is the ceiling — left intact.
+        assert_eq!(abbreviate_runs(&"a".repeat(9)), "aaaaaaaaa");
+        // Ten or more collapse to three-ellipsis-three, whatever the length.
+        assert_eq!(abbreviate_runs(&"a".repeat(10)), "aaa...aaa");
+        assert_eq!(abbreviate_runs(&"a".repeat(1024)), "aaa...aaa");
+        // Only the run collapses; the surrounding cell text is untouched (the
+        // motivating `path-overlong` answer).
+        assert_eq!(
+            abbreviate_runs(&format!("SID=abc ;Path=/{}", "a".repeat(1024))),
+            "SID=abc ;Path=/aaa...aaa"
+        );
+        // Adjacent distinct runs each collapse on their own character.
+        assert_eq!(
+            abbreviate_runs(&format!("{}{}", "x".repeat(12), "y".repeat(12))),
+            "xxx...xxxyyy...yyy"
+        );
+        // A cell with no long run is returned verbatim.
+        assert_eq!(abbreviate_runs("SID=abc ;Path=/b"), "SID=abc ;Path=/b");
+    }
+
+    #[test]
     fn resolve_jar_path_recognizes_a_columns_substituted_default() {
         // Browser default-path `/r` for an engaged-but-unusable Path → the marker; for a
         // wire with no Path token → silent (a plain no-Path cookie).
@@ -1929,6 +1983,28 @@ mod tests {
         assert!(
             probe_entry["results"]["rust/rfc_6265 (reference)"]["outcome"].is_string(),
             "{probe_entry}"
+        );
+    }
+
+    #[test]
+    fn render_html_abbreviates_the_overlong_path_answer_but_keeps_the_full_wire() {
+        let scenarios = scenarios();
+        let probes = jar_probes();
+        let columns = crate::differential::in_process_columns(&scenarios, &probes);
+        let versions = vec!["Rust: test".to_string()];
+        let html = render_html(&scenarios, &probes, &columns, &versions);
+
+        // kekse keeps the 1025-byte `path-overlong` Path verbatim; its answer cell now
+        // collapses the run instead of stretching the whole row.
+        assert!(
+            html.contains("Path=/aaa...aaa"),
+            "answer was not abbreviated"
+        );
+        // Display-only: the full wire still rides in the payload's `title` tooltip, so
+        // nothing is lost — only the on-screen cell is shortened.
+        assert!(
+            html.contains(&"a".repeat(1024)),
+            "the payload tooltip must keep the full wire"
         );
     }
 }
