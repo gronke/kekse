@@ -24,6 +24,20 @@ expiry, so both report null — cells stay deterministic). `jar` navigates to
 `origin_url`, then to `request_url`, and answers with the `Cookie` header the
 server actually received (∅ = nothing attached). `request` is n/a — browsers
 emit Cookie headers, they never parse them. Protocol: ./PROTOCOL.md.
+
+Attribute reporting is wire-token-gated: the jar can only hand back effective
+state (a defaulted path, an enforced SameSite), so a field is reported only
+when the wire engaged that attribute. An unlabeled cookie therefore shows no
+SameSite even though the engine enforces one, while a degenerate engaged value
+(`SameSite=`, `Path=relative`) deliberately reveals the engine's fallback —
+`Path=/r` in a cell means the request's default-path (the harness's reserved
+`/r` prefix) replaced an unusable Path attribute.
+
+Two path-scoping consequences of the W3C cookie commands (they only see the
+current document's cookies): the stored-cookie readback and the post-record
+cleanup both visit every engaged absolute Path in addition to the page that
+set the cookie — otherwise a `Path=/b` cookie reads back as a phantom
+rejection, and a jar probe's path-scoped cookie leaks into later records.
 """
 import sys
 import os
@@ -427,12 +441,41 @@ def split_url(url):
     return scheme, host.lower(), (slash + path) if slash else "/"
 
 
+def attribute_tokens(wire):
+    # The engaged-attribute names: everything after the first `;` (the
+    # cookie-pair itself is not an attribute), split and trimmed like §5.2.
+    names = set()
+    for segment in wire.split(b";")[1:]:
+        name = segment.partition(b"=")[0].strip(b" \t")
+        names.add(name.decode("latin-1").lower())
+    return names
+
+
+def engaged_paths(wire):
+    # Every distinct engaged `Path` value that is absolute and clean ASCII —
+    # the candidate cookie-paths a stored cookie may be scoped to (engines may
+    # honor the first or the last duplicate, so keep them all). Values with
+    # controls/spaces/non-ASCII are left out: engines default those to the
+    # request's default-path, which the setting page already covers.
+    paths = []
+    for segment in wire.split(b";")[1:]:
+        name, _, value = segment.partition(b"=")
+        if name.strip(b" \t").decode("latin-1").lower() != "path":
+            continue
+        value = value.strip(b" \t")
+        if value.startswith(b"/") and all(0x21 <= b <= 0x7E for b in value):
+            decoded = value.decode("ascii")
+            if decoded not in paths:
+                paths.append(decoded)
+    return paths
+
+
 def await_hit(state, what):
     if not state["event"].wait(8):
         raise WdError("server never saw the %s request" % what)
 
 
-def set_cookie_view(cookies):
+def set_cookie_view(cookies, engaged):
     if not cookies:
         return None
     # A single Set-Cookie stores at most one cookie in practice; if an engine
@@ -445,10 +488,14 @@ def set_cookie_view(cookies):
         "value": c.get("value", ""),
         "http_only": bool(c.get("httpOnly")),
         "secure": bool(c.get("secure")),
-        # Only Strict/Lax/None are attribute-shaped; an engine-specific
-        # "unspecified" marker (or an absent field) reports null.
-        "same_site": same_site if same_site in ("Strict", "Lax", "None") else None,
-        "path": c.get("path") or None,
+        # Wire-token-gated (module docstring): the jar holds the ENFORCED
+        # SameSite and the EFFECTIVE path, so both report null unless the wire
+        # engaged the attribute — an engaged one shows the engine's reading,
+        # defaults included. Only Strict/Lax/None are attribute-shaped.
+        "same_site": same_site
+        if "samesite" in engaged and same_site in ("Strict", "Lax", "None")
+        else None,
+        "path": (c.get("path") or None) if "path" in engaged else None,
         # The leading-dot convention marks a Domain cookie, exactly like the
         # Netscape-jar mapping in the curl/wget sidecar; host-only → null.
         "domain": domain if domain.startswith(".") else None,
@@ -459,6 +506,7 @@ def set_cookie_view(cookies):
 
 
 def response_record(engine, wire):
+    engaged = attribute_tokens(wire)
     path = "/r/%d" % next(COUNTER)
     state = arm("setcookie", WIRE_HOST, path, wire)
     nav_err = None
@@ -470,19 +518,28 @@ def response_record(engine, wire):
         # block) — the navigation error IS the transfer-view finding.
         nav_err = str(e)
     disarm()
-    try:
-        stored = engine.cookies()
-    except WdError:
-        if nav_err is None:
-            raise
-        stored = []  # no document to read from after a refused response
-    view = set_cookie_view(stored)
-    try:
-        # The W3C delete is scoped to the current document; we are still on the
-        # origin, which sees everything a response row can store.
-        engine.delete_cookies()
-    except WdError:
-        engine.taint = True  # relaunch: never leak state into the next record
+    # Readback + cleanup, page by page: the W3C cookie commands see only the
+    # current document's cookies, so a cookie the engine scoped to an engaged
+    # absolute Path is invisible on the setting page — visit each candidate
+    # path too (disarmed → the inert page on the same host), reading and
+    # deleting as we go.
+    pages = [None] + (engaged_paths(wire) if nav_err is None else [])
+    stored, seen = [], set()
+    for page in pages:
+        try:
+            if page is not None:
+                engine.navigate("https://%s%s" % (WIRE_HOST, page))
+            for c in engine.cookies():
+                key = (c.get("name"), c.get("domain"), c.get("path"))
+                if key not in seen:
+                    seen.add(key)
+                    stored.append(c)
+            engine.delete_cookies()
+        except WdError:
+            if nav_err is None and page is None:
+                raise  # readback on the setting page must work — engine fault
+            engine.taint = True  # never leak state into the next record
+    view = set_cookie_view(stored, engaged)
     if view is None:
         return {"outcome": "SetCookieRejected", "error": nav_err or "no cookie accepted"}
     return {"outcome": "SetCookie", "set_cookie": view}
@@ -516,15 +573,21 @@ def jar_record(engine, wire, origin_url, request_url):
     attached = cookie_pairs(state["cookie"]) if state["cookie"] is not None else []
     # Cleanup: the W3C delete is scoped to the current document — for EVERY
     # driver here (chromedriver 149 included, observed; the "deletes all
-    # domains" folklore does not hold). Everything a probe can store is visible
-    # from the origin document (host-only on its host, a Domain cookie on a
-    # parent), so navigate back (disarmed → the inert page on the right host)
-    # and delete there.
-    try:
-        engine.navigate(origin_url)
-        engine.delete_cookies()
-    except WdError:
-        engine.taint = True
+    # domains" folklore does not hold), and scoped by PATH as well as host.
+    # Everything a probe can store is visible from the origin document
+    # (host-only on its host, a Domain cookie on a parent) EXCEPT a cookie the
+    # engine scoped to an engaged absolute Path — visit each candidate path on
+    # the origin host too, deleting as we go (disarmed → the inert page).
+    scheme, origin_host, _ = split_url(origin_url)
+    cleanup = [origin_url] + [
+        "%s://%s%s" % (scheme, origin_host, p) for p in engaged_paths(wire)
+    ]
+    for url in cleanup:
+        try:
+            engine.navigate(url)
+            engine.delete_cookies()
+        except WdError:
+            engine.taint = True
     return {"outcome": "Cookies", "cookies": attached}
 
 
