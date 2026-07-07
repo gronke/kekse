@@ -30,6 +30,8 @@
 //! assert!(parse_imf_fixdate("Sun, 06 Nov 1994 08:49:37 GMT").is_some());
 //! ```
 
+use std::{fmt, io};
+
 use time::format_description::BorrowedFormatItem;
 use time::macros::format_description;
 use time::parsing::Parsed;
@@ -300,6 +302,8 @@ pub fn format_http_date(when: OffsetDateTime, format: HttpDateFormat) -> String 
 
 /// Render `when` (converted to UTC) as the canonical RFC 7231 IMF-fixdate — the form senders should emit.
 ///
+/// The `String`-allocating form of [`ImfFixdate`]; both render the same bytes.
+///
 /// ```
 /// use rfc_6265::date::{format_imf_fixdate, parse_imf_fixdate};
 /// let when = parse_imf_fixdate("Sun, 06 Nov 1994 08:49:37 GMT").unwrap();
@@ -307,7 +311,41 @@ pub fn format_http_date(when: OffsetDateTime, format: HttpDateFormat) -> String 
 /// ```
 #[must_use]
 pub fn format_imf_fixdate(when: OffsetDateTime) -> String {
-    format_http_date(when, HttpDateFormat::ImfFixdate)
+    ImfFixdate(when).to_string()
+}
+
+/// The canonical RFC 7231 IMF-fixdate rendering of an instant, as a lazy
+/// [`Display`](fmt::Display) — the same bytes [`format_imf_fixdate`] returns,
+/// without the intermediate `String`, for writing straight into an existing
+/// buffer (a `Set-Cookie` serializer's `Expires=`, a preallocated header).
+///
+/// ```
+/// use rfc_6265::date::{ImfFixdate, parse_imf_fixdate};
+/// let when = parse_imf_fixdate("Sun, 06 Nov 1994 08:49:37 GMT").unwrap();
+/// assert_eq!(
+///     format!("Expires={}", ImfFixdate(when)),
+///     "Expires=Sun, 06 Nov 1994 08:49:37 GMT"
+/// );
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImfFixdate(pub OffsetDateTime);
+
+impl fmt::Display for ImfFixdate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // An IMF-fixdate is 29 bytes for four-digit years, and every year `time`
+        // can represent fits 32. `format_into` wants `io::Write`, so render into
+        // a stack buffer and hand the bytes on as the ASCII they are; each `Err`
+        // arm is unreachable but keeps the no-panic promise without `unsafe`.
+        let mut buf = [0u8; 32];
+        let mut cursor = io::Cursor::new(&mut buf[..]);
+        self.0
+            .to_offset(UtcOffset::UTC)
+            .format_into(&mut cursor, IMF_FIXDATE)
+            .map_err(|_| fmt::Error)?;
+        let written = cursor.position() as usize;
+        let rendered = std::str::from_utf8(&buf[..written]).map_err(|_| fmt::Error)?;
+        f.write_str(rendered)
+    }
 }
 
 #[cfg(test)]
@@ -481,6 +519,40 @@ mod tests {
         assert_eq!(
             format_http_date(WHEN, HttpDateFormat::Asctime),
             "Sun Nov  6 08:49:37 1994"
+        );
+    }
+
+    #[test]
+    fn imf_fixdate_display_matches_the_independent_formatter() {
+        // The adapter renders through `format_into`; `format_http_date` renders
+        // through `format`. Pinning them equal guards the two paths against
+        // drift — across the RFC floor, the far future, a zone conversion,
+        // every weekday, and every month.
+        let mut corpus = vec![
+            WHEN,
+            datetime!(1601-01-01 00:00:00 UTC),
+            datetime!(9999-12-31 23:59:59 UTC),
+            datetime!(1994-11-06 10:49:37 +2),
+        ];
+        corpus.extend((0..7).map(|days| WHEN + time::Duration::days(days)));
+        corpus.extend((1..=12).map(|month| {
+            Date::from_calendar_date(2021, Month::try_from(month).unwrap(), 15)
+                .unwrap()
+                .with_hms(12, 30, 45)
+                .unwrap()
+                .assume_utc()
+        }));
+        for when in corpus {
+            assert_eq!(
+                ImfFixdate(when).to_string(),
+                format_http_date(when, HttpDateFormat::ImfFixdate),
+                "{when}"
+            );
+        }
+        // The adapter embeds without an intermediate String.
+        assert_eq!(
+            format!("Expires={}", ImfFixdate(WHEN)),
+            "Expires=Sun, 06 Nov 1994 08:49:37 GMT"
         );
     }
 
