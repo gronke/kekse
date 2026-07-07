@@ -106,6 +106,95 @@ fn assert_issue_display_safe(rendered: &str, wire: &[u8]) {
     );
 }
 
+/// Conservation: every `;`-segment that is not structural noise (empty or
+/// SP/HTAB-only) yields exactly one stream item — an `Ok` pair or an issue —
+/// in either grading. Nothing on the wire can vanish unwitnessed; this is the
+/// law that makes a silently swallowed pair impossible.
+pub fn assert_pair_conservation(wire: &str) {
+    assert_pair_conservation_bytes(wire.as_bytes());
+}
+
+/// [`assert_pair_conservation`] over raw wire bytes.
+pub fn assert_pair_conservation_bytes(wire: &[u8]) {
+    let segments = wire
+        .split(|&b| b == b';')
+        .filter(|segment| !segment.iter().all(|&b| b == b' ' || b == b'\t'))
+        .count();
+    for strict in [false, true] {
+        let items = if strict {
+            parse_pairs_bytes_strict(wire).count()
+        } else {
+            parse_pairs_bytes(wire).count()
+        };
+        assert_eq!(
+            items, segments,
+            "{segments} non-noise segments but {items} stream items \
+             (strict={strict}) for {wire:?}"
+        );
+    }
+}
+
+/// Every recovered response deviation is witnessed, in either grading. For a
+/// salvaged `Set-Cookie`:
+///
+/// - An attribute segment that did not land in the parsed attribute set is
+///   covered by an issue — `segments − set_attributes ≤ issues` — so a
+///   dropped `Max-Age=banana` or an ignored `Partitioned` can never vanish
+///   without a trace.
+/// - The salvage is a fixpoint: re-rendering it and re-parsing under the same
+///   grading yields the same cookie with a clean report — whatever the parse
+///   changed is visible in the salvage, never smuggled.
+pub fn assert_response_divergence_witnessed(wire: &str) {
+    for strict in [false, true] {
+        let parsed = if strict {
+            SetCookie::parse_strict(wire)
+        } else {
+            SetCookie::parse(wire)
+        };
+        let Ok(reported) = parsed else {
+            continue; // fatal: nothing was salvaged, nothing can be silent
+        };
+        let attribute_segments = wire
+            .split(';')
+            .skip(1)
+            .filter(|segment| !segment.bytes().all(|b| b == b' ' || b == b'\t'))
+            .count();
+        let a = reported.value.attributes();
+        let set_attributes = usize::from(a.http_only)
+            + usize::from(a.secure)
+            + usize::from(a.same_site.is_some())
+            + usize::from(a.path.is_some())
+            + usize::from(a.domain.is_some())
+            + usize::from(a.max_age.is_some())
+            + usize::from(a.expires.is_some());
+        assert!(
+            attribute_segments.saturating_sub(set_attributes) <= reported.issues.len(),
+            "unwitnessed drop (strict={strict}) for {wire:?}: {attribute_segments} attribute \
+             segments, {set_attributes} set, {} issue(s)",
+            reported.issues.len()
+        );
+        let rendered = reported.value.to_set_cookie();
+        let again = if strict {
+            SetCookie::parse_strict(&rendered)
+        } else {
+            SetCookie::parse(&rendered)
+        }
+        .unwrap_or_else(|fatal| {
+            panic!("salvage of {wire:?} re-renders unparseable ({fatal}): {rendered:?}")
+        });
+        assert!(
+            again.is_clean(),
+            "salvage of {wire:?} is not a fixpoint (strict={strict}): {rendered:?} \
+             re-parses with {:?}",
+            again.issues
+        );
+        assert_eq!(
+            again.value, reported.value,
+            "salvage of {wire:?} drifts through a render round-trip (strict={strict})"
+        );
+    }
+}
+
 /// The issue channel is graded consistently across the request readers.
 /// Three prongs:
 ///
