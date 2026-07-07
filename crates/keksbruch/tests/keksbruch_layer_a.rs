@@ -14,10 +14,12 @@ use kekse::{SetCookie, is_cookie_name, parse_pairs, parse_pairs_strict};
 fn pairs(wire: &str, strict: bool) -> Vec<(String, String)> {
     if strict {
         parse_pairs_strict(wire)
+            .filter_map(Result::ok)
             .map(|(n, v)| (n.to_string(), v.into_owned()))
             .collect()
     } else {
         parse_pairs(wire)
+            .filter_map(Result::ok)
             .map(|(n, v)| (n.to_string(), v.into_owned()))
             .collect()
     }
@@ -113,8 +115,16 @@ fn each_scenario_matches_its_pinned_expectation() {
                 assert_eq!(pairs(&wire, true), owned(strict), "{id} strict");
             }
             Expect::BothPairsCount(k) => {
-                assert_eq!(parse_pairs(&wire).count(), *k, "{id} lenient count");
-                assert_eq!(parse_pairs_strict(&wire).count(), *k, "{id} strict count");
+                assert_eq!(
+                    parse_pairs(&wire).filter_map(Result::ok).count(),
+                    *k,
+                    "{id} lenient count"
+                );
+                assert_eq!(
+                    parse_pairs_strict(&wire).filter_map(Result::ok).count(),
+                    *k,
+                    "{id} strict count"
+                );
             }
             Expect::ResponseStrictRejectsLenientKeeps { value } => {
                 assert!(

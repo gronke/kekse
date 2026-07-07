@@ -8,7 +8,7 @@ fn main() {
     // A header carrying a stale empty `SID=` before the real one, plus a
     // duplicate `theme`. The wire allows duplicates, so the jar keeps them in
     // order rather than collapsing them.
-    let jar = CookieJar::parse_strict("SID=; SID=deadbeef; theme=dark; theme=light");
+    let jar = CookieJar::parse_strict("SID=; SID=deadbeef; theme=dark; theme=light").into_value();
 
     println!("all pairs, in wire order:");
     for c in jar.iter() {
@@ -31,7 +31,7 @@ fn main() {
     );
 
     // The jar is writable, too: parse, edit, and re-render canonically.
-    let mut jar = CookieJar::parse_strict("a=1; b=2; c=3");
+    let mut jar = CookieJar::parse_strict("a=1; b=2; c=3").into_value();
     jar.remove("b"); // drop every `b`
     jar.replace(Cookie::new("c", "30")); // drop every `c`, append the new one
     jar.add(Cookie::new("d", "4")); // append (duplicates are legal)

@@ -89,16 +89,15 @@
 //! carrying a stray byte is refused individually and its well-formed neighbors
 //! survive, instead of the whole header dying at a UTF-8 boundary.
 //!
-//! Fail-soft is the default, not the ceiling: every reader has a **reporting**
-//! twin running the same pipeline, so a skip is data instead of silence. The
-//! [`try_parse_pairs`] family yields `Result` items (`.collect::<Result<Vec<_>, _>>()`
-//! is fail-hard for free), [`CookieJar::parse_reported`] and its twins return a
+//! Every reader **reports**: a skip is data instead of silence. The
+//! [`parse_pairs`] family yields `Result` items (`.collect::<Result<Vec<_>, _>>()`
+//! is fail-hard for free), [`CookieJar::parse`] and its twins return a
 //! [`Reported`] — the jar plus every refused pair as a [`PairIssue`] — and
 //! [`SetCookie::try_parse`] / [`SetCookie::try_parse_strict`] report what the
 //! attribute loop dropped as [`SetCookieIssue`]s (an ignored unknown attribute,
-//! a duplicate, a malformed known value). Strictness decides which issues are
-//! *fatal*; the report lets a caller be stricter than strict — gate on
-//! [`Reported::is_clean`] and nothing is ever dropped silently.
+//! a duplicate, a malformed known value). The severity is always the caller's
+//! choice — gate on [`Reported::is_clean`] and nothing is ever dropped
+//! silently.
 //!
 //! On the response side, [`SetCookie::parse`] reads one `Set-Cookie` header value
 //! back into a [`SetCookie`] (RFC 6265 §5.2, attributes matched
@@ -118,8 +117,9 @@
 //! yields an empty jar — and it pulls in only `axum-core`, not the whole
 //! framework. A handler that would rather refuse a mangled header than serve a
 //! partial jar opts out per read: `cookies.try_jar_strict()?` turns any
-//! malformed pair into a ready-made `400 Bad Request` (`BadCookieHeader`), and
-//! the `jar_reported()` views hand back the jar together with the issue list.
+//! malformed pair into a ready-made `400 Bad Request` (`BadCookieHeader`),
+//! while the `jar()` / `jar_strict()` views hand back the jar together with
+//! the issue list.
 //!
 //! ## Hardening (optional)
 //!
@@ -174,7 +174,6 @@ pub use cookie::Cookie;
 pub use encoding::{ValueEncoding, encode_value};
 pub use jar::{
     CookieJar, parse_pairs, parse_pairs_bytes, parse_pairs_bytes_strict, parse_pairs_strict,
-    try_parse_pairs, try_parse_pairs_bytes, try_parse_pairs_bytes_strict, try_parse_pairs_strict,
 };
 pub use report::{PairIssue, Reported};
 pub use rfc_6265::grammar::{is_cookie_name, is_cookie_name_bytes, is_cookie_octet};

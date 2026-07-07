@@ -107,6 +107,7 @@ async fn read_sid(headers: HeaderMap) -> String {
         .and_then(|h| h.to_str().ok())
         .and_then(|h| {
             parse_pairs_strict(h)
+                .filter_map(Result::ok)
                 .find(|(n, v)| *n == "SID" && !v.is_empty())
                 .map(|(_, v)| v.into_owned())
         })
@@ -121,6 +122,7 @@ async fn read_pref(headers: HeaderMap) -> String {
         .and_then(|h| h.to_str().ok())
         .and_then(|h| {
             parse_pairs(h)
+                .filter_map(Result::ok)
                 .find(|(n, _)| *n == "pref")
                 .map(|(_, v)| v.into_owned())
         })
@@ -249,6 +251,7 @@ fn percent_encoded_value_round_trips_through_the_http_layer() {
         let on_wire = hv.to_str().unwrap();
         let pair = on_wire.split(';').next().unwrap();
         let got = parse_pairs_strict(pair)
+            .filter_map(Result::ok)
             .find(|(n, _)| *n == "SID")
             .map(|(_, value)| value.into_owned());
         assert_eq!(got.as_deref(), Some(v), "round-trip {v:?} via {pair:?}");

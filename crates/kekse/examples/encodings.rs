@@ -30,7 +30,10 @@ fn main() {
     let wire = Cookie::new("x", value)
         .with_encoding(ValueEncoding::Percent)
         .to_request_pair();
-    let (name, decoded) = parse_pairs(&wire).next().expect("one pair on the wire");
+    let (name, decoded) = parse_pairs(&wire)
+        .next()
+        .expect("one pair on the wire")
+        .expect("kekse's own output parses clean");
     println!("round-trip {wire:?} -> ({name:?}, {decoded:?})");
     assert_eq!(name, "x");
     assert_eq!(&*decoded, value);

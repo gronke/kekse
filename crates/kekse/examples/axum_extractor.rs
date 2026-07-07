@@ -15,6 +15,7 @@ use tower::ServiceExt; // for `oneshot`
 async fn whoami(cookies: CookieJarBuf) -> String {
     cookies
         .jar_strict()
+        .value
         .get_all("SID")
         .find(|c| !c.value().is_empty())
         .map(|c| c.value().to_owned())

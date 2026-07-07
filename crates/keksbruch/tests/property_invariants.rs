@@ -144,11 +144,13 @@ proptest! {
             .collect::<Vec<_>>()
             .join("; ");
         let lenient: Vec<(String, String)> = parse_pairs(&header)
+            .filter_map(Result::ok)
             .map(|(n, v)| (n.to_string(), v.into_owned()))
             .collect();
         prop_assert_eq!(&lenient, &pairs, "lenient round-trip via {:?} of {:?}", encoding, header);
         if encoding == ValueEncoding::Percent {
             let strict: Vec<(String, String)> = parse_pairs_strict(&header)
+                .filter_map(Result::ok)
                 .map(|(n, v)| (n.to_string(), v.into_owned()))
                 .collect();
             prop_assert_eq!(&strict, &pairs, "strict round-trip of {:?}", header);

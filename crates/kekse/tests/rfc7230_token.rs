@@ -63,11 +63,15 @@ fn controls_and_non_ascii_are_rejected() {
 
 #[test]
 fn the_parsers_enforce_the_token_grammar() {
-    // A space or non-tchar delimiter in the name drops the pair, fail-soft.
-    assert!(parse_pairs("na me=v").next().is_none());
-    assert!(parse_pairs("a@b=v").next().is_none());
-    // `a;b=v` splits on `;`: `a` has no `=` and is dropped, `b=v` survives.
-    let surviving: Vec<_> = parse_pairs("a;b=v").map(|(n, _)| n).collect();
+    // A space or non-tchar delimiter in the name refuses the pair — as a
+    // witnessed issue, never a silent drop.
+    assert!(parse_pairs("na me=v").next().unwrap().is_err());
+    assert!(parse_pairs("a@b=v").next().unwrap().is_err());
+    // `a;b=v` splits on `;`: `a` has no `=` and is refused, `b=v` survives.
+    let surviving: Vec<_> = parse_pairs("a;b=v")
+        .filter_map(Result::ok)
+        .map(|(n, _)| n)
+        .collect();
     assert_eq!(surviving, ["b"]);
     // `Set-Cookie` routes the name through the same gate.
     assert!(SetCookie::parse("na me=v").is_none());
