@@ -12,12 +12,14 @@
 //!   behaviour: every `Keksbruch` is fed through [`parse_pairs`](kekse::parse_pairs)
 //!   / [`SetCookie::parse`](kekse::SetCookie::parse) and checked against the
 //!   universal invariants (never panics, never echoes an injection byte,
-//!   strict ⊆ lenient) plus a per-scenario [`Expect`]. It is pure Rust with no
+//!   strict ⊆ lenient, every drop and mutation witnessed) plus a per-scenario
+//!   [`Expect`] with its pinned [`IssueKind`]s. It is pure Rust with no
 //!   external dependencies, so it runs in CI as a regression oracle.
-//! - **The differential matrix** (a later, opt-in layer) will feed the same
-//!   payloads to cookie parsers in other languages and tabulate where they
-//!   diverge — to see whether kekse is *standard*-compliant (matches the RFC)
-//!   and *expectation*-compliant (matches what real parsers do).
+//! - **The differential matrix** (the `differential` feature, run by the
+//!   dedicated matrix workflow, not the CI gate) feeds the same payloads to
+//!   cookie parsers across languages and tabulates where they diverge — to see
+//!   whether kekse is *standard*-compliant (matches the RFC) and
+//!   *expectation*-compliant (matches what real parsers do).
 //!
 //! ## Anatomy
 //!
@@ -47,12 +49,11 @@ pub use invariants::{
 pub use probe::{JarProbe, jar_probes};
 pub use recipe::{KeksbruchRecipe, LogicalCookie};
 pub use reference::probe_retrieval;
-pub use scenario::{Expect, Scenario, scenarios};
+pub use scenario::{Expect, IssueKind, Scenario, scenarios};
 pub use taxonomy::{Direction, Keksbruch};
 
-/// The generator over the whole corpus — every `Keksbruch` recipe Layer A and the
-/// matrix run. Today it is the [`scenarios`] recipes; it gains breadth (more
-/// bases per `Keksbruch`) when the differential matrix lands.
+/// The generator over the whole corpus — every `Keksbruch` recipe Layer A and
+/// the differential matrix run: the [`scenarios`] recipes.
 pub fn payloads() -> impl Iterator<Item = KeksbruchRecipe<'static>> {
     scenarios().into_iter().map(|scenario| scenario.recipe)
 }

@@ -6,6 +6,21 @@
 use crate::recipe::{KeksbruchRecipe, LogicalCookie};
 use crate::taxonomy::{Direction, Keksbruch};
 
+/// The kind of a witnessed `Set-Cookie` deviation a response row pins —
+/// a build-independent mirror of `kekse::SetCookieIssue` (kinds and attribute
+/// names, without the borrowed wire slices).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IssueKind {
+    /// An unrecognised attribute name was ignored.
+    Unknown,
+    /// The named attribute repeated; last-wins applied.
+    Duplicate(&'static str),
+    /// The named attribute's value did not parse and was dropped.
+    InvalidValue(&'static str),
+    /// The named presence-only flag carried a value; the value was discarded.
+    FlagWithValue(&'static str),
+}
+
 /// What kekse is expected to do with one `Keksbruch`. Coarse on purpose — it pins
 /// the *survival shape* (which pairs come out, whether a Set-Cookie is rejected),
 /// not internal bytes, so the corpus is robust to kekse's evolution.
@@ -20,15 +35,19 @@ pub enum Expect {
     },
     /// Both modes yield exactly this many pairs (for values too large to spell out).
     BothPairsCount(usize),
-    /// Response: both gradings keep a cookie with `value` and neither report
-    /// is clean — the deviation is recovered and witnessed, never silent.
-    ResponseKeptWithIssues { value: &'static str },
+    /// Response: both gradings keep a cookie with `value`, witnessing exactly
+    /// `issues` — the deviation is recovered and reported, never silent.
+    ResponseKeptWithIssues {
+        value: &'static str,
+        issues: &'static [IssueKind],
+    },
     /// Response: both gradings keep a cookie with `value` whose `Domain` is
     /// exactly `domain`, with a dirty report — pinning RFC 6265 §5.2.2: a
     /// later malformed occurrence never erases an earlier valid one.
     ResponseKeptWithIssuesDomain {
         value: &'static str,
         domain: Option<&'static str>,
+        issues: &'static [IssueKind],
     },
     /// Response: both modes parse to a cookie with this value and these known attrs.
     ResponseValue {
@@ -36,6 +55,8 @@ pub enum Expect {
         max_age: Option<u64>,
         http_only: bool,
         secure: bool,
+        /// The exact witnessed deviations, identical in both gradings.
+        issues: &'static [IssueKind],
     },
     /// Response: both modes keep a cookie with `value`; the `Expires` date parses
     /// (`expires.is_some()`) in lenient mode iff `lenient_dated` and in strict mode
@@ -80,6 +101,8 @@ pub enum Expect {
     ResponseSameSite {
         value: &'static str,
         same_site: Option<&'static str>,
+        /// The exact witnessed deviations, identical in both gradings.
+        issues: &'static [IssueKind],
     },
     /// Response: both modes reject (`None`).
     ResponseNone,
@@ -329,7 +352,10 @@ pub fn scenarios() -> Vec<Scenario> {
             Response,
             "SID",
             Keksbruch::UnknownAttribute("Priority"),
-            Expect::ResponseKeptWithIssues { value: "abc" },
+            Expect::ResponseKeptWithIssues {
+                value: "abc",
+                issues: &[IssueKind::Unknown],
+            },
         ),
         s(
             "attr-bad-maxage",
@@ -342,6 +368,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                issues: &[IssueKind::InvalidValue("Max-Age")],
             },
         ),
         s(
@@ -355,6 +382,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                issues: &[IssueKind::InvalidValue("SameSite")],
             },
         ),
         s(
@@ -368,6 +396,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: true,
+                issues: &[IssueKind::FlagWithValue("Secure")],
             },
         ),
         s(
@@ -376,7 +405,10 @@ pub fn scenarios() -> Vec<Scenario> {
             Response,
             "SID",
             Keksbruch::DuplicateAttribute("Path"),
-            Expect::ResponseKeptWithIssues { value: "abc" },
+            Expect::ResponseKeptWithIssues {
+                value: "abc",
+                issues: &[IssueKind::Duplicate("Path")],
+            },
         ),
         // ── SameSite values (Response) ──────────────────────────────────────
         // The three well-defined tokens (RFC 6265bis samesite-av), case-folding,
@@ -396,6 +428,7 @@ pub fn scenarios() -> Vec<Scenario> {
             Expect::ResponseSameSite {
                 value: "abc",
                 same_site: Some("Strict"),
+                issues: &[],
             },
         ),
         s(
@@ -407,6 +440,7 @@ pub fn scenarios() -> Vec<Scenario> {
             Expect::ResponseSameSite {
                 value: "abc",
                 same_site: Some("Lax"),
+                issues: &[],
             },
         ),
         s(
@@ -419,6 +453,7 @@ pub fn scenarios() -> Vec<Scenario> {
             Expect::ResponseSameSite {
                 value: "abc",
                 same_site: Some("None"),
+                issues: &[],
             },
         ),
         s(
@@ -430,6 +465,7 @@ pub fn scenarios() -> Vec<Scenario> {
             Expect::ResponseSameSite {
                 value: "abc",
                 same_site: Some("None"),
+                issues: &[],
             },
         ),
         s(
@@ -441,6 +477,7 @@ pub fn scenarios() -> Vec<Scenario> {
             Expect::ResponseSameSite {
                 value: "abc",
                 same_site: Some("Lax"),
+                issues: &[],
             },
         ),
         s(
@@ -453,6 +490,7 @@ pub fn scenarios() -> Vec<Scenario> {
             Expect::ResponseSameSite {
                 value: "abc",
                 same_site: None,
+                issues: &[IssueKind::InvalidValue("SameSite")],
             },
         ),
         // ── Expires dates (Response) ────────────────────────────────────────
@@ -1008,7 +1046,10 @@ pub fn scenarios() -> Vec<Scenario> {
                 first: "a.example.com",
                 second: "b.example.com",
             },
-            Expect::ResponseKeptWithIssues { value: "abc" },
+            Expect::ResponseKeptWithIssues {
+                value: "abc",
+                issues: &[IssueKind::Duplicate("Domain")],
+            },
         ),
         s(
             "domain-dup-valid-then-invalid",
@@ -1022,6 +1063,10 @@ pub fn scenarios() -> Vec<Scenario> {
             Expect::ResponseKeptWithIssuesDomain {
                 value: "abc",
                 domain: Some("valid.example.com"),
+                issues: &[
+                    IssueKind::Duplicate("Domain"),
+                    IssueKind::InvalidValue("Domain"),
+                ],
             },
         ),
         // ── path: edge-case Path values (Response) ──────────────────────────
@@ -1077,6 +1122,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                issues: &[],
             },
         ),
         // ── attribute fidelity (Response) ───────────────────────────────────
@@ -1095,6 +1141,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: Some(60),
                 http_only: true,
                 secure: true,
+                issues: &[],
             },
         ),
         s(
@@ -1122,6 +1169,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                issues: &[],
             },
         ),
         s(
@@ -1135,6 +1183,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                issues: &[],
             },
         ),
         s(
@@ -1261,11 +1310,14 @@ pub fn scenarios() -> Vec<Scenario> {
             Response,
             "SID",
             Keksbruch::NulInAttrName,
-            Expect::ResponseKeptWithIssues { value: "abc" },
+            Expect::ResponseKeptWithIssues {
+                value: "abc",
+                issues: &[IssueKind::Unknown],
+            },
         ),
         s(
             "attr-nul-value",
-            "a NUL in a Path value survives parse (raw &str); the HeaderValue gate catches it",
+            "a NUL in a Path value fails the av-octet gate: the Path is dropped and witnessed",
             Response,
             "SID",
             Keksbruch::NulInAttrValue,
@@ -1274,6 +1326,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                issues: &[IssueKind::InvalidValue("Path")],
             },
         ),
         // ── structured & injection-flavoured (rich-type probes) ─────────────
@@ -1404,6 +1457,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                issues: &[],
             },
         ),
         s(
@@ -1417,6 +1471,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                issues: &[],
             },
         ),
         s(
