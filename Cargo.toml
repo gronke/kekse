@@ -44,6 +44,11 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 # kekse's dependency-light guarantee is untouched, and the MSRV CI leg (which
 # builds only `-p kekse`) never compiles it.
 proptest = "1"
+# Dev-only, kekse: criterion micro-benchmarks for the codec hot paths
+# (crates/kekse/benches). Default features off: no plotters/rayon trees for
+# HTML charts we never render; `cargo_bench_support` wires the `cargo bench`
+# runner. Like proptest, never compiled on the MSRV leg.
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 # keksbruch differential harness (behind its `differential` feature): the
 # JSONL sidecar protocol (serde) and the cross-parser comparators. All optional
 # because the matrix is opt-in tooling — its dependency tree stays out of the

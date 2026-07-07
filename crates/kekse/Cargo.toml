@@ -61,6 +61,8 @@ tokio = { workspace = true }
 # `time` (pulled transitively via rfc_6265's `date` feature) so the integration date suite can
 # construct `OffsetDateTime`s with the `datetime!` macro.
 time.workspace = true
+# Micro-benchmarks for the codec hot paths (benches/codec.rs).
+criterion.workspace = true
 
 # The `CookieJarBuf` extractor lives behind the `axum` feature, so its example only
 # builds with that feature on (the other examples are feature-free and auto-discovered).
@@ -68,3 +70,15 @@ time.workspace = true
 [[example]]
 name = "axum_extractor"
 required-features = ["axum"]
+
+# Both benches bring their own `main` (criterion's runner, and a plain binary
+# for the allocation counts), so libtest's harness is off. Always run them by
+# name — `cargo bench -p kekse --bench codec` — so criterion's CLI flags never
+# reach a libtest harness, which would reject them.
+[[bench]]
+name = "codec"
+harness = false
+
+[[bench]]
+name = "allocs"
+harness = false
