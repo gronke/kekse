@@ -12,7 +12,7 @@ A strict, dependency-light cookie **codec** for Rust.
 - **Strongly typed.** `Cookie`, `SetCookie`, `CookieJar`, `SameSite`, and typed attributes — never stringly-typed maps.
 - **No `unsafe`.**
 - **Fail-soft by design.** Never panics on malformed input, and never echoes an injection byte. Pinned by [`keksbruch`](crates/keksbruch), the differential test harness, across its 30+ parser matrix.
-- **Skips are observable.** Nothing is dropped silently. Every reader has a reporting twin, and fail-hard is one call away.
+- **Skips are observable.** Nothing is dropped silently. Every reader returns what it refused, and fail-hard is one call away.
 - **Both directions.** Reads a `Cookie:` request header into a `CookieJar` of typed `Cookie`s, builds and parses `Set-Cookie:` responses through `SetCookie`, and converts either straight into an `http::HeaderValue`.
 - **A codec, not a store.** No persistence, eviction, domain/path send-matching, signing, or encryption — just a correct, fail-soft wire codec.
 - **Lightweight.** Just three dependencies (`percent-encoding`, `http`, `time`) and no default features.
@@ -33,10 +33,12 @@ let header = SetCookie::new("SID", "deadbeef")
     .to_set_cookie();
 assert_eq!(header, "SID=deadbeef; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age=3600");
 
-// READ — parse a `Cookie` header; take the first NON-EMPTY `SID`, so a planted
-// empty `SID=` can't shadow the real session id that follows it.
-let jar = CookieJar::parse_strict("SID=; SID=deadbeef; theme=dark");
-let sid = jar.get_all("SID").find(|c| !c.value().is_empty()).map(|c| c.value());
+// READ — parse a `Cookie` header; every refusal is returned alongside the jar.
+// Take the first NON-EMPTY `SID`, so a planted empty `SID=` can't shadow the
+// real session id that follows it.
+let strict = CookieJar::parse_strict("SID=; SID=deadbeef; theme=dark");
+assert!(strict.is_clean());
+let sid = strict.value.get_all("SID").find(|c| !c.value().is_empty()).map(|c| c.value());
 assert_eq!(sid, Some("deadbeef"));
 ```
 
@@ -55,7 +57,7 @@ More runnable programs live in [`crates/kekse/examples/`](crates/kekse/examples)
 
 [`keksbruch`](crates/keksbruch) /ˈkeːksˌbʁʊx/ ("broken biscuits") is kekse's adversarial test harness: it feeds a broad corpus of malformed and edge-case cookie wire — unbalanced quotes, spliced control bytes, truncated escapes, smuggled `;`, garbage attributes — to many parsers and measures how they cope, so kekse's behaviour on difficult input stays correct and well understood.
 
-- **Layer A** runs in CI, pinning kekse's fail-soft behaviour (never panics, never echoes an injection byte, strict ⊆ lenient) across 80+ malformed and edge-case scenarios.
+- **Layer A** runs in CI, pinning kekse's fail-soft behaviour (never panics, never echoes an injection byte, strict ⊆ lenient, every drop and mutation witnessed) across 80+ malformed and edge-case scenarios.
 - The **differential matrix** feeds the same payloads to 30+ cookie parsers across Rust, Python, Node, Go, .NET, PHP, nginx/Lua, Java, and C, tabulating where they diverge from the RFC and from real-world consensus.
 
 **[Parser-divergence Matrix](https://gronke.github.io/kekse/COOKIE_MATRIX.html)**

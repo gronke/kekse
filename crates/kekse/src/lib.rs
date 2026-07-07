@@ -69,57 +69,67 @@
 //!
 //! ## Parsing a header
 //!
-//! [`parse_pairs`] is the lenient, general reader — the inverse of every
+//! One interface, two gradings. Every reader returns what it refused alongside
+//! what it parsed, and the lenient/strict choice dials only how permissive the
+//! grading is — strict accepts a subset of what lenient accepts, never
+//! something else, and neither ever drops silently.
+//!
+//! [`parse_pairs`] is the lenient stream — the inverse of every
 //! [`ValueEncoding`] above: it strips one wrapping quote pair, accepts raw
-//! whitespace in the value, and percent-decodes. [`parse_pairs_strict`] is its
-//! security-grade sibling: it accepts *only* cookie-octets — whitespace and
-//! every other non-octet are refused — which is what a session-cookie read
-//! should use. Both are fail-soft (a malformed pair is skipped, never aborting
-//! the header, so attacker-appended junk can never evict a later valid cookie)
-//! and both refuse the injection-dangerous bytes (`;`, CR, LF, NUL, other
-//! controls, raw non-ASCII) in every mode — the lenient/strict difference is
-//! only whether raw whitespace is tolerated.
+//! whitespace in the value, and percent-decodes; every well-formed pair comes
+//! back as `Ok`, every refused pair as an `Err(`[`PairIssue`]`)` in place.
+//! [`parse_pairs_strict`] is the security grading: it accepts *only*
+//! cookie-octets — whitespace and every other non-octet are refused, and
+//! witnessed — which is what a session-cookie read should use. Both are
+//! fail-soft (a refused pair never aborts the header, so attacker-appended
+//! junk can never evict a later valid cookie) and both refuse the
+//! injection-dangerous bytes (`;`, CR, LF, NUL, other controls, raw non-ASCII)
+//! under either grading. Fail-soft is `.filter_map(Result::ok)`; fail-hard is
+//! `.collect::<Result<Vec<_>, _>>()`.
 //!
-//! Both readers also come as byte-level twins, [`parse_pairs_bytes`] /
-//! [`parse_pairs_bytes_strict`] (and [`CookieJar::parse_bytes`] /
-//! [`CookieJar::parse_bytes_strict`]), for callers holding raw header bytes: an
+//! [`CookieJar::parse`] / [`CookieJar::parse_strict`] collect the same streams
+//! into a typed jar inside a [`Reported`] — the jar plus every refused pair as
+//! a [`PairIssue`] — and the byte-level twins ([`parse_pairs_bytes`],
+//! [`CookieJar::parse_bytes`], …) serve callers holding raw header bytes: an
 //! `http` `HeaderValue` may legally carry obs-text (`>= 0x80`) that `to_str()`
-//! refuses *wholesale*. The bytes readers accept nothing extra — raw non-ASCII
-//! stays outside the grammar — but they keep fail-soft **per pair**: the pair
-//! carrying a stray byte is refused individually and its well-formed neighbors
-//! survive, instead of the whole header dying at a UTF-8 boundary.
+//! refuses *wholesale*, while the bytes readers refuse only the pair that
+//! carries it. The severity of an issue is always the caller's choice, never
+//! the parser's: gate on [`Reported::is_clean`] / [`Reported::into_result`] to
+//! fail hard, log [`Reported::issues`] to observe, or [`Reported::into_value`]
+//! to move on.
 //!
-//! Every reader **reports**: a skip is data instead of silence. The
-//! [`parse_pairs`] family yields `Result` items (`.collect::<Result<Vec<_>, _>>()`
-//! is fail-hard for free), [`CookieJar::parse`] and its twins return a
-//! [`Reported`] — the jar plus every refused pair as a [`PairIssue`] — and
-//! [`SetCookie::try_parse`] / [`SetCookie::try_parse_strict`] report what the
-//! attribute loop dropped as [`SetCookieIssue`]s (an ignored unknown attribute,
-//! a duplicate, a malformed known value). The severity is always the caller's
-//! choice — gate on [`Reported::is_clean`] and nothing is ever dropped
-//! silently.
+//! ```
+//! use kekse::CookieJar;
 //!
-//! On the response side, [`SetCookie::parse`] reads one `Set-Cookie` header value
-//! back into a [`SetCookie`] (RFC 6265 §5.2, attributes matched
-//! case-insensitively). Per §5.2 an **unrecognised attribute is ignored** and the
-//! cookie kept (so a newer attribute like `Partitioned` never costs the cookie);
-//! [`SetCookie::parse_strict`] rejects on an unknown attribute instead. `Expires`
-//! is parsed into an `OffsetDateTime` by the `rfc_6265` crate — the lenient
-//! [`parse`](SetCookie::parse) accepts the RFC 6265 §5.1.1 cookie-date, the strict
-//! [`parse_strict`](SetCookie::parse_strict) only the RFC 7231 IMF-fixdate.
+//! let strict = CookieJar::parse_strict("SID=deadbeef; theme=dark mode");
+//! assert_eq!(strict.value.get("SID").map(|c| c.value()), Some("deadbeef"));
+//! assert_eq!(strict.issues.len(), 1); // the whitespace-bearing pair, witnessed
+//! ```
+//!
+//! On the response side, [`SetCookie::parse`] reads one `Set-Cookie` header
+//! value back into a salvaged [`SetCookie`] plus its [`SetCookieIssue`]s
+//! (RFC 6265 §5.2, attributes matched case-insensitively): an unrecognised
+//! attribute is ignored and witnessed — so a newer attribute like
+//! `Partitioned` never costs the cookie, and never vanishes — a duplicate
+//! keeps last-wins, a malformed known value is dropped, each with its issue.
+//! The one fatal case, in either grading, is a header without a usable
+//! `name=value` pair. [`SetCookie::parse_strict`] narrows only the grading:
+//! `Expires` must be the RFC 7231 IMF-fixdate (lenient
+//! [`parse`](SetCookie::parse) accepts the RFC 6265 §5.1.1 cookie-date), so
+//! gating on a clean strict parse is the tripwire for cookies you minted
+//! yourself.
 //!
 //! ## An axum extractor (optional)
 //!
-//! With the `axum` feature, `CookieJarBuf` is a `FromRequestParts` extractor: it
-//! owns the request `Cookie:` header and lends a borrowed [`CookieJar`] through
-//! its `jar()` (lenient) / `jar_strict()` (strict) views, so the *handler* picks
-//! the read mode. Extraction is infallible — a missing or malformed header just
-//! yields an empty jar — and it pulls in only `axum-core`, not the whole
-//! framework. A handler that would rather refuse a mangled header than serve a
-//! partial jar opts out per read: `cookies.try_jar_strict()?` turns any
-//! malformed pair into a ready-made `400 Bad Request` (`BadCookieHeader`),
-//! while the `jar()` / `jar_strict()` views hand back the jar together with
-//! the issue list.
+//! With the `axum` feature, `CookieJarBuf` is a `FromRequestParts` extractor:
+//! it owns the request `Cookie:` header and lends the borrowed, reported
+//! [`CookieJar`] view through `jar()` (lenient) / `jar_strict()` (strict), so
+//! the *handler* picks the grading and holds the issue list. Extraction is
+//! infallible — a missing or malformed header just yields an empty jar — and
+//! it pulls in only `axum-core`, not the whole framework. A handler that would
+//! rather refuse a mangled header than serve a partial jar opts out per read:
+//! `cookies.try_jar_strict()?` turns any refused pair into a ready-made
+//! `400 Bad Request` (`BadCookieHeader`).
 //!
 //! ## Hardening (optional)
 //!
@@ -130,8 +140,9 @@
 //! instead of stored as dead weight. On top of that, `psl` refuses a public-suffix value (`com`,
 //! `co.uk`, …) — the supercookie defense — and `idna` refuses malformed punycode. Both pull extra
 //! tables (the Public Suffix List / IDNA, via `rfc_6265`), so they are not in the default,
-//! dependency-light build. Independently,
-//! [`SetCookie::parse_strict`] rejects a `Set-Cookie` carrying a duplicate attribute.
+//! dependency-light build. A `Domain` these gates refuse is dropped from the salvage and
+//! witnessed as an [`InvalidAttributeValue`](SetCookieIssue::InvalidAttributeValue) issue, and
+//! [`Domain::new`] returns the same refusal as a typed [`InvalidDomain`].
 //!
 //! ## A single source of truth for the grammar
 //!
@@ -148,7 +159,7 @@
 //! [`Cookie`] kernel), `attributes` (the response [`CookieAttributes`]),
 //! `set_cookie` (the response [`SetCookie`] = kernel + attributes, with its
 //! `Set-Cookie` parse/serialize), `jar` (the request-`Cookie:` reader *and*
-//! writer), and `report` (what fail-soft dropped, as data — [`Reported`] and the
+//! writer), and `report` (what a parse refused, as data — [`Reported`] and the
 //! issue types) — all re-exported flat from the crate root. With the `axum`
 //! feature, an `axum` module adds the `CookieJarBuf` extractor.
 

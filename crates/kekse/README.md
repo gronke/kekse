@@ -6,8 +6,8 @@ A strict, dependency-light cookie codec.
 
 - **Both directions.** Build `Set-Cookie` via `SetCookie`. Read and write `Cookie` via a `CookieJar` of typed `Cookie`s. Convert either into an `http::HeaderValue`.
 - **Built to RFC 6265.** Plus RFC 7230 tokens, RFC 7231 dates, and RFC 6265bis `SameSite`.
-- **Strict and lenient readers.** Both refuse injection bytes (`;`, CR, LF, NUL, controls, non-ASCII). Strict also demands cookie-octets only.
-- **Fail-soft, never silent.** A junk pair is skipped, not fatal. It can't evict a valid cookie. Every reader has a reporting twin, plus an opt-in axum `400`.
+- **One interface, two gradings.** Both refuse injection bytes (`;`, CR, LF, NUL, controls, non-ASCII); strict also demands cookie-octets only, and accepts a subset of what lenient accepts.
+- **Fail-soft, never silent.** A junk pair is skipped, not fatal — it can't evict a valid cookie — and every reader returns what it refused, plus an opt-in axum `400`.
 - **Strongly typed.** `Cookie`, `SetCookie`, `CookieJar`, and typed attributes. Never string maps.
 - **A codec, not a store.** No persistence, eviction, send-matching, signing, or encryption.
 - **Dates handled.** `Max-Age` seconds (a `u64`) or an `Expires` timestamp, via the `time` crate.
@@ -51,29 +51,28 @@ To hand the cookie straight to `http`, use `HeaderValue::try_from(set_cookie)` (
 
 ## Parsing a header
 
-`parse_pairs` is the lenient, general reader — the inverse of every `ValueEncoding`.
+One interface, two gradings — and every reader returns what it refused.
+
+`parse_pairs` is the lenient stream — the inverse of every `ValueEncoding`.
 It strips one wrapping quote pair, accepts raw whitespace, and percent-decodes.
 
-`parse_pairs_strict` is its security-grade sibling.
-It accepts only cookie-octets — whitespace and every other non-octet are refused — which is what a session-cookie read should use.
+`parse_pairs_strict` is the strict grading.
+It accepts only cookie-octets — whitespace and every other non-octet are refused, and witnessed — which is what a session-cookie read should use.
 
-Both refuse the injection-dangerous bytes (`;`, CR, LF, NUL, other controls, raw non-ASCII) in every mode.
-The only difference between them is whether raw whitespace is tolerated.
+Both refuse the injection-dangerous bytes (`;`, CR, LF, NUL, other controls, raw non-ASCII) under either grading, and strict accepts a subset of what lenient accepts, never something else.
+
+The streams yield each well-formed pair as `Ok` and each refused pair as an `Err(PairIssue)` in place, so fail-soft is `.filter_map(Result::ok)` and `.collect::<Result<Vec<_>, _>>()` is fail-hard for free.
+`CookieJar::parse` / `parse_strict` collect the same streams into a `Reported`: the jar, plus every refused pair.
+`SetCookie::parse` / `parse_strict` return the salvaged cookie plus each recovered deviation as a `SetCookieIssue` — an ignored unknown attribute, a duplicate, a malformed known value; the one fatal case is a missing usable `name=value` pair.
+The severity of an issue is always the caller's choice, never the parser's: gate on `Reported::is_clean()` and nothing is ever dropped silently.
 
 ```rust
 let value = kekse::parse_pairs_strict("SID=deadbeef; theme=dark")
+    .filter_map(Result::ok)
     .find(|(name, _)| *name == "SID")
     .map(|(_, value)| value.into_owned());
 assert_eq!(value.as_deref(), Some("deadbeef"));
 ```
-
-Both readers are fail-soft: a malformed pair is skipped, never aborting the header.
-But the drop need not be silent — every plain reader has a **reporting** twin that also hands back what it skipped.
-`try_parse_pairs*` yields `Result` items, so `.collect::<Result<Vec<_>, _>>()` is fail-hard for free.
-`CookieJar::parse_reported` and friends return a `Reported`: the jar, plus every refused pair as a `PairIssue`.
-`SetCookie::try_parse` / `try_parse_strict` report each dropped attribute as a `SetCookieIssue` — an ignored unknown, a duplicate, or a malformed known value.
-Strictness decides which issues are *fatal*.
-Gating on `Reported::is_clean()` is stricter than strict: nothing is ever dropped silently.
 
 With the `axum` feature, that gate is one line in a handler — anything wrong with the header becomes a `400 Bad Request` that reports a count and never echoes header bytes:
 
@@ -97,9 +96,11 @@ A request `Cookie` completes into a `SetCookie` with `into_set_cookie()` (defaul
 ```rust
 use kekse::CookieJar;
 
-let jar = CookieJar::parse_strict("SID=deadbeef; theme=dark");
+let strict = CookieJar::parse_strict("SID=deadbeef; theme=dark");
+assert!(strict.is_clean()); // every refusal would be witnessed here
 // First non-empty match, so a stale `SID=` can't shadow a later real one.
-let sid = jar
+let sid = strict
+    .value
     .get_all("SID")
     .find(|c| !c.value().is_empty())
     .map(|c| c.value().to_owned());
