@@ -46,8 +46,9 @@ use crate::report::{PairIssue, Reported};
 /// use kekse::CookieJarBuf;
 ///
 /// async fn whoami(cookies: CookieJarBuf) -> String {
-///     cookies
-///         .jar_strict()
+///     let strict = cookies.jar_strict(); // the jar plus every refused pair
+///     strict
+///         .value
 ///         .get_all("SID")
 ///         .find(|c| !c.value().is_empty())
 ///         .map(|c| c.value().to_owned())
@@ -75,31 +76,19 @@ impl CookieJarBuf {
         Self { raw: raw.into() }
     }
 
-    /// The **lenient** [`CookieJar`] view (tolerates the quoted and
-    /// whitespace-bearing forms). Parses on demand, borrowing the owned header.
-    pub fn jar(&self) -> CookieJar<'_> {
+    /// The **lenient** view: the [`CookieJar`] plus every refused pair as a
+    /// [`PairIssue`] (tolerates the quoted and whitespace-bearing forms).
+    /// Parses on demand, borrowing the owned header.
+    pub fn jar(&self) -> Reported<CookieJar<'_>, PairIssue<'_>> {
         CookieJar::parse_bytes(&self.raw)
     }
 
-    /// The **strict** [`CookieJar`] view (cookie-octets only; whitespace and
-    /// every other non-octet refused). The reader for a session id or any value
-    /// you minted yourself. Parses on demand, borrowing the owned header.
-    pub fn jar_strict(&self) -> CookieJar<'_> {
+    /// The **strict** view (cookie-octets only; whitespace and every other
+    /// non-octet refused — and witnessed in the report). The reader for a
+    /// session id or any value you minted yourself. Parses on demand,
+    /// borrowing the owned header.
+    pub fn jar_strict(&self) -> Reported<CookieJar<'_>, PairIssue<'_>> {
         CookieJar::parse_bytes_strict(&self.raw)
-    }
-
-    /// The [`jar`](CookieJarBuf::jar) view, reporting: the same lenient jar,
-    /// plus every refused pair as a [`PairIssue`]. Log the issues and keep the
-    /// jar, or gate on [`is_clean`](Reported::is_clean) — the observable form
-    /// of the fail-soft read.
-    pub fn jar_reported(&self) -> Reported<CookieJar<'_>, PairIssue<'_>> {
-        CookieJar::parse_bytes_reported(&self.raw)
-    }
-
-    /// The [`jar_strict`](CookieJarBuf::jar_strict) view, reporting — see
-    /// [`jar_reported`](CookieJarBuf::jar_reported).
-    pub fn jar_strict_reported(&self) -> Reported<CookieJar<'_>, PairIssue<'_>> {
-        CookieJar::parse_bytes_strict_reported(&self.raw)
     }
 
     /// The fail-hard **lenient** read: the jar if every pair parsed, else a
@@ -123,16 +112,16 @@ impl CookieJarBuf {
     ///
     /// The error is owned (a count, not the header bytes), so returning it
     /// while the jar borrows `self` composes; for the issue details, read
-    /// [`jar_reported`](CookieJarBuf::jar_reported) first instead.
+    /// [`jar`](CookieJarBuf::jar) instead.
     pub fn try_jar(&self) -> Result<CookieJar<'_>, BadCookieHeader> {
-        Self::clean_or_reject(self.jar_reported())
+        Self::clean_or_reject(self.jar())
     }
 
     /// The fail-hard **strict** read — see [`try_jar`](CookieJarBuf::try_jar).
     /// Strict counts whitespace-bearing values among the issues, so this is the
     /// gate for a session id or any value you minted yourself.
     pub fn try_jar_strict(&self) -> Result<CookieJar<'_>, BadCookieHeader> {
-        Self::clean_or_reject(self.jar_strict_reported())
+        Self::clean_or_reject(self.jar_strict())
     }
 
     fn clean_or_reject<'a>(
@@ -226,19 +215,25 @@ mod tests {
         assert_eq!(buf.as_bytes(), br#"a=1; SID=x; pref="dark mode""#);
 
         // Lenient sees the quoted preference and the session id.
-        assert_eq!(buf.jar().get("pref").map(|c| c.value()), Some("dark mode"));
-        assert_eq!(buf.jar().get("SID").map(|c| c.value()), Some("x"));
+        assert_eq!(
+            buf.jar().value.get("pref").map(|c| c.value()),
+            Some("dark mode")
+        );
+        assert_eq!(buf.jar().value.get("SID").map(|c| c.value()), Some("x"));
 
         // Strict keeps the octet-clean SID but drops the spaced preference.
-        assert_eq!(buf.jar_strict().get("SID").map(|c| c.value()), Some("x"));
-        assert!(buf.jar_strict().get("pref").is_none());
+        assert_eq!(
+            buf.jar_strict().value.get("SID").map(|c| c.value()),
+            Some("x")
+        );
+        assert!(buf.jar_strict().value.get("pref").is_none());
     }
 
     #[test]
     fn empty_header_yields_empty_jars() {
         let buf = CookieJarBuf::default();
-        assert!(buf.jar().is_empty());
-        assert!(buf.jar_strict().is_empty());
+        assert!(buf.jar().value.is_empty());
+        assert!(buf.jar_strict().value.is_empty());
         assert_eq!(buf.as_bytes(), b"");
     }
 
@@ -247,11 +242,11 @@ mod tests {
         // 0xE9 is valid obs-text in a HeaderValue but not UTF-8; the old
         // String-backed buffer had to drop the whole header at to_str().
         let buf = CookieJarBuf::from_header(&b"good=1; bad=caf\xE9; SID=deadbeef"[..]);
-        assert_eq!(buf.jar().get("good").map(|c| c.value()), Some("1"));
+        assert_eq!(buf.jar().value.get("good").map(|c| c.value()), Some("1"));
         assert_eq!(
-            buf.jar_strict().get("SID").map(|c| c.value()),
+            buf.jar_strict().value.get("SID").map(|c| c.value()),
             Some("deadbeef")
         );
-        assert!(buf.jar().get("bad").is_none());
+        assert!(buf.jar().value.get("bad").is_none());
     }
 }

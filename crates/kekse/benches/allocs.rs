@@ -69,7 +69,7 @@ fn measure<T>(op: impl FnOnce() -> T) -> (usize, usize) {
 fn main() {
     // Inputs are built before any measurement brackets them.
     let large = large_header();
-    let jar_medium = CookieJar::parse(MEDIUM);
+    let jar_medium = CookieJar::parse(MEDIUM).into_value();
     let set_cookie_min = SetCookie::new("n", "v");
     let full = set_cookie_full();
     let expires = set_cookie_expires();
@@ -80,10 +80,7 @@ fn main() {
         ("jar_parse/medium", measure(|| CookieJar::parse(MEDIUM))),
         ("jar_parse/large", measure(|| CookieJar::parse(&large))),
         ("jar_parse/escaped", measure(|| CookieJar::parse(ESCAPED))),
-        (
-            "jar_reported/dirty",
-            measure(|| CookieJar::parse_reported(DIRTY)),
-        ),
+        ("jar_reported/dirty", measure(|| CookieJar::parse(DIRTY))),
         (
             "set_cookie_parse/full",
             measure(|| SetCookie::parse(SET_COOKIE_FULL)),

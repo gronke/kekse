@@ -1,14 +1,14 @@
-//! Parse-issue reporting: what fail-soft dropped, as data.
+//! Parse-issue reporting: what a parse refused, as data.
 //!
-//! The plain readers stay fail-soft and silent — a malformed piece is skipped,
-//! never aborting the parse. The `try_` / `_reported` readers run the *same*
-//! pipeline but hand every skip back as an issue, so the caller chooses the
-//! severity: log the [`Reported::issues`] and keep the value (fail-soft,
-//! observed), or treat any issue as fatal (fail-hard — a `400 Bad Request`
-//! for a request header the client had no business sending).
+//! Every reader returns this form — there is no silent variant. A refused
+//! piece is skipped, never aborting the parse, and handed back as an issue,
+//! so the caller chooses the severity: log the [`Reported::issues`] and keep
+//! the value (fail-soft, observed), treat any issue as fatal (fail-hard — a
+//! `400 Bad Request` for a request header the client had no business
+//! sending), or discard the report ([`Reported::into_value`]).
 //!
 //! [`PairIssue`] is one refused request-`Cookie:` pair; [`Reported`] carries a
-//! parsed value together with everything the parse dropped, in wire order.
+//! parsed value together with everything the parse refused, in wire order.
 
 use std::fmt;
 
@@ -20,11 +20,11 @@ pub(crate) fn lossy_escaped(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).escape_debug().to_string()
 }
 
-/// One request `Cookie:` pair the fail-soft readers refused, carrying the
-/// offending wire slice — borrowed from the header, never allocated.
+/// One request `Cookie:` pair a reader refused, carrying the offending wire
+/// slice — borrowed from the header, never allocated.
 ///
-/// Yielded by [`try_parse_pairs`](crate::try_parse_pairs) (and its strict /
-/// bytes twins) and collected by [`CookieJar::parse_reported`](crate::CookieJar::parse_reported).
+/// Yielded in place by [`parse_pairs`](crate::parse_pairs) (and its strict /
+/// bytes twins) and collected by [`CookieJar::parse`](crate::CookieJar::parse).
 /// An empty or whitespace-only `;`-segment (a stray or trailing `;`) is
 /// structural noise, not an issue — the same treatment the `Set-Cookie`
 /// attribute loop gives it.
@@ -88,7 +88,7 @@ impl fmt::Display for PairIssue<'_> {
 
 impl std::error::Error for PairIssue<'_> {}
 
-/// A fail-soft parse result carrying everything the parse dropped.
+/// A parse result carrying everything the parse refused.
 ///
 /// `issues` is empty exactly when the input was fully well-formed, so
 /// fail-hard is [`is_clean`](Reported::is_clean) / [`into_result`](Reported::into_result),
@@ -96,10 +96,11 @@ impl std::error::Error for PairIssue<'_> {}
 /// [`issues`](Reported::issues). A clean parse never allocates for the report
 /// (`Vec::new` holds no buffer).
 ///
-/// Returned by [`CookieJar::parse_reported`](crate::CookieJar::parse_reported)
-/// (and its strict / bytes twins) with `I` = [`PairIssue`], and by
+/// Returned by [`CookieJar::parse`](crate::CookieJar::parse) (and its strict /
+/// bytes twins) with `I` = [`PairIssue`], and by
 /// [`SetCookie::try_parse`](crate::SetCookie::try_parse) with `I` =
 /// [`SetCookieIssue`](crate::SetCookieIssue).
+#[must_use = "the report carries both the parsed value and what was refused"]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reported<T, I> {
     /// The parsed value — byte-identical to what the plain reader yields.

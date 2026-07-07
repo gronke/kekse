@@ -1,6 +1,12 @@
 //! The request `Cookie:` dialect: the [`parse_pairs`] / [`parse_pairs_strict`]
 //! readers (with their [`parse_pairs_bytes`] / [`parse_pairs_bytes_strict`]
 //! byte-level twins) and the [`CookieJar`] typed view layered on them.
+//!
+//! Every reader returns what it refused: the streams yield each refused pair
+//! as a [`PairIssue`] in place, the jar constructors return [`Reported`].
+//! Lenient and strict run one pipeline and differ only in grading — strict
+//! accepts a subset of what lenient accepts, never something else — so the
+//! severity of an issue is always the caller's choice, never the parser's.
 
 use std::borrow::Cow;
 
@@ -10,85 +16,68 @@ use crate::report::{PairIssue, Reported};
 use crate::wire::{split_checked_pair, trim_ws};
 use http::header::{HeaderValue, InvalidHeaderValue};
 
-/// Parse a request `Cookie` header into `(name, decoded value)` pairs, in order,
-/// yielding every well-formed pair. Lenient: tolerates raw whitespace and the
-/// quoted form. The inverse of [`encode_value`](crate::encode_value) /
-/// [`SetCookie`](crate::SetCookie). See the [crate docs](crate).
-pub fn parse_pairs(header: &str) -> impl Iterator<Item = (&str, Cow<'_, str>)> {
+/// Parse a request `Cookie` header into `(name, decoded value)` pairs, in
+/// order: every well-formed pair comes back as `Ok`, every refused pair as
+/// `Err(`[`PairIssue`]`)` — same order, nothing dropped without a witness.
+/// Lenient grading: tolerates raw whitespace and the quoted form. The inverse
+/// of [`encode_value`](crate::encode_value) / [`SetCookie`](crate::SetCookie).
+/// See the [crate docs](crate).
+///
+/// Fail-soft is one adapter away — `.filter_map(Result::ok)` — and fail-hard
+/// is `.collect::<Result<Vec<_>, _>>()`, which stops at the first issue.
+///
+/// ```
+/// use kekse::parse_pairs;
+///
+/// let mut pairs = parse_pairs("SID=deadbeef; garbage; theme=dark");
+/// assert_eq!(pairs.next().unwrap().ok(), Some(("SID", "deadbeef".into())));
+/// assert!(pairs.next().unwrap().is_err()); // `garbage` has no `=` — witnessed, not dropped
+/// assert_eq!(pairs.next().unwrap().ok(), Some(("theme", "dark".into())));
+/// assert!(pairs.next().is_none());
+/// ```
+pub fn parse_pairs(
+    header: &str,
+) -> impl Iterator<Item = Result<(&str, Cow<'_, str>), PairIssue<'_>>> {
     parse_pairs_bytes(header.as_bytes())
 }
 
-/// Like [`parse_pairs`] but **strict**: a value byte outside the RFC 6265
-/// cookie-octet set — including raw whitespace — causes that pair to be skipped.
-/// Use this for a session cookie or any value you minted yourself, where a shape
-/// you could not have emitted should not be trusted.
-pub fn parse_pairs_strict(header: &str) -> impl Iterator<Item = (&str, Cow<'_, str>)> {
+/// Like [`parse_pairs`] but with **strict** grading: a value byte outside the
+/// RFC 6265 cookie-octet set — including raw whitespace — refuses that pair as
+/// an [`InvalidValue`](PairIssue::InvalidValue). Everything lenient grading
+/// refuses, strict refuses too, never the reverse. Use this for a session
+/// cookie or any value you minted yourself, where a shape you could not have
+/// emitted should not be trusted.
+pub fn parse_pairs_strict(
+    header: &str,
+) -> impl Iterator<Item = Result<(&str, Cow<'_, str>), PairIssue<'_>>> {
     parse_pairs_bytes_strict(header.as_bytes())
 }
 
 /// [`parse_pairs`] on raw header bytes, for callers on the wire side of UTF-8 —
 /// an `http` `HeaderValue` may legally carry obs-text (`>= 0x80`) that
-/// `to_str()` refuses wholesale. Fail-soft stays **per pair** here: a pair
+/// `to_str()` refuses wholesale. The witness stays **per pair** here: a pair
 /// carrying a non-ASCII byte is refused individually (raw non-ASCII is outside
-/// the grammar in every mode), while its well-formed neighbors survive. Names
-/// come back as `&str` for free (tokens are ASCII); values decode to UTF-8
-/// `Cow`s that borrow the buffer whenever no escape actually decoded.
-pub fn parse_pairs_bytes(header: &[u8]) -> impl Iterator<Item = (&str, Cow<'_, str>)> {
-    split_pairs(header, true)
-}
-
-/// [`parse_pairs_strict`] on raw header bytes — see [`parse_pairs_bytes`].
-pub fn parse_pairs_bytes_strict(header: &[u8]) -> impl Iterator<Item = (&str, Cow<'_, str>)> {
-    split_pairs(header, false)
-}
-
-/// [`parse_pairs`], reporting: every well-formed pair comes back as `Ok`, every
-/// refused pair as `Err(`[`PairIssue`]`)` — same pipeline, same order, nothing
-/// extra accepted. The streaming primitive under
-/// [`CookieJar::parse_reported`]; both fail-soft and fail-hard are one adapter
-/// away — `.filter_map(Result::ok)` is exactly [`parse_pairs`], and
-/// `.collect::<Result<Vec<_>, _>>()` stops at the first issue.
-pub fn try_parse_pairs(
-    header: &str,
-) -> impl Iterator<Item = Result<(&str, Cow<'_, str>), PairIssue<'_>>> {
-    try_parse_pairs_bytes(header.as_bytes())
-}
-
-/// [`parse_pairs_strict`], reporting — see [`try_parse_pairs`]. Issues are
-/// mode-relative: a whitespace-bearing value lenient accepts is an
-/// [`InvalidValue`](PairIssue::InvalidValue) here.
-pub fn try_parse_pairs_strict(
-    header: &str,
-) -> impl Iterator<Item = Result<(&str, Cow<'_, str>), PairIssue<'_>>> {
-    try_parse_pairs_bytes_strict(header.as_bytes())
-}
-
-/// [`parse_pairs_bytes`], reporting — see [`try_parse_pairs`].
-pub fn try_parse_pairs_bytes(
+/// the grammar in every grading), while its well-formed neighbors survive.
+/// Names come back as `&str` for free (tokens are ASCII); values decode to
+/// UTF-8 `Cow`s that borrow the buffer whenever no escape actually decoded.
+pub fn parse_pairs_bytes(
     header: &[u8],
 ) -> impl Iterator<Item = Result<(&str, Cow<'_, str>), PairIssue<'_>>> {
     split_pairs_reported(header, true)
 }
 
-/// [`parse_pairs_bytes_strict`], reporting — see [`try_parse_pairs`].
-pub fn try_parse_pairs_bytes_strict(
+/// [`parse_pairs_strict`] on raw header bytes — see [`parse_pairs_bytes`].
+pub fn parse_pairs_bytes_strict(
     header: &[u8],
 ) -> impl Iterator<Item = Result<(&str, Cow<'_, str>), PairIssue<'_>>> {
     split_pairs_reported(header, false)
 }
 
-/// Each `;`-separated segment runs an independent, fail-soft pipeline — a
-/// malformed segment is skipped (logged at `debug`), never aborting the whole
-/// header. Per segment: [`split_checked_pair`] (first `=`, OWS-trimmed
-/// token-gated name), then the value runs through [`decode_cookie_value`].
-fn split_pairs(header: &[u8], allow_ws: bool) -> impl Iterator<Item = (&str, Cow<'_, str>)> {
-    split_pairs_reported(header, allow_ws).filter_map(Result::ok)
-}
-
-/// The reporting core both reader families share: [`split_pairs`] is this with
-/// the `Err`s filtered away, so the plain and reporting views cannot drift. An
-/// empty or whitespace-only segment (a stray or trailing `;`) is skipped
-/// without an issue — structural noise, not a malformed pair.
+/// The one reader core every entry point shares — the `&str` forms run it
+/// over `as_bytes()`, the jar constructors collect it — so the stream and jar
+/// views cannot drift. An empty or whitespace-only segment (a stray or
+/// trailing `;`) is skipped without an issue — structural noise, not a
+/// malformed pair.
 fn split_pairs_reported(
     header: &[u8],
     allow_ws: bool,
@@ -121,83 +110,68 @@ fn split_pairs_reported(
 
 /// The baked cookies of a request `Cookie:` header, parsed in order. Borrows
 /// the header; each [`Cookie`] is a name and its decoded value. Build it with
-/// [`parse`](CookieJar::parse) (lenient) or
-/// [`parse_strict`](CookieJar::parse_strict) — the readers behind [`parse_pairs`]
-/// / [`parse_pairs_strict`], which the jar layers on — then query with
-/// [`get`](CookieJar::get) / [`get_all`](CookieJar::get_all) or iterate.
+/// [`parse`](CookieJar::parse) (lenient grading) or
+/// [`parse_strict`](CookieJar::parse_strict) (strict grading) — the readers
+/// behind [`parse_pairs`] / [`parse_pairs_strict`], which the jar layers on —
+/// both returning the jar inside a [`Reported`] alongside every refused pair.
+/// Query with [`get`](CookieJar::get) / [`get_all`](CookieJar::get_all) or
+/// iterate.
 #[derive(Clone, Debug, Default)]
 pub struct CookieJar<'a> {
     cookies: Vec<Cookie<'a>>,
 }
 
 impl<'a> CookieJar<'a> {
-    /// Parse a `Cookie:` header leniently — tolerating quoted and
-    /// whitespace-bearing values (see [`parse_pairs`]).
-    pub fn parse(header: &'a str) -> Self {
-        Self {
-            cookies: parse_pairs(header)
-                .map(|(name, value)| Cookie::new(name, value))
-                .collect(),
-        }
+    /// Parse a `Cookie:` header with lenient grading — tolerating quoted and
+    /// whitespace-bearing values (see [`parse_pairs`]) — into the jar plus
+    /// every refused pair as a [`PairIssue`], in wire order. `issues` is empty
+    /// exactly when the header was fully well-formed, so the severity is the
+    /// caller's choice: fail hard on a dirty header
+    /// ([`Reported::into_result`]), log the issues and keep the jar, or
+    /// discard the report ([`Reported::into_value`]).
+    ///
+    /// ```
+    /// use kekse::CookieJar;
+    ///
+    /// let jar = CookieJar::parse("SID=deadbeef; theme=dark");
+    /// assert!(jar.is_clean());
+    /// assert_eq!(jar.value.get("theme").map(|c| c.value()), Some("dark"));
+    /// ```
+    pub fn parse(header: &'a str) -> Reported<Self, PairIssue<'a>> {
+        Self::collect_reported(parse_pairs(header))
     }
 
-    /// Parse a `Cookie:` header strictly — cookie-octets only, whitespace
-    /// refused (see [`parse_pairs_strict`]). The reader to use for a session
-    /// cookie or any value you minted yourself.
-    pub fn parse_strict(header: &'a str) -> Self {
-        Self {
-            cookies: parse_pairs_strict(header)
-                .map(|(name, value)| Cookie::new(name, value))
-                .collect(),
-        }
+    /// [`parse`](CookieJar::parse) with **strict** grading — cookie-octets
+    /// only, whitespace refused (see [`parse_pairs_strict`]). The reader for a
+    /// session cookie or any value you minted yourself. Same shape, same
+    /// salvage: the jar holds every pair that passed the stricter gate, and
+    /// everything refused — under either grading — is witnessed in `issues`.
+    ///
+    /// ```
+    /// use kekse::{CookieJar, PairIssue};
+    ///
+    /// let strict = CookieJar::parse_strict("SID=dead beef; theme=dark");
+    /// assert_eq!(strict.value.len(), 1); // the whitespace-bearing value is refused…
+    /// assert!(matches!(
+    ///     strict.issues[0],
+    ///     PairIssue::InvalidValue { name: "SID", .. } // …and witnessed
+    /// ));
+    /// ```
+    pub fn parse_strict(header: &'a str) -> Reported<Self, PairIssue<'a>> {
+        Self::collect_reported(parse_pairs_strict(header))
     }
 
     /// [`parse`](CookieJar::parse) on raw header bytes (see
-    /// [`parse_pairs_bytes`]): fail-soft per pair even when the header carries
-    /// obs-text a `to_str()` boundary would have to refuse wholesale.
-    pub fn parse_bytes(header: &'a [u8]) -> Self {
-        Self {
-            cookies: parse_pairs_bytes(header)
-                .map(|(name, value)| Cookie::new(name, value))
-                .collect(),
-        }
+    /// [`parse_pairs_bytes`]): the witness stays per pair even when the header
+    /// carries obs-text a `to_str()` boundary would have to refuse wholesale.
+    pub fn parse_bytes(header: &'a [u8]) -> Reported<Self, PairIssue<'a>> {
+        Self::collect_reported(parse_pairs_bytes(header))
     }
 
     /// [`parse_strict`](CookieJar::parse_strict) on raw header bytes (see
     /// [`parse_pairs_bytes_strict`]).
-    pub fn parse_bytes_strict(header: &'a [u8]) -> Self {
-        Self {
-            cookies: parse_pairs_bytes_strict(header)
-                .map(|(name, value)| Cookie::new(name, value))
-                .collect(),
-        }
-    }
-
-    /// [`parse`](CookieJar::parse), reporting: the same jar, plus every refused
-    /// pair as a [`PairIssue`], in wire order. `issues` is empty exactly when
-    /// the header was fully well-formed, so a handler can fail hard on a dirty
-    /// header (see [`Reported::into_result`]) or log the issues and keep the
-    /// jar — the fail-soft default, now observable.
-    pub fn parse_reported(header: &'a str) -> Reported<Self, PairIssue<'a>> {
-        Self::collect_reported(try_parse_pairs(header))
-    }
-
-    /// [`parse_strict`](CookieJar::parse_strict), reporting — see
-    /// [`parse_reported`](CookieJar::parse_reported).
-    pub fn parse_strict_reported(header: &'a str) -> Reported<Self, PairIssue<'a>> {
-        Self::collect_reported(try_parse_pairs_strict(header))
-    }
-
-    /// [`parse_bytes`](CookieJar::parse_bytes), reporting — see
-    /// [`parse_reported`](CookieJar::parse_reported).
-    pub fn parse_bytes_reported(header: &'a [u8]) -> Reported<Self, PairIssue<'a>> {
-        Self::collect_reported(try_parse_pairs_bytes(header))
-    }
-
-    /// [`parse_bytes_strict`](CookieJar::parse_bytes_strict), reporting — see
-    /// [`parse_reported`](CookieJar::parse_reported).
-    pub fn parse_bytes_strict_reported(header: &'a [u8]) -> Reported<Self, PairIssue<'a>> {
-        Self::collect_reported(try_parse_pairs_bytes_strict(header))
+    pub fn parse_bytes_strict(header: &'a [u8]) -> Reported<Self, PairIssue<'a>> {
+        Self::collect_reported(parse_pairs_bytes_strict(header))
     }
 
     /// Partition a reporting pair stream into the jar and its issue list.
@@ -335,19 +309,25 @@ mod tests {
 
     fn lenient(header: &str) -> Vec<(&str, String)> {
         parse_pairs(header)
+            .filter_map(Result::ok)
             .map(|(n, v)| (n, v.into_owned()))
             .collect()
     }
     fn strict(header: &str) -> Vec<(&str, String)> {
         parse_pairs_strict(header)
+            .filter_map(Result::ok)
             .map(|(n, v)| (n, v.into_owned()))
             .collect()
     }
     fn lenient_first(header: &str) -> Option<String> {
-        parse_pairs(header).next().map(|(_, v)| v.into_owned())
+        parse_pairs(header)
+            .filter_map(Result::ok)
+            .next()
+            .map(|(_, v)| v.into_owned())
     }
     fn strict_first(header: &str) -> Option<String> {
         parse_pairs_strict(header)
+            .filter_map(Result::ok)
             .next()
             .map(|(_, v)| v.into_owned())
     }
@@ -490,12 +470,14 @@ mod tests {
     fn duplicates_yielded_in_order_case_sensitive() {
         assert_eq!(
             parse_pairs("k=1; k=2; k=3")
+                .filter_map(Result::ok)
                 .map(|(_, v)| v.into_owned())
                 .collect::<Vec<_>>(),
             vec!["1", "2", "3"]
         );
         assert_eq!(
             parse_pairs("sid=lo; SID=hi")
+                .filter_map(Result::ok)
                 .find(|(n, _)| *n == "SID")
                 .map(|(_, v)| v.into_owned())
                 .as_deref(),
@@ -503,6 +485,7 @@ mod tests {
         );
         assert_eq!(
             parse_pairs("sid=lo; SID=hi")
+                .filter_map(Result::ok)
                 .find(|(n, _)| *n == "sid")
                 .map(|(_, v)| v.into_owned())
                 .as_deref(),
@@ -516,6 +499,7 @@ mod tests {
         h.push_str("target=found");
         assert_eq!(
             parse_pairs(&h)
+                .filter_map(Result::ok)
                 .find(|(n, _)| *n == "target")
                 .map(|(_, v)| v.into_owned())
                 .as_deref(),
@@ -530,17 +514,23 @@ mod tests {
         let junk = format!("j={}", "\u{1}".repeat(10_240));
         let header = format!("a=1; {junk}; b=2");
         assert_eq!(
-            parse_pairs(&header).map(|(n, _)| n).collect::<Vec<_>>(),
+            parse_pairs(&header)
+                .filter_map(Result::ok)
+                .map(|(n, _)| n)
+                .collect::<Vec<_>>(),
             vec!["a", "b"]
         );
-        assert_eq!(parse_pairs("\u{1}\u{2}\u{3}").count(), 0);
+        // All-junk wire yields no pairs — but the refusal is still witnessed.
+        let all_junk: Vec<_> = parse_pairs("\u{1}\u{2}\u{3}").collect();
+        assert_eq!(all_junk.iter().filter(|r| r.is_ok()).count(), 0);
+        assert_eq!(all_junk.iter().filter(|r| r.is_err()).count(), 1);
     }
 
     // ---- CookieJar --------------------------------------------------------
 
     #[test]
     fn jar_get_is_first_match_including_empty() {
-        let jar = CookieJar::parse_strict("SID=; SID=x");
+        let jar = CookieJar::parse_strict("SID=; SID=x").into_value();
         // RFC-faithful: the first match wins even when its value is empty.
         assert_eq!(jar.get("SID").map(|c| c.value()), Some(""));
         // The "skip empties, first non-empty wins" idiom a session read uses.
@@ -554,7 +544,7 @@ mod tests {
 
     #[test]
     fn jar_get_all_in_order_and_case_sensitive() {
-        let jar = CookieJar::parse("k=1; k=2; k=3; K=upper");
+        let jar = CookieJar::parse("k=1; k=2; k=3; K=upper").into_value();
         assert_eq!(
             jar.get_all("k").map(|c| c.value()).collect::<Vec<_>>(),
             vec!["1", "2", "3"]
@@ -565,7 +555,7 @@ mod tests {
 
     #[test]
     fn jar_len_iter_and_empty() {
-        let jar = CookieJar::parse("a=1; b=2");
+        let jar = CookieJar::parse("a=1; b=2").into_value();
         assert_eq!(jar.len(), 2);
         assert!(!jar.is_empty());
         assert_eq!(
@@ -575,22 +565,24 @@ mod tests {
             vec![("a", "1"), ("b", "2")]
         );
         assert_eq!((&jar).into_iter().count(), 2);
-        assert!(CookieJar::parse("").is_empty());
+        assert!(CookieJar::parse("").value.is_empty());
     }
 
     #[test]
     fn jar_value_borrows_when_octet_clean() {
-        let jar = CookieJar::parse_strict("SID=deadbeef");
+        let jar = CookieJar::parse_strict("SID=deadbeef").into_value();
         let cookie = jar.into_iter().next().unwrap();
         assert!(matches!(cookie.into_value(), Cow::Borrowed(_)));
     }
 
     #[test]
     fn jar_is_fail_soft_like_the_parsers() {
-        // A malformed pair is skipped; a later valid pair still parses.
-        let jar = CookieJar::parse("n=a\u{1}b; m=ok");
-        assert!(jar.get("n").is_none());
-        assert_eq!(jar.get("m").map(|c| c.value()), Some("ok"));
+        // A malformed pair is skipped — witnessed, never silently — and a
+        // later valid pair still parses.
+        let reported = CookieJar::parse("n=a\u{1}b; m=ok");
+        assert!(reported.value.get("n").is_none());
+        assert_eq!(reported.value.get("m").map(|c| c.value()), Some("ok"));
+        assert_eq!(reported.issues.len(), 1);
     }
 
     // ---- the bytes readers -------------------------------------------------
@@ -610,16 +602,23 @@ mod tests {
             "n=caf\u{e9}; m=ok",
             "n=%C3%A9; bad=%FF; m=ok",
         ] {
-            let via_str: Vec<(&str, String)> = lenient(header);
-            let via_bytes: Vec<(&str, String)> = parse_pairs_bytes(header.as_bytes())
-                .map(|(n, v)| (n, v.into_owned()))
+            // Compare the FULL streams — Ok pairs and issues alike.
+            let via_str: Vec<Result<(&str, String), PairIssue<'_>>> = parse_pairs(header)
+                .map(|r| r.map(|(n, v)| (n, v.into_owned())))
                 .collect();
+            let via_bytes: Vec<Result<(&str, String), PairIssue<'_>>> =
+                parse_pairs_bytes(header.as_bytes())
+                    .map(|r| r.map(|(n, v)| (n, v.into_owned())))
+                    .collect();
             assert_eq!(via_bytes, via_str, "lenient on {header:?}");
 
-            let via_str: Vec<(&str, String)> = strict(header);
-            let via_bytes: Vec<(&str, String)> = parse_pairs_bytes_strict(header.as_bytes())
-                .map(|(n, v)| (n, v.into_owned()))
+            let via_str: Vec<Result<(&str, String), PairIssue<'_>>> = parse_pairs_strict(header)
+                .map(|r| r.map(|(n, v)| (n, v.into_owned())))
                 .collect();
+            let via_bytes: Vec<Result<(&str, String), PairIssue<'_>>> =
+                parse_pairs_bytes_strict(header.as_bytes())
+                    .map(|r| r.map(|(n, v)| (n, v.into_owned())))
+                    .collect();
             assert_eq!(via_bytes, via_str, "strict on {header:?}");
         }
     }
@@ -630,6 +629,7 @@ mod tests {
         // The bytes reader keeps fail-soft per PAIR: only the carrying pair is refused.
         let wire = b"good=1; bad=caf\xE9; m=ok";
         let pairs: Vec<(&str, String)> = parse_pairs_bytes(wire)
+            .filter_map(Result::ok)
             .map(|(n, v)| (n, v.into_owned()))
             .collect();
         assert_eq!(
@@ -637,13 +637,14 @@ mod tests {
             vec![("good", "1".to_string()), ("m", "ok".to_string())]
         );
         // Same through the jar view, in both modes.
-        let jar = CookieJar::parse_bytes(wire);
+        let jar = CookieJar::parse_bytes(wire).into_value();
         assert_eq!(jar.len(), 2);
         assert!(jar.get("bad").is_none());
-        let jar = CookieJar::parse_bytes_strict(wire);
+        let jar = CookieJar::parse_bytes_strict(wire).into_value();
         assert_eq!(jar.get("m").map(|c| c.value()), Some("ok"));
         // Even a non-UTF-8 NAME only costs its own pair.
         let pairs: Vec<(&str, String)> = parse_pairs_bytes(b"a\xFFb=v; m=ok")
+            .filter_map(Result::ok)
             .map(|(n, v)| (n, v.into_owned()))
             .collect();
         assert_eq!(pairs, vec![("m", "ok".to_string())]);
@@ -652,7 +653,7 @@ mod tests {
     #[test]
     fn bytes_value_borrows_when_octet_clean() {
         // The zero-copy pin, bytes-path twin of jar_value_borrows_when_octet_clean.
-        let jar = CookieJar::parse_bytes_strict(b"SID=deadbeef");
+        let jar = CookieJar::parse_bytes_strict(b"SID=deadbeef").into_value();
         let cookie = jar.into_iter().next().unwrap();
         assert!(matches!(cookie.into_value(), Cow::Borrowed(_)));
     }
@@ -676,7 +677,7 @@ mod tests {
 
     #[test]
     fn remove_drops_all_matches_and_returns_the_count() {
-        let mut jar = CookieJar::parse("a=1; b=2; a=3");
+        let mut jar = CookieJar::parse("a=1; b=2; a=3").into_value();
         assert_eq!(jar.remove("a"), 2);
         assert_eq!(jar.remove("missing"), 0);
         assert_eq!(jar.iter().map(|c| c.name()).collect::<Vec<_>>(), vec!["b"]);
@@ -684,7 +685,7 @@ mod tests {
 
     #[test]
     fn replace_is_the_canonical_single_value_write() {
-        let mut jar = CookieJar::parse("SID=old; SID=stale; theme=dark");
+        let mut jar = CookieJar::parse("SID=old; SID=stale; theme=dark").into_value();
         jar.replace(Cookie::new("SID", "new"));
         assert_eq!(
             jar.get_all("SID").map(|c| c.value()).collect::<Vec<_>>(),
@@ -695,7 +696,7 @@ mod tests {
 
     #[test]
     fn replace_then_render_uses_the_argument_encoding_not_the_stored_one() {
-        let mut jar = CookieJar::parse("pref=old; pref=stale");
+        let mut jar = CookieJar::parse("pref=old; pref=stale").into_value();
         // Replace the duplicates with one value that needs escaping, built with a
         // DIFFERENT stored encoding (Auto) than the render calls will request.
         jar.replace(Cookie::new("pref", "a b").with_encoding(ValueEncoding::Auto));
@@ -724,10 +725,10 @@ mod tests {
 
     #[test]
     fn header_string_joins_pairs_and_round_trips() {
-        let jar = CookieJar::parse_strict("a=1; b=2; c=3");
+        let jar = CookieJar::parse_strict("a=1; b=2; c=3").into_value();
         let rendered = jar.to_header_string(ValueEncoding::Percent);
         assert_eq!(rendered, "a=1; b=2; c=3");
-        let again = CookieJar::parse_strict(&rendered);
+        let again = CookieJar::parse_strict(&rendered).into_value();
         assert_eq!(
             again
                 .iter()
@@ -743,8 +744,9 @@ mod tests {
         // serialization: joining `to_pair` outputs with "; " reconstructs
         // `to_header_string` for every encoding, jar size, and value shape.
         let empty = CookieJar::new();
-        let single = CookieJar::parse("SID=deadbeef");
-        let mixed = CookieJar::parse(r#"a=1; pref="dark mode"; name=caf%C3%A9; q=100%25; e="#);
+        let single = CookieJar::parse("SID=deadbeef").into_value();
+        let mixed =
+            CookieJar::parse(r#"a=1; pref="dark mode"; name=caf%C3%A9; q=100%25; e="#).into_value();
         for jar in [&empty, &single, &mixed] {
             for encoding in [
                 ValueEncoding::Auto,
@@ -766,7 +768,7 @@ mod tests {
     fn re_encode_is_canonical_no_raw_retention() {
         // Values that arrived quoted / percent-escaped are re-emitted in the one
         // canonical Percent form — the original wire shape is not retained.
-        let jar = CookieJar::parse(r#"pref="a b"; name=caf%C3%A9"#);
+        let jar = CookieJar::parse(r#"pref="a b"; name=caf%C3%A9"#).into_value();
         assert_eq!(
             jar.to_header_string(ValueEncoding::Percent),
             "pref=a%20b; name=caf%C3%A9"
@@ -801,41 +803,41 @@ mod tests {
     ];
 
     #[test]
-    fn reporting_ok_items_are_exactly_the_plain_readers_output() {
-        // The identity pin: `parse_pairs*` IS `try_parse_pairs*` minus the Errs,
-        // for every mode and both input forms.
+    fn jar_collects_exactly_the_stream_partition() {
+        // The jar constructor and the streaming reader are the same parse:
+        // `value` is the Ok items, `issues` is the Err items, both in wire
+        // order — for every grading and both input forms.
         for header in NASTY_HEADERS {
-            let plain: Vec<(&str, String)> = lenient(header);
-            let reported: Vec<(&str, String)> = try_parse_pairs(header)
-                .filter_map(Result::ok)
-                .map(|(n, v)| (n, v.into_owned()))
-                .collect();
-            assert_eq!(reported, plain, "lenient str on {header:?}");
-
-            let plain: Vec<(&str, String)> = strict(header);
-            let reported: Vec<(&str, String)> = try_parse_pairs_strict(header)
-                .filter_map(Result::ok)
-                .map(|(n, v)| (n, v.into_owned()))
-                .collect();
-            assert_eq!(reported, plain, "strict str on {header:?}");
-
-            let plain: Vec<(&str, String)> = parse_pairs_bytes(header.as_bytes())
-                .map(|(n, v)| (n, v.into_owned()))
-                .collect();
-            let reported: Vec<(&str, String)> = try_parse_pairs_bytes(header.as_bytes())
-                .filter_map(Result::ok)
-                .map(|(n, v)| (n, v.into_owned()))
-                .collect();
-            assert_eq!(reported, plain, "lenient bytes on {header:?}");
-
-            let plain: Vec<(&str, String)> = parse_pairs_bytes_strict(header.as_bytes())
-                .map(|(n, v)| (n, v.into_owned()))
-                .collect();
-            let reported: Vec<(&str, String)> = try_parse_pairs_bytes_strict(header.as_bytes())
-                .filter_map(Result::ok)
-                .map(|(n, v)| (n, v.into_owned()))
-                .collect();
-            assert_eq!(reported, plain, "strict bytes on {header:?}");
+            for strict_grading in [false, true] {
+                let stream: Vec<Result<(&str, String), PairIssue<'_>>> = if strict_grading {
+                    parse_pairs_strict(header)
+                        .map(|r| r.map(|(n, v)| (n, v.into_owned())))
+                        .collect()
+                } else {
+                    parse_pairs(header)
+                        .map(|r| r.map(|(n, v)| (n, v.into_owned())))
+                        .collect()
+                };
+                let jar = if strict_grading {
+                    CookieJar::parse_strict(header)
+                } else {
+                    CookieJar::parse(header)
+                };
+                let jar_pairs: Vec<(&str, String)> = jar
+                    .value
+                    .iter()
+                    .map(|c| (c.name(), c.value().to_owned()))
+                    .collect();
+                let ok_items: Vec<(&str, String)> =
+                    stream.iter().filter_map(|r| r.clone().ok()).collect();
+                let err_items: Vec<PairIssue<'_>> =
+                    stream.iter().filter_map(|r| r.clone().err()).collect();
+                assert_eq!(jar_pairs, ok_items, "strict={strict_grading} on {header:?}");
+                assert_eq!(
+                    jar.issues, err_items,
+                    "strict={strict_grading} on {header:?}"
+                );
+            }
         }
     }
 
@@ -844,10 +846,9 @@ mod tests {
         // The report dual of "strict pairs ⊆ lenient pairs": everything lenient
         // refuses, strict refuses too.
         for header in NASTY_HEADERS {
-            let lenient_issues: Vec<_> = try_parse_pairs(header).filter_map(Result::err).collect();
-            let strict_issues: Vec<_> = try_parse_pairs_strict(header)
-                .filter_map(Result::err)
-                .collect();
+            let lenient_issues: Vec<_> = parse_pairs(header).filter_map(Result::err).collect();
+            let strict_issues: Vec<_> =
+                parse_pairs_strict(header).filter_map(Result::err).collect();
             for issue in &lenient_issues {
                 assert!(
                     strict_issues.contains(issue),
@@ -859,7 +860,7 @@ mod tests {
 
     #[test]
     fn each_issue_variant_names_its_defect() {
-        let issues: Vec<PairIssue<'_>> = try_parse_pairs("garbage; =v; na me=x; n=a\u{1}b; ok=1")
+        let issues: Vec<PairIssue<'_>> = parse_pairs("garbage; =v; na me=x; n=a\u{1}b; ok=1")
             .filter_map(Result::err)
             .collect();
         assert_eq!(
@@ -878,7 +879,7 @@ mod tests {
             "issues arrive in wire order, one per refused pair"
         );
         // Strict-only issue: raw whitespace in the value.
-        let strict_only: Vec<PairIssue<'_>> = try_parse_pairs_strict("n=a b")
+        let strict_only: Vec<PairIssue<'_>> = parse_pairs_strict("n=a b")
             .filter_map(Result::err)
             .collect();
         assert_eq!(
@@ -888,7 +889,7 @@ mod tests {
                 value: b"a b"
             }]
         );
-        assert_eq!(try_parse_pairs("n=a b").filter_map(Result::err).count(), 0);
+        assert_eq!(parse_pairs("n=a b").filter_map(Result::err).count(), 0);
     }
 
     #[test]
@@ -896,7 +897,7 @@ mod tests {
         // Empty / OWS-only segments (stray or trailing `;`) never report.
         for header in ["", ";;;", "a=1;", "a=1;  ; b=2", " ; \t; "] {
             assert!(
-                try_parse_pairs(header).filter_map(Result::err).count() == 0,
+                parse_pairs(header).filter_map(Result::err).count() == 0,
                 "{header:?}"
             );
         }
@@ -908,7 +909,7 @@ mod tests {
         // jar_value_borrows_when_octet_clean.
         let header = "bad=a\u{1}b; ok=1";
         let range = header.as_bytes().as_ptr_range();
-        for issue in try_parse_pairs(header).filter_map(Result::err) {
+        for issue in parse_pairs(header).filter_map(Result::err) {
             let PairIssue::InvalidValue { value, .. } = issue else {
                 panic!("expected InvalidValue, got {issue:?}");
             };
@@ -921,33 +922,20 @@ mod tests {
     }
 
     #[test]
-    fn jar_reported_partitions_pairs_and_issues() {
+    fn jar_partitions_pairs_and_issues() {
         let header = "garbage; SID=deadbeef; bad=a\u{1}b; theme=dark";
-        let Reported { value: jar, issues } = CookieJar::parse_reported(header);
+        let Reported { value: jar, issues } = CookieJar::parse(header);
         assert_eq!(jar.get("SID").map(|c| c.value()), Some("deadbeef"));
         assert_eq!(jar.get("theme").map(|c| c.value()), Some("dark"));
         assert_eq!(jar.len(), 2);
         assert_eq!(issues.len(), 2);
-        // The jar equals the plain constructor's — the report costs nothing else.
-        let plain = CookieJar::parse(header);
-        assert_eq!(
-            jar.iter()
-                .map(|c| (c.name(), c.value()))
-                .collect::<Vec<_>>(),
-            plain
-                .iter()
-                .map(|c| (c.name(), c.value()))
-                .collect::<Vec<_>>()
-        );
         // A clean header is clean in every constructor form.
-        assert!(CookieJar::parse_reported("a=1; b=2").is_clean());
-        assert!(CookieJar::parse_strict_reported("a=1; b=2").is_clean());
-        assert!(CookieJar::parse_bytes_reported(b"a=1; b=2").is_clean());
-        assert!(CookieJar::parse_bytes_strict_reported(b"a=1; b=2").is_clean());
+        assert!(CookieJar::parse("a=1; b=2").is_clean());
+        assert!(CookieJar::parse_strict("a=1; b=2").is_clean());
+        assert!(CookieJar::parse_bytes(b"a=1; b=2").is_clean());
+        assert!(CookieJar::parse_bytes_strict(b"a=1; b=2").is_clean());
         // into_result: the user-sketch view.
-        let (salvaged, issues) = CookieJar::parse_reported("junk; a=1")
-            .into_result()
-            .unwrap_err();
+        let (salvaged, issues) = CookieJar::parse("junk; a=1").into_result().unwrap_err();
         assert_eq!(salvaged.len(), 1);
         assert_eq!(issues, vec![PairIssue::MissingEquals { segment: b"junk" }]);
     }
@@ -955,9 +943,9 @@ mod tests {
     #[test]
     fn fail_hard_is_one_collect_away() {
         // The documented fail-hard idiom over the streaming reader.
-        let clean: Result<Vec<_>, _> = try_parse_pairs("a=1; b=2").collect();
+        let clean: Result<Vec<_>, _> = parse_pairs("a=1; b=2").collect();
         assert_eq!(clean.map(|pairs| pairs.len()), Ok(2));
-        let dirty: Result<Vec<_>, _> = try_parse_pairs("a=1; garbage; b=2").collect();
+        let dirty: Result<Vec<_>, _> = parse_pairs("a=1; garbage; b=2").collect();
         assert_eq!(
             dirty,
             Err(PairIssue::MissingEquals {
@@ -967,12 +955,13 @@ mod tests {
     }
 
     #[test]
-    fn reporting_iterators_stay_send() {
-        // The legacy opaque iterators are Send; wrapping must not lose it.
+    fn readers_stay_send() {
+        // The opaque iterators and the report are Send; a rework must not
+        // lose it.
         fn assert_send<T: Send>(_: T) {}
         assert_send(parse_pairs("a=1"));
-        assert_send(try_parse_pairs("a=1"));
-        assert_send(try_parse_pairs_bytes(b"a=1"));
-        assert_send(CookieJar::parse_reported("a=1"));
+        assert_send(parse_pairs_strict("a=1"));
+        assert_send(parse_pairs_bytes(b"a=1"));
+        assert_send(CookieJar::parse("a=1"));
     }
 }

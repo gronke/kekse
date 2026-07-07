@@ -43,7 +43,12 @@ fn percent_is_an_octet_but_self_escapes() {
     assert_eq!(encode_value("%", ValueEncoding::Percent), "%25");
     // `%41` is preserved literally, never decoded to `A`.
     assert_eq!(encode_value("%41", ValueEncoding::Percent), "%2541");
-    let round = parse_pairs("n=%2541").next().unwrap().1.into_owned();
+    let round = parse_pairs("n=%2541")
+        .next()
+        .unwrap()
+        .unwrap()
+        .1
+        .into_owned();
     assert_eq!(round, "%41");
 }
 
@@ -51,7 +56,10 @@ fn percent_is_an_octet_but_self_escapes() {
 fn encode_then_parse_is_identity_across_ascii() {
     for (_, s) in common::ascii_singletons() {
         let wire = format!("n={}", encode_value(&s, ValueEncoding::Percent));
-        let back = parse_pairs(&wire).next().map(|(_, v)| v.into_owned());
+        let back = parse_pairs(&wire)
+            .filter_map(Result::ok)
+            .next()
+            .map(|(_, v)| v.into_owned());
         assert_eq!(back.as_deref(), Some(s.as_str()), "round-trip of {s:?}");
     }
 }
@@ -67,6 +75,7 @@ fn non_octet_bytes_are_escaped_not_emitted_raw() {
         );
         let back = parse_pairs(&format!("n={enc}"))
             .next()
+            .unwrap()
             .unwrap()
             .1
             .into_owned();

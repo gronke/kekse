@@ -19,6 +19,7 @@ use kekse::{BadCookieHeader, CookieJarBuf};
 async fn read_sid(cookies: CookieJarBuf) -> String {
     cookies
         .jar_strict()
+        .value
         .get_all("SID")
         .find(|c| !c.value().is_empty())
         .map(|c| c.value().to_owned())
@@ -29,6 +30,7 @@ async fn read_sid(cookies: CookieJarBuf) -> String {
 async fn read_pref(cookies: CookieJarBuf) -> String {
     cookies
         .jar()
+        .value
         .get("pref")
         .map(|c| c.value().to_owned())
         .unwrap_or_else(|| "<none>".to_owned())

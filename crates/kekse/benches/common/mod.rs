@@ -72,7 +72,7 @@ pub fn query_jar_header() -> String {
 
 /// The parsed form of [`query_jar_header`]'s output.
 pub fn query_jar(header: &str) -> CookieJar<'_> {
-    let jar = CookieJar::parse(header);
+    let jar = CookieJar::parse(header).into_value();
     assert_eq!(jar.len(), 20);
     jar
 }

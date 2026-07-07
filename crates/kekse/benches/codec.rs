@@ -46,7 +46,7 @@ fn cookie_parse(c: &mut Criterion) {
 
     group.throughput(Throughput::Bytes(DIRTY.len() as u64));
     group.bench_function("jar_reported/dirty", |b| {
-        b.iter(|| CookieJar::parse_reported(black_box(DIRTY)))
+        b.iter(|| CookieJar::parse(black_box(DIRTY)))
     });
 
     // The streaming cost alone, without collecting into a jar — the delta to
@@ -105,7 +105,7 @@ fn serialize(c: &mut Criterion) {
         b.iter(|| http::HeaderValue::try_from(black_box(&full)))
     });
 
-    let jar = CookieJar::parse(MEDIUM);
+    let jar = CookieJar::parse(MEDIUM).into_value();
     group.bench_function("jar_to_header_string/medium", |b| {
         b.iter(|| black_box(&jar).to_header_string(ValueEncoding::Percent))
     });

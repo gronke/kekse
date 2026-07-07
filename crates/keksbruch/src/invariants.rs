@@ -10,7 +10,6 @@
 
 use kekse::{
     Cookie, CookieJar, SetCookie, is_cookie_name, parse_pairs_bytes, parse_pairs_bytes_strict,
-    try_parse_pairs_bytes, try_parse_pairs_bytes_strict,
 };
 use rfc_6265::grammar::is_ctl;
 
@@ -52,7 +51,7 @@ pub fn assert_no_injection_echo(wire: &str) {
 /// [`assert_no_injection_echo`] over raw wire bytes.
 pub fn assert_no_injection_echo_bytes(wire: &[u8]) {
     let wire_has_escape = wire.contains(&b'%');
-    for (name, value) in parse_pairs_bytes(wire) {
+    for (name, value) in parse_pairs_bytes(wire).filter_map(Result::ok) {
         assert!(
             is_cookie_name(name),
             "non-token name parsed from {wire:?}: {name:?}"
@@ -83,9 +82,13 @@ pub fn assert_strict_subset_of_lenient(wire: &str) {
 /// [`assert_strict_subset_of_lenient`] over raw wire bytes.
 pub fn assert_strict_subset_of_lenient_bytes(wire: &[u8]) {
     let lenient: Vec<(String, String)> = parse_pairs_bytes(wire)
+        .filter_map(Result::ok)
         .map(|(n, v)| (n.to_string(), v.into_owned()))
         .collect();
-    for pair in parse_pairs_bytes_strict(wire).map(|(n, v)| (n.to_string(), v.into_owned())) {
+    for pair in parse_pairs_bytes_strict(wire)
+        .filter_map(Result::ok)
+        .map(|(n, v)| (n.to_string(), v.into_owned()))
+    {
         assert!(
             lenient.contains(&pair),
             "strict yielded {pair:?}, not present in lenient, for {wire:?}"
@@ -103,11 +106,12 @@ fn assert_issue_display_safe(rendered: &str, wire: &[u8]) {
     );
 }
 
-/// The reporting request readers are the plain readers plus data, never a
-/// different parse. Three prongs:
+/// The issue channel is graded consistently across the request readers.
+/// Three prongs:
 ///
-/// - The `Ok` items of `try_parse_pairs*` equal the plain readers' output
-///   exactly, in both modes — the report can never change what parses.
+/// - The jar constructors partition the stream exactly: `value` is the `Ok`
+///   items, `issues` the `Err` items, both in wire order — the typed view can
+///   never change what parses.
 /// - Lenient's issue set is a subset of strict's — the report dual of
 ///   strict ⊆ lenient: everything lenient refuses, strict refuses too.
 /// - Every rendered issue is control-byte-free (see the no-echo promise).
@@ -118,35 +122,39 @@ pub fn assert_report_consistency(wire: &str) {
 /// [`assert_report_consistency`] over raw wire bytes.
 pub fn assert_report_consistency_bytes(wire: &[u8]) {
     for strict in [false, true] {
-        let plain: Vec<(String, String)> = if strict {
+        let stream: Vec<Result<(String, String), _>> = if strict {
             parse_pairs_bytes_strict(wire)
-                .map(|(n, v)| (n.to_string(), v.into_owned()))
+                .map(|r| r.map(|(n, v)| (n.to_string(), v.into_owned())))
                 .collect()
         } else {
             parse_pairs_bytes(wire)
-                .map(|(n, v)| (n.to_string(), v.into_owned()))
+                .map(|r| r.map(|(n, v)| (n.to_string(), v.into_owned())))
                 .collect()
         };
-        let reported: Vec<(String, String)> = if strict {
-            try_parse_pairs_bytes_strict(wire)
-                .filter_map(Result::ok)
-                .map(|(n, v)| (n.to_string(), v.into_owned()))
-                .collect()
+        let jar = if strict {
+            CookieJar::parse_bytes_strict(wire)
         } else {
-            try_parse_pairs_bytes(wire)
-                .filter_map(Result::ok)
-                .map(|(n, v)| (n.to_string(), v.into_owned()))
-                .collect()
+            CookieJar::parse_bytes(wire)
         };
+        let jar_pairs: Vec<(String, String)> = jar
+            .value
+            .iter()
+            .map(|c| (c.name().to_string(), c.value().to_string()))
+            .collect();
+        let ok_items: Vec<(String, String)> =
+            stream.iter().filter_map(|r| r.clone().ok()).collect();
         assert_eq!(
-            reported, plain,
-            "reporting Ok items diverge from the plain reader (strict={strict}) for {wire:?}"
+            jar_pairs, ok_items,
+            "jar pairs diverge from the stream (strict={strict}) for {wire:?}"
+        );
+        let err_items: Vec<_> = stream.iter().filter_map(|r| r.clone().err()).collect();
+        assert_eq!(
+            jar.issues, err_items,
+            "jar issues diverge from the stream (strict={strict}) for {wire:?}"
         );
     }
-    let lenient_issues: Vec<_> = try_parse_pairs_bytes(wire)
-        .filter_map(Result::err)
-        .collect();
-    let strict_issues: Vec<_> = try_parse_pairs_bytes_strict(wire)
+    let lenient_issues: Vec<_> = parse_pairs_bytes(wire).filter_map(Result::err).collect();
+    let strict_issues: Vec<_> = parse_pairs_bytes_strict(wire)
         .filter_map(Result::err)
         .collect();
     for issue in &lenient_issues {
@@ -209,7 +217,7 @@ pub fn assert_set_cookie_report_consistency(wire: &str) {
 pub fn assert_baseline_parses_clean(baseline: &str, direction: Direction) {
     match direction {
         Direction::Request => {
-            let reported = CookieJar::parse_reported(baseline);
+            let reported = CookieJar::parse(baseline);
             assert!(
                 reported.is_clean(),
                 "kekse-rendered request baseline reported issues: {baseline:?} -> {:?}",

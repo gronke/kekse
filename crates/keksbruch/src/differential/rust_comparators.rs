@@ -54,6 +54,7 @@ impl RustComparator for KekseLenient {
     fn parse_request(&self, wire: &str) -> ParseOutcome {
         ParseOutcome::Cookies {
             cookies: kekse::parse_pairs(wire)
+                .filter_map(Result::ok)
                 .map(|(n, v)| CookieView::new(n, v))
                 .collect(),
         }
@@ -77,6 +78,7 @@ impl RustComparator for KekseStrict {
     fn parse_request(&self, wire: &str) -> ParseOutcome {
         ParseOutcome::Cookies {
             cookies: kekse::parse_pairs_strict(wire)
+                .filter_map(Result::ok)
                 .map(|(n, v)| CookieView::new(n, v))
                 .collect(),
         }
@@ -102,10 +104,11 @@ impl RustComparator for KekseFailHard {
         // Opt-in fail-hard read: any refused pair rejects the whole header (the
         // `try_jar_strict` / `Reported::is_clean` gate), where the strict *reader*
         // would fail-soft and drop it. A clean header yields the same cookies as strict.
-        let reported = kekse::CookieJar::parse_strict_reported(wire);
+        let reported = kekse::CookieJar::parse_strict(wire);
         if reported.is_clean() {
             ParseOutcome::Cookies {
                 cookies: kekse::parse_pairs_strict(wire)
+                    .filter_map(Result::ok)
                     .map(|(n, v)| CookieView::new(n, v))
                     .collect(),
             }
