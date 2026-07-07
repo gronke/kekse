@@ -408,17 +408,34 @@ impl<'a> SetCookie<'a> {
     /// from the same constants the parser matches, so the separator and every
     /// attribute name live in a single place.
     pub fn to_set_cookie(&self) -> String {
-        let attributes = self.set_cookie_attributes();
-        std::iter::once(self.cookie.to_request_pair())
-            .chain(attributes.iter().map(|attribute| attribute.to_string()))
-            .collect::<Vec<_>>()
-            .join("; ")
+        use std::fmt::Write as _;
+        // One up-front reservation: the pair at its decoded size (a lower bound
+        // of the encoded size, exact for clean values) plus every attribute at
+        // its rendered upper bound.
+        let attributes_len: usize = self
+            .attributes_in_order()
+            .map(|attribute| 2 + attribute.rendered_len_upper())
+            .sum();
+        let mut out = String::with_capacity(
+            self.cookie.name().len() + 1 + self.cookie.value().len() + attributes_len,
+        );
+        self.cookie
+            .write_pair_into(&mut out, self.cookie.encoding());
+        for attribute in self.attributes_in_order() {
+            out.push_str("; ");
+            // Writing into a `String` cannot fail; only an (unreachable)
+            // attribute-rendering error could surface here, matching the date
+            // formatter's own panic-on-impossible stance.
+            write!(out, "{attribute}")
+                .expect("rendering a Set-Cookie attribute into a String is infallible");
+        }
+        out
     }
 
     /// The set response attributes as typed values, in the canonical `Set-Cookie`
-    /// order. A boolean flag appears only when `true`; an unset flag or absent
-    /// attribute is omitted.
-    fn set_cookie_attributes(&self) -> Vec<SetCookieAttribute<'a>> {
+    /// order, streamed without materializing a collection. A boolean flag appears
+    /// only when `true`; an unset flag or absent attribute is omitted.
+    fn attributes_in_order(&self) -> impl Iterator<Item = SetCookieAttribute<'a>> {
         let a = &self.attributes;
         [
             a.http_only.then_some(SetCookieAttribute::HttpOnly),
@@ -431,7 +448,13 @@ impl<'a> SetCookie<'a> {
         ]
         .into_iter()
         .flatten()
-        .collect()
+    }
+
+    /// [`attributes_in_order`](SetCookie::attributes_in_order), collected — the
+    /// form the canonical-order unit test asserts against.
+    #[cfg(test)]
+    fn set_cookie_attributes(&self) -> Vec<SetCookieAttribute<'a>> {
+        self.attributes_in_order().collect()
     }
 }
 
@@ -671,6 +694,24 @@ enum SetCookieAttribute<'a> {
     MaxAge(u64),
 }
 
+impl SetCookieAttribute<'_> {
+    /// An upper bound of this attribute's rendered length, for pre-sizing the
+    /// output buffer — a reservation hint only, never a correctness input.
+    fn rendered_len_upper(self) -> usize {
+        match self {
+            Self::HttpOnly => attr_name::HTTP_ONLY.len(),
+            Self::SameSite(same_site) => attr_name::SAME_SITE.len() + 1 + same_site.as_str().len(),
+            Self::Secure => attr_name::SECURE.len(),
+            Self::Path(path) => attr_name::PATH.len() + 1 + path.len(),
+            Self::Domain(domain) => attr_name::DOMAIN.len() + 1 + domain.len(),
+            // An IMF-fixdate is 29 bytes for the four-digit years `time` emits.
+            Self::Expires(_) => attr_name::EXPIRES.len() + 1 + 29,
+            // `u64::MAX` spans 20 decimal digits.
+            Self::MaxAge(_) => attr_name::MAX_AGE.len() + 1 + 20,
+        }
+    }
+}
+
 impl fmt::Display for SetCookieAttribute<'_> {
     /// Render the attribute *without* a leading separator;
     /// [`to_set_cookie`](SetCookie::to_set_cookie) joins the pieces with `"; "`.
@@ -893,6 +934,44 @@ mod tests {
         );
         // A bare cookie has none.
         assert!(SetCookie::new("n", "v").set_cookie_attributes().is_empty());
+    }
+
+    #[test]
+    fn to_set_cookie_equals_the_joined_attribute_renderings() {
+        // The single-buffer writer is byte-identical to joining the pair and
+        // each attribute's own rendering with "; " — checked over every one of
+        // the 2^7 set/unset attribute combinations, with a value the default
+        // encoding escapes.
+        use time::macros::datetime;
+        for mask in 0u8..128 {
+            let mut sc = SetCookie::new("SID", "dead beef");
+            if mask & 1 != 0 {
+                sc = sc.http_only();
+            }
+            if mask & 2 != 0 {
+                sc = sc.same_site(SameSite::Lax);
+            }
+            if mask & 4 != 0 {
+                sc = sc.secure();
+            }
+            if mask & 8 != 0 {
+                sc = sc.path("/app");
+            }
+            if mask & 16 != 0 {
+                sc = sc.domain("example.test");
+            }
+            if mask & 32 != 0 {
+                sc = sc.expires(datetime!(2021-06-09 10:18:14 UTC));
+            }
+            if mask & 64 != 0 {
+                sc = sc.max_age(3600);
+            }
+            let oracle = std::iter::once(sc.to_request_pair())
+                .chain(sc.set_cookie_attributes().iter().map(ToString::to_string))
+                .collect::<Vec<_>>()
+                .join("; ");
+            assert_eq!(sc.to_set_cookie(), oracle, "mask {mask:#09b}");
+        }
     }
 
     #[test]
