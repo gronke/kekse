@@ -1,7 +1,7 @@
-//! The opt-in differential matrix (behind the `differential` feature, never run
-//! in CI): feed every payload to cookie parsers across languages and tabulate
-//! where they diverge — to see whether kekse is *standard* (RFC) and
-//! *expectation* (real-world) compliant.
+//! The opt-in differential matrix (behind the `differential` feature; run by
+//! the dedicated matrix workflow, not the CI gate): feed every payload to
+//! cookie parsers across languages and tabulate where they diverge — to see
+//! whether kekse is *standard* (RFC) and *expectation* (real-world) compliant.
 
 pub mod matrix;
 pub mod result;

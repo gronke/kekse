@@ -2,6 +2,7 @@
 //! python/node/network — runs in CI on a bare runner as a regression oracle. If a
 //! future kekse change alters fail-soft parsing, these assertions break here.
 
+use keksbruch::IssueKind;
 use keksbruch::{
     Direction, Expect, assert_baseline_parses_clean, assert_no_injection_echo,
     assert_no_injection_echo_bytes, assert_pair_conservation, assert_pair_conservation_bytes,
@@ -10,7 +11,7 @@ use keksbruch::{
     assert_strict_subset_of_lenient, assert_strict_subset_of_lenient_bytes, drive, drive_bytes,
     jar_probes, payloads, probe_retrieval, scenarios,
 };
-use kekse::{SetCookie, is_cookie_name, parse_pairs, parse_pairs_strict};
+use kekse::{SetCookie, SetCookieIssue, is_cookie_name, parse_pairs, parse_pairs_strict};
 
 fn pairs(wire: &str, strict: bool) -> Vec<(String, String)> {
     if strict {
@@ -24,6 +25,27 @@ fn pairs(wire: &str, strict: bool) -> Vec<(String, String)> {
             .map(|(n, v)| (n.to_string(), v.into_owned()))
             .collect()
     }
+}
+
+/// The build-independent kinds of a report, for comparison against a row's
+/// pinned `IssueKind` list.
+fn issue_kinds(issues: &[SetCookieIssue<'_>]) -> Vec<IssueKind> {
+    issues
+        .iter()
+        .map(|issue| match issue {
+            SetCookieIssue::UnknownAttribute { .. } => IssueKind::Unknown,
+            SetCookieIssue::DuplicateAttribute { attribute, .. } => {
+                IssueKind::Duplicate(attribute.name())
+            }
+            SetCookieIssue::InvalidAttributeValue { attribute, .. } => {
+                IssueKind::InvalidValue(attribute.name())
+            }
+            SetCookieIssue::FlagWithValue { attribute, .. } => {
+                IssueKind::FlagWithValue(attribute.name())
+            }
+            other => panic!("unmodeled issue variant: {other:?}"),
+        })
+        .collect()
 }
 
 fn owned(want: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -132,36 +154,42 @@ fn each_scenario_matches_its_pinned_expectation() {
                     "{id} strict count"
                 );
             }
-            Expect::ResponseKeptWithIssues { value } => {
+            Expect::ResponseKeptWithIssues { value, issues } => {
                 for (mode, parsed) in [
                     ("strict", SetCookie::parse_strict(&wire)),
                     ("default", SetCookie::parse(&wire)),
                 ] {
                     let reported =
                         parsed.unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"));
-                    assert!(
-                        !reported.is_clean(),
-                        "{id} {mode} must witness the deviation"
-                    );
                     assert_eq!(reported.value.value(), *value, "{id} {mode} value");
+                    assert_eq!(
+                        issue_kinds(&reported.issues).as_slice(),
+                        *issues,
+                        "{id} {mode} witnessed deviations"
+                    );
                 }
             }
-            Expect::ResponseKeptWithIssuesDomain { value, domain } => {
+            Expect::ResponseKeptWithIssuesDomain {
+                value,
+                domain,
+                issues,
+            } => {
                 for (mode, parsed) in [
                     ("strict", SetCookie::parse_strict(&wire)),
                     ("default", SetCookie::parse(&wire)),
                 ] {
                     let reported =
                         parsed.unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"));
-                    assert!(
-                        !reported.is_clean(),
-                        "{id} {mode} must witness the deviation"
-                    );
                     assert_eq!(reported.value.value(), *value, "{id} {mode} value");
                     assert_eq!(
                         reported.value.attributes().domain.map(|d| d.as_str()),
                         *domain,
                         "{id} {mode} Domain — §5.2.2 keeps the earlier valid occurrence"
+                    );
+                    assert_eq!(
+                        issue_kinds(&reported.issues).as_slice(),
+                        *issues,
+                        "{id} {mode} witnessed deviations"
                     );
                 }
             }
@@ -170,14 +198,15 @@ fn each_scenario_matches_its_pinned_expectation() {
                 max_age,
                 http_only,
                 secure,
+                issues,
             } => {
                 for (mode, parsed) in [
                     ("strict", SetCookie::parse_strict(&wire)),
                     ("default", SetCookie::parse(&wire)),
                 ] {
-                    let sc = parsed
-                        .unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"))
-                        .into_value();
+                    let reported =
+                        parsed.unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"));
+                    let sc = &reported.value;
                     assert_eq!(sc.value(), *value, "{id} {mode} value");
                     assert_eq!(sc.attributes().max_age, *max_age, "{id} {mode} max_age");
                     assert_eq!(
@@ -186,6 +215,11 @@ fn each_scenario_matches_its_pinned_expectation() {
                         "{id} {mode} http_only"
                     );
                     assert_eq!(sc.attributes().secure, *secure, "{id} {mode} secure");
+                    assert_eq!(
+                        issue_kinds(&reported.issues).as_slice(),
+                        *issues,
+                        "{id} {mode} witnessed deviations"
+                    );
                 }
             }
             Expect::ResponseDated {
@@ -197,14 +231,25 @@ fn each_scenario_matches_its_pinned_expectation() {
                     ("strict", SetCookie::parse_strict(&wire), *strict_dated),
                     ("default", SetCookie::parse(&wire), *lenient_dated),
                 ] {
-                    let sc = parsed
-                        .unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"))
-                        .into_value();
-                    assert_eq!(sc.value(), *value, "{id} {mode} value");
+                    let reported =
+                        parsed.unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"));
+                    assert_eq!(reported.value.value(), *value, "{id} {mode} value");
                     assert_eq!(
-                        sc.attributes().expires.is_some(),
+                        reported.value.attributes().expires.is_some(),
                         want_dated,
                         "{id} {mode} expires presence"
+                    );
+                    // Every dated row's wire is `pair; Expires=…`, so an undated
+                    // outcome must be witnessed by exactly the Expires drop.
+                    let want_issues: &[IssueKind] = if want_dated {
+                        &[]
+                    } else {
+                        &[IssueKind::InvalidValue("Expires")]
+                    };
+                    assert_eq!(
+                        issue_kinds(&reported.issues).as_slice(),
+                        want_issues,
+                        "{id} {mode} witnessed deviations"
                     );
                 }
             }
@@ -227,14 +272,23 @@ fn each_scenario_matches_its_pinned_expectation() {
                     ("strict", SetCookie::parse_strict(&wire), *strict),
                     ("default", SetCookie::parse(&wire), *lenient),
                 ] {
-                    let sc = parsed
-                        .unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"))
-                        .into_value();
-                    assert_eq!(sc.value(), *value, "{id} {mode} value");
+                    let reported =
+                        parsed.unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"));
+                    assert_eq!(reported.value.value(), *value, "{id} {mode} value");
                     assert_eq!(
-                        sc.attributes().expires,
+                        reported.value.attributes().expires,
                         decode(want, mode),
                         "{id} {mode} expires instant"
+                    );
+                    let want_issues: &[IssueKind] = if want.is_some() {
+                        &[]
+                    } else {
+                        &[IssueKind::InvalidValue("Expires")]
+                    };
+                    assert_eq!(
+                        issue_kinds(&reported.issues).as_slice(),
+                        want_issues,
+                        "{id} {mode} witnessed deviations"
                     );
                 }
             }
@@ -256,14 +310,25 @@ fn each_scenario_matches_its_pinned_expectation() {
                     ("strict", SetCookie::parse_strict(&wire)),
                     ("default", SetCookie::parse(&wire)),
                 ] {
-                    let sc = parsed
-                        .unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"))
-                        .into_value();
-                    assert_eq!(sc.value(), *value, "{id} {mode} value");
+                    let reported =
+                        parsed.unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"));
+                    assert_eq!(reported.value.value(), *value, "{id} {mode} value");
                     assert_eq!(
-                        sc.attributes().domain.map(|d| d.as_str()),
+                        reported.value.attributes().domain.map(|d| d.as_str()),
                         want_domain,
                         "{id} {mode} domain"
+                    );
+                    // Every domain row's wire is `pair; Domain=…`, so a refused
+                    // Domain must be witnessed by exactly that drop.
+                    let want_issues: &[IssueKind] = if want_domain.is_some() {
+                        &[]
+                    } else {
+                        &[IssueKind::InvalidValue("Domain")]
+                    };
+                    assert_eq!(
+                        issue_kinds(&reported.issues).as_slice(),
+                        want_issues,
+                        "{id} {mode} witnessed deviations"
                     );
                 }
             }
@@ -274,33 +339,50 @@ fn each_scenario_matches_its_pinned_expectation() {
                     ("strict", SetCookie::parse_strict(&wire)),
                     ("default", SetCookie::parse(&wire)),
                 ] {
-                    let sc = parsed
-                        .unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"))
-                        .into_value();
-                    assert_eq!(sc.value(), *value, "{id} {mode} value");
+                    let reported =
+                        parsed.unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"));
+                    assert_eq!(reported.value.value(), *value, "{id} {mode} value");
                     assert_eq!(
-                        sc.attributes().path.map(|p| p.as_str()),
+                        reported.value.attributes().path.map(|p| p.as_str()),
                         *path,
                         "{id} {mode} path"
                     );
+                    let want_issues: &[IssueKind] = if path.is_some() {
+                        &[]
+                    } else {
+                        &[IssueKind::InvalidValue("Path")]
+                    };
+                    assert_eq!(
+                        issue_kinds(&reported.issues).as_slice(),
+                        want_issues,
+                        "{id} {mode} witnessed deviations"
+                    );
                 }
             }
-            Expect::ResponseSameSite { value, same_site } => {
+            Expect::ResponseSameSite {
+                value,
+                same_site,
+                issues,
+            } => {
                 // kekse's SameSite is a closed typed enum; a malformed value is
-                // dropped (reported, never fatal) in BOTH modes, so strict and
-                // lenient agree. The pin compares canonical `as_str()` renderings.
+                // dropped — witnessed, never fatal — in BOTH gradings, so strict
+                // and lenient agree. The pin compares canonical `as_str()` forms.
                 for (mode, parsed) in [
                     ("strict", SetCookie::parse_strict(&wire)),
                     ("default", SetCookie::parse(&wire)),
                 ] {
-                    let sc = parsed
-                        .unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"))
-                        .into_value();
-                    assert_eq!(sc.value(), *value, "{id} {mode} value");
+                    let reported =
+                        parsed.unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"));
+                    assert_eq!(reported.value.value(), *value, "{id} {mode} value");
                     assert_eq!(
-                        sc.attributes().same_site.map(|s| s.as_str()),
+                        reported.value.attributes().same_site.map(|s| s.as_str()),
                         *same_site,
                         "{id} {mode} same_site"
+                    );
+                    assert_eq!(
+                        issue_kinds(&reported.issues).as_slice(),
+                        *issues,
+                        "{id} {mode} witnessed deviations"
                     );
                 }
             }
