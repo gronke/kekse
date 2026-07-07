@@ -9,8 +9,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - `rfc_6265`: `date::ImfFixdate`, a lazy `Display` of the canonical IMF-fixdate that renders onto a stack buffer; `format_imf_fixdate` delegates to it.
 - Criterion benchmarks for the codec hot paths (`benches/codec.rs`) and a deterministic allocation-count companion (`benches/allocs.rs`), both dev-only.
+- `InvalidPath` / `InvalidDomain`: the typed refusals of `Path::new` / `Domain::new`, naming the failed gate and carrying the refused value, rendered control-byte-free.
+- keksbruch: two universal invariants — conservation (every non-noise request segment yields an `Ok` pair or an issue) and divergence witness (a salvaged `Set-Cookie` covers every dropped attribute segment with an issue and is a render/re-parse fixpoint) — plus exact per-scenario `IssueKind` pins.
 
 ### Changed
+
+- **Breaking:** every reader returns the observable form, and the lenient/strict choice dials only the grading — strict accepts a subset of what lenient accepts, and nothing is ever dropped silently.
+  The `parse_pairs` family yields `Result` items, `CookieJar::parse` / `parse_strict` (and the bytes twins) return `Reported<CookieJar, PairIssue>`, and `SetCookie::parse` / `parse_strict` return the salvaged cookie plus its `SetCookieIssue`s with the unusable pair as the `PairIssue` error.
+  The `try_` / `_reported` twins are gone — their behavior is the only behavior — and `Reported` is `#[must_use]`.
+- **Breaking:** `Set-Cookie` fatality is grading-independent.
+  Strict grading no longer rejects an unknown or duplicate attribute; like lenient it recovers (ignore per RFC 6265 §5.2, last-wins) and witnesses the deviation, and the gradings differ only in the `Expires` dialect (IMF-fixdate vs cookie-date).
+  Enforcement is the `is_clean` gate; `SetCookieIssue::InvalidPair` is removed.
+- **Breaking:** `Path::new` / `Domain::new` return `Result`, and the `path` / `domain` setters take the validated newtypes — a builder chain can no longer swallow an invalid value.
+- The axum `jar()` / `jar_strict()` views return the reported jar; `jar_reported` / `jar_strict_reported` are merged away, and `try_jar` / `try_jar_strict` keep the one-line 400 gate.
 
 - The value decoder gates and escape-scans each value in one pass, so a clean value skips percent-decoding entirely; typical `Cookie:` headers parse 25-30% faster.
 - Pairs, jars, and `Set-Cookie` values render into one pre-sized buffer: a full `Set-Cookie` makes a single heap request (previously thirteen), and `CookieJar::to_header_string` one (previously two per cookie plus the join).

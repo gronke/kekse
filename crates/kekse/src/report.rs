@@ -97,8 +97,8 @@ impl std::error::Error for PairIssue<'_> {}
 /// (`Vec::new` holds no buffer).
 ///
 /// Returned by [`CookieJar::parse`](crate::CookieJar::parse) (and its strict /
-/// bytes twins) with `I` = [`PairIssue`], and by
-/// [`SetCookie::try_parse`](crate::SetCookie::try_parse) with `I` =
+/// bytes twins) with `I` = [`PairIssue`], and inside
+/// [`SetCookie::parse`](crate::SetCookie::parse)'s `Ok` with `I` =
 /// [`SetCookieIssue`](crate::SetCookieIssue).
 #[must_use = "the report carries both the parsed value and what was refused"]
 #[derive(Clone, Debug, PartialEq, Eq)]
