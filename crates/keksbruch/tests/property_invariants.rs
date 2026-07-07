@@ -14,8 +14,9 @@
 use proptest::prelude::*;
 
 use keksbruch::{
-    assert_no_injection_echo, assert_no_injection_echo_bytes, assert_report_consistency,
-    assert_report_consistency_bytes, assert_set_cookie_report_consistency,
+    assert_no_injection_echo, assert_no_injection_echo_bytes, assert_pair_conservation,
+    assert_pair_conservation_bytes, assert_report_consistency, assert_report_consistency_bytes,
+    assert_response_divergence_witnessed, assert_set_cookie_report_consistency,
     assert_strict_subset_of_lenient, assert_strict_subset_of_lenient_bytes, drive, drive_bytes,
 };
 use kekse::{Cookie, ValueEncoding, parse_pairs, parse_pairs_strict};
@@ -92,6 +93,7 @@ proptest! {
         assert_no_injection_echo(&wire);
         assert_strict_subset_of_lenient(&wire);
         assert_report_consistency(&wire);
+        assert_pair_conservation(&wire);
     }
 
     /// Header-shaped ASCII (printable + HTAB) — denser coverage of the
@@ -102,6 +104,7 @@ proptest! {
         assert_no_injection_echo(&wire);
         assert_strict_subset_of_lenient(&wire);
         assert_report_consistency(&wire);
+        assert_pair_conservation(&wire);
     }
 
     /// Arbitrary bytes through the byte-level readers — the space a `&str` can
@@ -112,6 +115,7 @@ proptest! {
         assert_no_injection_echo_bytes(&wire);
         assert_strict_subset_of_lenient_bytes(&wire);
         assert_report_consistency_bytes(&wire);
+        assert_pair_conservation_bytes(&wire);
     }
 
     /// kekse-rendered wire with one adversarial byte spliced in: the corruption
@@ -122,13 +126,16 @@ proptest! {
         assert_no_injection_echo_bytes(&wire);
         assert_strict_subset_of_lenient_bytes(&wire);
         assert_report_consistency_bytes(&wire);
+        assert_pair_conservation_bytes(&wire);
     }
 
-    /// The `Set-Cookie` reporting readers agree with the plain ones on arbitrary
-    /// wire — same fatality, same cookie, control-safe issues.
+    /// The `Set-Cookie` gradings agree on arbitrary wire — equal fatality,
+    /// subset salvage and issues, control-safe renders — and no drop or
+    /// mutation goes unwitnessed.
     #[test]
     fn set_cookie_report_stays_consistent(wire in r"[ -~\t]{0,120}") {
         assert_set_cookie_report_consistency(&wire);
+        assert_response_divergence_witnessed(&wire);
     }
 
     /// Every managed encoding round-trips losslessly through the lenient reader

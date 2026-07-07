@@ -39,7 +39,8 @@ mod taxonomy;
 
 pub use invariants::{
     assert_baseline_parses_clean, assert_no_injection_echo, assert_no_injection_echo_bytes,
-    assert_report_consistency, assert_report_consistency_bytes,
+    assert_pair_conservation, assert_pair_conservation_bytes, assert_report_consistency,
+    assert_report_consistency_bytes, assert_response_divergence_witnessed,
     assert_set_cookie_report_consistency, assert_strict_subset_of_lenient,
     assert_strict_subset_of_lenient_bytes, drive, drive_bytes,
 };

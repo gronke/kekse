@@ -4,10 +4,11 @@
 
 use keksbruch::{
     Direction, Expect, assert_baseline_parses_clean, assert_no_injection_echo,
-    assert_no_injection_echo_bytes, assert_report_consistency, assert_report_consistency_bytes,
-    assert_set_cookie_report_consistency, assert_strict_subset_of_lenient,
-    assert_strict_subset_of_lenient_bytes, drive, drive_bytes, jar_probes, payloads,
-    probe_retrieval, scenarios,
+    assert_no_injection_echo_bytes, assert_pair_conservation, assert_pair_conservation_bytes,
+    assert_report_consistency, assert_report_consistency_bytes,
+    assert_response_divergence_witnessed, assert_set_cookie_report_consistency,
+    assert_strict_subset_of_lenient, assert_strict_subset_of_lenient_bytes, drive, drive_bytes,
+    jar_probes, payloads, probe_retrieval, scenarios,
 };
 use kekse::{SetCookie, is_cookie_name, parse_pairs, parse_pairs_strict};
 
@@ -50,18 +51,22 @@ fn every_keksbruch_survives_the_universal_invariants() {
             assert_no_injection_echo_bytes(&wire);
             assert_strict_subset_of_lenient_bytes(&wire);
             assert_report_consistency_bytes(&wire);
+            assert_pair_conservation_bytes(&wire);
         }
         match recipe.render_str() {
             Some(wire) if recipe.direction == Direction::Request => {
                 drive(&wire); // never panics
                 assert_no_injection_echo(&wire); // no ; CR LF NUL echoed
                 assert_strict_subset_of_lenient(&wire); // strict only removes
-                assert_report_consistency(&wire); // reporting = plain + data
+                assert_report_consistency(&wire); // jar = stream, graded consistently
+                assert_pair_conservation(&wire); // every segment lands somewhere
             }
             Some(wire) => {
-                // The reporting Set-Cookie readers agree with the plain ones on
-                // every corrupted response wire, and their issues render safely.
+                // The gradings agree on every corrupted response wire, their
+                // issues render safely, and no drop or mutation goes
+                // unwitnessed.
                 assert_set_cookie_report_consistency(&wire);
+                assert_response_divergence_witnessed(&wire);
                 // Response: parsing never panics. The cookie value is decoded and
                 // octet-validated, so it is always injection-free. Attribute values
                 // (Path/Domain) are stored raw, so the wire boundary is the
