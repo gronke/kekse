@@ -12,7 +12,7 @@ fn main() {
         .http_only()
         .secure()
         .same_site(SameSite::Strict)
-        .path("/")
+        .path(Path::new("/").expect("`/` is av-octet-clean"))
         .max_age(3600)
         .to_set_cookie();
     println!("1. built:       {header}");
@@ -35,7 +35,7 @@ fn main() {
         .http_only()
         .secure()
         .same_site(SameSite::Lax)
-        .path("/");
+        .path(Path::new("/").expect("`/` is av-octet-clean"));
     for (name, value) in [("SID", "deadbeef"), ("csrf", "tok-123")] {
         let line = Cookie::new(name, value)
             .with_attributes(hardened.clone())
@@ -45,12 +45,13 @@ fn main() {
 
     // 4. The same attributes as a plain struct literal — `CookieAttributes` has
     //    public fields and derives `Default`, so the verbs are optional sugar.
-    //    (`path`/`domain` are validated newtypes: `Path::new` already returns an `Option`.)
+    //    (`path`/`domain` are validated newtypes: `Path::new` refuses a value
+    //    that could break the header line, naming it in the error.)
     let attrs = CookieAttributes {
         http_only: true,
         secure: true,
         same_site: Some(SameSite::Strict),
-        path: Path::new("/"),
+        path: Path::new("/").ok(),
         max_age: Some(3600),
         ..Default::default()
     };

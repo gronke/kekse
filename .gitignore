@@ -3,3 +3,6 @@
 /.rust-ci
 # Sealed CARGO_HOME the gronke/rust-ci Docker actions populate.
 /.cargo-cache
+
+# Linux core dumps (a crashed bench process would land one in a crate dir)
+core.*
