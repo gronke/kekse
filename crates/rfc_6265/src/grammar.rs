@@ -17,6 +17,7 @@
 /// assert!(!is_cookie_octet(b';') && !is_cookie_octet(b' '));
 /// ```
 #[must_use]
+#[inline]
 pub const fn is_cookie_octet(b: u8) -> bool {
     matches!(b, 0x21 | 0x23..=0x2b | 0x2d..=0x3a | 0x3c..=0x5b | 0x5d..=0x7e)
 }
@@ -31,6 +32,7 @@ pub const fn is_cookie_octet(b: u8) -> bool {
 /// assert!(!is_av_octet(b';')); // the attribute delimiter
 /// ```
 #[must_use]
+#[inline]
 pub const fn is_av_octet(b: u8) -> bool {
     matches!(b, 0x20..=0x3a | 0x3c..=0x7e)
 }
@@ -43,6 +45,7 @@ pub const fn is_av_octet(b: u8) -> bool {
 /// assert!(!is_ws(b'\n'));
 /// ```
 #[must_use]
+#[inline]
 pub const fn is_ws(b: u8) -> bool {
     b == b' ' || b == b'\t'
 }
@@ -56,6 +59,7 @@ pub const fn is_ws(b: u8) -> bool {
 /// assert!(!is_ctl(b'a'));
 /// ```
 #[must_use]
+#[inline]
 pub const fn is_ctl(b: u8) -> bool {
     matches!(b, 0x00..=0x1f | 0x7f)
 }
@@ -69,6 +73,7 @@ pub const fn is_ctl(b: u8) -> bool {
 /// assert!(!is_tchar(b'(') && !is_tchar(b'/')); // delimiters
 /// ```
 #[must_use]
+#[inline]
 pub const fn is_tchar(b: u8) -> bool {
     matches!(b,
         b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z'
@@ -86,6 +91,7 @@ pub const fn is_tchar(b: u8) -> bool {
 /// assert!(!is_cookie_name("") && !is_cookie_name("a b") && !is_cookie_name("a=b"));
 /// ```
 #[must_use]
+#[inline]
 pub const fn is_cookie_name(name: &str) -> bool {
     is_cookie_name_bytes(name.as_bytes())
 }
@@ -101,6 +107,7 @@ pub const fn is_cookie_name(name: &str) -> bool {
 /// assert!(!is_cookie_name_bytes(b"caf\xc3\xa9")); // non-ASCII is never a token
 /// ```
 #[must_use]
+#[inline]
 pub const fn is_cookie_name_bytes(name: &[u8]) -> bool {
     if name.is_empty() {
         return false;
