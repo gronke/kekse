@@ -84,11 +84,20 @@ pub(crate) fn decode_cookie_value(raw_value: &[u8], allow_ws: bool) -> Option<Co
         .strip_prefix(b"\"")
         .and_then(|inner| inner.strip_suffix(b"\""))
         .unwrap_or(value);
-    if !value
-        .iter()
-        .all(|&b| is_cookie_octet(b) || (allow_ws && is_ws(b)))
-    {
-        return None;
+    // One pass gates every byte and notes whether the escape introducer occurs
+    // at all — `%` is itself a cookie-octet, so the note adds no acceptance.
+    let mut has_escape_introducer = false;
+    for &b in value {
+        if !(is_cookie_octet(b) || (allow_ws && is_ws(b))) {
+            return None;
+        }
+        has_escape_introducer |= b == b'%';
+    }
+    if !has_escape_introducer {
+        // Without `%`, percent-decoding is the identity, and the gate admits
+        // only ASCII, so the borrowed UTF-8 view is free. `from_utf8` cannot
+        // fail here; `.ok()` keeps the no-panic promise without `unsafe`.
+        return std::str::from_utf8(value).ok().map(Cow::Borrowed);
     }
     percent_decode(value).decode_utf8().ok()
 }
@@ -96,6 +105,46 @@ pub(crate) fn decode_cookie_value(raw_value: &[u8], allow_ws: bool) -> Option<Co
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decode_borrows_exactly_when_no_escape_decodes() {
+        // Octet-clean without `%`: borrowed, OWS-trimmed, quotes stripped.
+        for (raw, decoded) in [
+            (&b"deadbeef"[..], "deadbeef"),
+            (b" deadbeef\t", "deadbeef"),
+            (b"\"deadbeef\"", "deadbeef"),
+            (b"", ""),
+        ] {
+            assert!(
+                matches!(decode_cookie_value(raw, false), Some(Cow::Borrowed(v)) if v == decoded),
+                "{raw:?}"
+            );
+        }
+        // `%` without a decodable escape passes through, still borrowed.
+        for raw in [&b"100%zz"[..], b"50%", b"%", b"a%2xb"] {
+            assert!(
+                matches!(decode_cookie_value(raw, false), Some(Cow::Borrowed(_))),
+                "{raw:?}"
+            );
+        }
+        // A decodable escape allocates the decoded form.
+        for (raw, decoded) in [(&b"a%20b"[..], "a b"), (b"caf%C3%A9", "café")] {
+            assert!(
+                matches!(decode_cookie_value(raw, false), Some(Cow::Owned(v)) if v == decoded),
+                "{raw:?}"
+            );
+        }
+        // Escapes that decode to invalid UTF-8 refuse the value.
+        assert_eq!(decode_cookie_value(b"a%FFb", false), None);
+        // A byte outside the accepted set refuses the value before any decode;
+        // SP is inside the set exactly when `allow_ws`.
+        assert_eq!(decode_cookie_value(b"a,b", true), None);
+        assert_eq!(decode_cookie_value(b"a b", false), None);
+        assert!(matches!(
+            decode_cookie_value(b"a b", true),
+            Some(Cow::Borrowed("a b"))
+        ));
+    }
 
     #[test]
     fn auto_emits_bare_quoted_or_percent() {
