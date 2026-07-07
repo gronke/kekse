@@ -68,7 +68,8 @@ fn every_keksbruch_survives_the_universal_invariants() {
                 // HeaderValue conversion — if it succeeds the bytes carry no
                 // injection; a raw byte that would inject is rejected there.
                 let _ = SetCookie::parse_strict(&wire);
-                if let Some(sc) = SetCookie::parse(&wire) {
+                if let Ok(reported) = SetCookie::parse(&wire) {
+                    let sc = reported.into_value();
                     assert!(
                         !sc.value()
                             .bytes()
@@ -128,20 +129,22 @@ fn each_scenario_matches_its_pinned_expectation() {
             }
             Expect::ResponseStrictRejectsLenientKeeps { value } => {
                 assert!(
-                    SetCookie::parse_strict(&wire).is_none(),
+                    SetCookie::parse_strict(&wire).is_err(),
                     "{id} strict must reject"
                 );
                 let sc = SetCookie::parse(&wire)
-                    .unwrap_or_else(|| panic!("{id} default must keep the cookie"));
+                    .unwrap_or_else(|_| panic!("{id} default must keep the cookie"))
+                    .into_value();
                 assert_eq!(sc.value(), *value, "{id} value");
             }
             Expect::ResponseStrictRejectsLenientKeepsDomain { value, domain } => {
                 assert!(
-                    SetCookie::parse_strict(&wire).is_none(),
+                    SetCookie::parse_strict(&wire).is_err(),
                     "{id} strict must reject"
                 );
                 let sc = SetCookie::parse(&wire)
-                    .unwrap_or_else(|| panic!("{id} default must keep the cookie"));
+                    .unwrap_or_else(|_| panic!("{id} default must keep the cookie"))
+                    .into_value();
                 assert_eq!(sc.value(), *value, "{id} value");
                 assert_eq!(
                     sc.attributes().domain.map(|d| d.as_str()),
@@ -159,7 +162,9 @@ fn each_scenario_matches_its_pinned_expectation() {
                     ("strict", SetCookie::parse_strict(&wire)),
                     ("default", SetCookie::parse(&wire)),
                 ] {
-                    let sc = parsed.unwrap_or_else(|| panic!("{id} {mode} must keep the cookie"));
+                    let sc = parsed
+                        .unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"))
+                        .into_value();
                     assert_eq!(sc.value(), *value, "{id} {mode} value");
                     assert_eq!(sc.attributes().max_age, *max_age, "{id} {mode} max_age");
                     assert_eq!(
@@ -179,7 +184,9 @@ fn each_scenario_matches_its_pinned_expectation() {
                     ("strict", SetCookie::parse_strict(&wire), *strict_dated),
                     ("default", SetCookie::parse(&wire), *lenient_dated),
                 ] {
-                    let sc = parsed.unwrap_or_else(|| panic!("{id} {mode} must keep the cookie"));
+                    let sc = parsed
+                        .unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"))
+                        .into_value();
                     assert_eq!(sc.value(), *value, "{id} {mode} value");
                     assert_eq!(
                         sc.attributes().expires.is_some(),
@@ -207,7 +214,9 @@ fn each_scenario_matches_its_pinned_expectation() {
                     ("strict", SetCookie::parse_strict(&wire), *strict),
                     ("default", SetCookie::parse(&wire), *lenient),
                 ] {
-                    let sc = parsed.unwrap_or_else(|| panic!("{id} {mode} must keep the cookie"));
+                    let sc = parsed
+                        .unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"))
+                        .into_value();
                     assert_eq!(sc.value(), *value, "{id} {mode} value");
                     assert_eq!(
                         sc.attributes().expires,
@@ -234,7 +243,9 @@ fn each_scenario_matches_its_pinned_expectation() {
                     ("strict", SetCookie::parse_strict(&wire)),
                     ("default", SetCookie::parse(&wire)),
                 ] {
-                    let sc = parsed.unwrap_or_else(|| panic!("{id} {mode} must keep the cookie"));
+                    let sc = parsed
+                        .unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"))
+                        .into_value();
                     assert_eq!(sc.value(), *value, "{id} {mode} value");
                     assert_eq!(
                         sc.attributes().domain.map(|d| d.as_str()),
@@ -250,7 +261,9 @@ fn each_scenario_matches_its_pinned_expectation() {
                     ("strict", SetCookie::parse_strict(&wire)),
                     ("default", SetCookie::parse(&wire)),
                 ] {
-                    let sc = parsed.unwrap_or_else(|| panic!("{id} {mode} must keep the cookie"));
+                    let sc = parsed
+                        .unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"))
+                        .into_value();
                     assert_eq!(sc.value(), *value, "{id} {mode} value");
                     assert_eq!(
                         sc.attributes().path.map(|p| p.as_str()),
@@ -267,7 +280,9 @@ fn each_scenario_matches_its_pinned_expectation() {
                     ("strict", SetCookie::parse_strict(&wire)),
                     ("default", SetCookie::parse(&wire)),
                 ] {
-                    let sc = parsed.unwrap_or_else(|| panic!("{id} {mode} must keep the cookie"));
+                    let sc = parsed
+                        .unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"))
+                        .into_value();
                     assert_eq!(sc.value(), *value, "{id} {mode} value");
                     assert_eq!(
                         sc.attributes().same_site.map(|s| s.as_str()),
@@ -277,8 +292,8 @@ fn each_scenario_matches_its_pinned_expectation() {
                 }
             }
             Expect::ResponseNone => {
-                assert!(SetCookie::parse_strict(&wire).is_none(), "{id} strict");
-                assert!(SetCookie::parse(&wire).is_none(), "{id} default");
+                assert!(SetCookie::parse_strict(&wire).is_err(), "{id} strict");
+                assert!(SetCookie::parse(&wire).is_err(), "{id} default");
             }
             Expect::Unrepresentable => unreachable!("handled before the value match"),
         }

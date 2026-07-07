@@ -61,11 +61,11 @@ impl RustComparator for KekseLenient {
     }
     fn parse_response(&self, wire: &str) -> ParseOutcome {
         match kekse::SetCookie::parse(wire) {
-            Some(sc) => ParseOutcome::SetCookie {
-                set_cookie: kekse_view(&sc),
+            Ok(reported) => ParseOutcome::SetCookie {
+                set_cookie: kekse_view(&reported.value),
             },
-            None => ParseOutcome::SetCookieRejected {
-                error: "None".to_string(),
+            Err(fatal) => ParseOutcome::SetCookieRejected {
+                error: fatal.to_string(),
             },
         }
     }
@@ -84,13 +84,13 @@ impl RustComparator for KekseStrict {
         }
     }
     fn parse_response(&self, wire: &str) -> ParseOutcome {
-        // kekse's opt-in `parse_strict` rejects on an unknown attribute.
+        // kekse's opt-in strict grading rejects on an unknown attribute.
         match kekse::SetCookie::parse_strict(wire) {
-            Some(sc) => ParseOutcome::SetCookie {
-                set_cookie: kekse_view(&sc),
+            Ok(reported) => ParseOutcome::SetCookie {
+                set_cookie: kekse_view(&reported.value),
             },
-            None => ParseOutcome::SetCookieRejected {
-                error: "None".to_string(),
+            Err(fatal) => ParseOutcome::SetCookieRejected {
+                error: fatal.to_string(),
             },
         }
     }
@@ -121,7 +121,7 @@ impl RustComparator for KekseFailHard {
     fn parse_response(&self, wire: &str) -> ParseOutcome {
         // Stricter than strict: a fatal issue *or* any reported (dropped) attribute
         // rejects the cookie, rather than keeping it and dropping the bad piece.
-        match kekse::SetCookie::try_parse_strict(wire) {
+        match kekse::SetCookie::parse_strict(wire) {
             Ok(reported) if reported.is_clean() => ParseOutcome::SetCookie {
                 set_cookie: kekse_view(&reported.value),
             },

@@ -22,7 +22,7 @@ fn case_insensitive_parse_through_set_cookie() {
         ("NONE", SameSite::None),
     ] {
         let header = format!("n=v; SameSite={token}");
-        let c = SetCookie::parse(&header).unwrap();
+        let c = SetCookie::parse(&header).unwrap().into_value();
         assert_eq!(c.attributes().same_site, Some(want), "{token:?}");
     }
 }
@@ -34,7 +34,7 @@ fn unknown_token_dropped_cookie_kept() {
         "n=v; SameSite=",
         "n=v; SameSite=Strictish",
     ] {
-        let c = SetCookie::parse(bad).unwrap();
+        let c = SetCookie::parse(bad).unwrap().into_value();
         assert_eq!(c.attributes().same_site, None, "{bad:?}");
         assert_eq!(c.value(), "v");
     }
@@ -44,7 +44,7 @@ fn unknown_token_dropped_cookie_kept() {
 fn round_trips_through_render() {
     for v in [SameSite::Strict, SameSite::Lax, SameSite::None] {
         let rendered = SetCookie::new("n", "v").same_site(v).to_set_cookie();
-        let reparsed = SetCookie::parse(&rendered).unwrap();
+        let reparsed = SetCookie::parse(&rendered).unwrap().into_value();
         assert_eq!(reparsed.attributes().same_site, Some(v));
     }
 }
@@ -53,7 +53,7 @@ fn round_trips_through_render() {
 fn none_does_not_require_or_add_secure() {
     // kekse is a codec, not a policy engine: `SameSite=None` is stored and
     // rendered without a `Secure` flag, and is not rejected for lacking one.
-    let c = SetCookie::parse("n=v; SameSite=None").unwrap();
+    let c = SetCookie::parse("n=v; SameSite=None").unwrap().into_value();
     assert_eq!(c.attributes().same_site, Some(SameSite::None));
     assert!(!c.attributes().secure);
     assert_eq!(

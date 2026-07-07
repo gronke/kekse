@@ -70,7 +70,9 @@ fn main() {
         .with_encoding(ValueEncoding::Percent)
         .max_age(60)
         .to_set_cookie();
-    let parsed = SetCookie::parse(&wire).expect("our own output round-trips");
+    let parsed = SetCookie::parse(&wire)
+        .expect("our own output round-trips")
+        .into_value();
     println!(
         "5. round-trip:  {wire:?} -> name={:?} value={:?} max_age={:?}",
         parsed.name(),
