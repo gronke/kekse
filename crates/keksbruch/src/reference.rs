@@ -53,9 +53,10 @@ pub fn probe_retrieval(
 
     // §5.2: the wire layer. kekse's lenient parse is the codec under test elsewhere; here it
     // only lifts the header into (name, value, attributes) so the §5.3 algorithm can run.
-    let Some(sc) = kekse::SetCookie::parse(set_cookie) else {
+    let Ok(reported) = kekse::SetCookie::parse(set_cookie) else {
         return Vec::new();
     };
+    let sc = reported.into_value();
     let attrs = sc.attributes();
     let request_host = canonicalize(origin.host);
 

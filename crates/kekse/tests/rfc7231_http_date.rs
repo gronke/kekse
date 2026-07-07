@@ -7,11 +7,15 @@ use kekse::{OffsetDateTime, SetCookie};
 use time::macros::datetime;
 
 fn lenient(h: &str) -> Option<OffsetDateTime> {
-    SetCookie::parse(h).and_then(|c| c.attributes().expires)
+    SetCookie::parse(h)
+        .ok()
+        .and_then(|r| r.value.attributes().expires)
 }
 
 fn strict(h: &str) -> Option<OffsetDateTime> {
-    SetCookie::parse_strict(h).and_then(|c| c.attributes().expires)
+    SetCookie::parse_strict(h)
+        .ok()
+        .and_then(|r| r.value.attributes().expires)
 }
 
 #[test]
@@ -40,7 +44,7 @@ fn strict_accepts_only_the_imf_fixdate() {
         "n=v; Expires=Sun Nov  6 08:49:37 1994",       // asctime()
         "n=v; Expires=sun, 06 nov 1994 08:49:37 gmt",  // wrong casing
     ] {
-        let c = SetCookie::parse_strict(bad).unwrap();
+        let c = SetCookie::parse_strict(bad).unwrap().into_value();
         assert_eq!(c.attributes().expires, None, "{bad:?}");
         assert_eq!(c.value(), "v", "{bad:?} keeps the cookie, drops the date");
     }
@@ -73,7 +77,7 @@ fn write_side_emits_canonical_imf_fixdate() {
 fn expires_round_trips_through_render_and_strict_parse() {
     let dt = datetime!(2030-12-31 23:59:59 UTC);
     let rendered = SetCookie::new("SID", "x").expires(dt).to_set_cookie();
-    let reparsed = SetCookie::parse_strict(&rendered).unwrap();
+    let reparsed = SetCookie::parse_strict(&rendered).unwrap().into_value();
     assert_eq!(reparsed.attributes().expires, Some(dt));
 }
 
@@ -81,7 +85,9 @@ fn expires_round_trips_through_render_and_strict_parse() {
 fn expires_and_max_age_coexist_independently() {
     // §5.3 precedence (Max-Age wins) is a cookie-store concern; the codec keeps both.
     let dt = datetime!(2021-06-09 10:18:14 UTC);
-    let c = SetCookie::parse("SID=x; Expires=Wed, 09 Jun 2021 10:18:14 GMT; Max-Age=60").unwrap();
+    let c = SetCookie::parse("SID=x; Expires=Wed, 09 Jun 2021 10:18:14 GMT; Max-Age=60")
+        .unwrap()
+        .into_value();
     assert_eq!(c.attributes().expires, Some(dt));
     assert_eq!(c.attributes().max_age, Some(60));
 }

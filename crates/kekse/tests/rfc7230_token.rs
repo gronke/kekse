@@ -74,7 +74,7 @@ fn the_parsers_enforce_the_token_grammar() {
         .collect();
     assert_eq!(surviving, ["b"]);
     // `Set-Cookie` routes the name through the same gate.
-    assert!(SetCookie::parse("na me=v").is_none());
-    assert!(SetCookie::parse("a@b=v").is_none());
-    assert!(SetCookie::parse("SID=x").is_some());
+    assert!(SetCookie::parse("na me=v").is_err());
+    assert!(SetCookie::parse("a@b=v").is_err());
+    assert!(SetCookie::parse("SID=x").is_ok());
 }

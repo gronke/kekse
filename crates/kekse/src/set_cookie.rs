@@ -60,12 +60,16 @@ impl<'a> SetCookie<'a> {
         Self::from_parts(Cookie::new(name, value), CookieAttributes::default())
     }
 
-    /// Parse one `Set-Cookie` header value into a `SetCookie` (RFC 6265 §5.2). An
-    /// **unrecognised attribute is ignored** and the cookie is kept, per §5.2 — so
-    /// a modern attribute this version does not model (`Partitioned`, `Priority`,
-    /// …) never costs you the cookie. Use
-    /// [`parse_strict`](SetCookie::parse_strict) to reject on an unknown attribute
-    /// instead.
+    /// Parse one `Set-Cookie` header value (RFC 6265 §5.2): `Ok` carries the
+    /// cookie plus every recovered deviation as a [`SetCookieIssue`], in wire
+    /// order; `Err` is the single fatal issue — without a usable `name=value`
+    /// pair there is no cookie to salvage. Lenient grading: an **unrecognised
+    /// attribute is ignored** and reported, per §5.2 — so a modern attribute
+    /// this version does not model (`Partitioned`, `Priority`, …) never costs
+    /// you the cookie, and never vanishes without a trace. A duplicate keeps
+    /// last-wins, a malformed known value is dropped (§5.2.2), a valued flag
+    /// still sets — each recovered piece lands in `issues`, and
+    /// [`is_clean`](Reported::is_clean) is the opt-in fail-hard gate.
     ///
     /// Splits on the first `;` into the `name=value` pair and the attribute list,
     /// then the pair on its first `=`. The name must be a cookie-name token; the
@@ -76,72 +80,71 @@ impl<'a> SetCookie<'a> {
     /// (`Strict`/`Lax`/`None`), `Path`, `Domain`, `Max-Age` (a `u64`; a negative
     /// or non-numeric delta is dropped), and `Expires` (the lenient RFC 6265
     /// §5.1.1 cookie-date here; [`parse_strict`](SetCookie::parse_strict) takes
-    /// only the RFC 7231 IMF-fixdate — an unparseable date is dropped, cookie
-    /// kept). Returns
-    /// `None` when there is no usable pair — no `=`, an empty or non-token name,
-    /// or a value outside the accepted set / with escapes that are not valid
-    /// UTF-8. Never panics.
-    pub fn parse(header_value: &'a str) -> Option<Self> {
-        Self::parse_with(header_value, false, None).ok()
-    }
-
-    /// Like [`parse`](SetCookie::parse) but **strict**: an unrecognised attribute — or a
-    /// **duplicate** of any attribute — rejects the whole cookie (`None`) instead of being ignored.
-    /// A tripwire for cookies you minted yourself, where an attribute you did not emit (or emitted
-    /// twice) signals something is wrong. A malformed *known* attribute (e.g. a non-numeric
-    /// `Max-Age`) is dropped, not fatal, in both modes; lenient [`parse`](SetCookie::parse)
-    /// tolerates duplicates (last-wins).
+    /// only the RFC 7231 IMF-fixdate). Never panics.
     ///
-    /// Unlike [`parse_pairs_strict`](crate::parse_pairs_strict), strict mode does **not** tighten
-    /// the cookie-*value* pipeline: one wrapping quote pair is still stripped and raw `SP`/`HTAB`
-    /// inside the value is still accepted, exactly as in [`parse`](SetCookie::parse). This is
-    /// deliberate — every managed [`ValueEncoding`], including
-    /// [`Quoted`](ValueEncoding::Quoted) (which carries whitespace raw inside its quotes), must
-    /// round-trip through the strict reader. Response-side strictness polices the *attributes*,
-    /// not the value's escaping.
-    pub fn parse_strict(header_value: &'a str) -> Option<Self> {
-        Self::parse_with(header_value, true, None).ok()
-    }
-
-    /// [`parse`](SetCookie::parse), reporting: `Ok` carries the cookie plus every
-    /// non-fatal drop as a [`SetCookieIssue`] (an ignored unknown attribute, a
-    /// duplicate, a malformed known-attribute value, a valued flag), in wire
-    /// order; `Err` is the single fatal issue — always an
-    /// [`InvalidPair`](SetCookieIssue::InvalidPair) here, since lenient parsing
-    /// only rejects a cookie whose `name=value` pair is unusable. The report is
-    /// how a caller *observes* what fail-soft would silently cost — a mistyped
-    /// `HttpOnly` or a `;`-fused attribute lands in `issues` instead of
-    /// vanishing — and `!`[`is_clean`](Reported::is_clean) is the opt-in
-    /// fail-hard gate.
-    pub fn try_parse(
+    /// # Errors
+    ///
+    /// The fatal issue: no `=`, an empty or non-token name, or a value outside
+    /// the accepted set / with escapes that are not valid UTF-8.
+    ///
+    /// ```
+    /// use kekse::SetCookie;
+    ///
+    /// let parsed = SetCookie::parse("SID=x; HttpOnly; Partitioned")?;
+    /// assert_eq!(parsed.value.name(), "SID");
+    /// assert!(parsed.value.attributes().http_only);
+    /// assert_eq!(parsed.issues.len(), 1); // the unmodeled attribute, witnessed
+    /// # Ok::<(), kekse::SetCookieIssue<'static>>(())
+    /// ```
+    pub fn parse(
         header_value: &'a str,
     ) -> Result<Reported<Self, SetCookieIssue<'a>>, SetCookieIssue<'a>> {
         let mut issues = Vec::new();
-        let value = Self::parse_with(header_value, false, Some(&mut issues))?;
+        let value = Self::parse_with(header_value, false, &mut issues)?;
         Ok(Reported { value, issues })
     }
 
-    /// [`parse_strict`](SetCookie::parse_strict), reporting — see
-    /// [`try_parse`](SetCookie::try_parse). `Err` additionally covers the first
+    /// Like [`parse`](SetCookie::parse) but with **strict** grading: an
+    /// unrecognised attribute — or a **duplicate** of any attribute — is fatal
+    /// (`Err`) instead of recovered. A tripwire for cookies you minted
+    /// yourself, where an attribute you did not emit (or emitted twice)
+    /// signals something is wrong. A malformed *known* attribute value (e.g. a
+    /// non-numeric `Max-Age`) is still recovered — dropped and reported — in
+    /// both gradings, and `Expires` must be the RFC 7231 IMF-fixdate here (the
+    /// lenient cookie-date shapes are dropped and reported).
+    ///
+    /// Unlike [`parse_pairs_strict`](crate::parse_pairs_strict), strict grading does **not**
+    /// tighten the cookie-*value* pipeline: one wrapping quote pair is still stripped and raw
+    /// `SP`/`HTAB` inside the value is still accepted, exactly as in [`parse`](SetCookie::parse).
+    /// This is deliberate — every managed [`ValueEncoding`], including
+    /// [`Quoted`](ValueEncoding::Quoted) (which carries whitespace raw inside its quotes), must
+    /// round-trip through the strict reader. Response-side strictness polices the *attributes*,
+    /// not the value's escaping.
+    ///
+    /// # Errors
+    ///
+    /// Everything [`parse`](SetCookie::parse) rejects, plus the first
     /// [`UnknownAttribute`](SetCookieIssue::UnknownAttribute) or
-    /// [`DuplicateAttribute`](SetCookieIssue::DuplicateAttribute), matching
-    /// [`parse_strict`](SetCookie::parse_strict)'s rejections. A malformed
-    /// known-attribute *value* stays non-fatal even here (exactly as in
-    /// [`parse_strict`](SetCookie::parse_strict)) — but it is reported, so a
-    /// caller gating on [`is_clean`](Reported::is_clean) is deliberately
-    /// stricter than strict.
-    pub fn try_parse_strict(
+    /// [`DuplicateAttribute`](SetCookieIssue::DuplicateAttribute).
+    ///
+    /// ```
+    /// use kekse::{SetCookie, SetCookieIssue};
+    ///
+    /// let err = SetCookie::parse_strict("SID=x; Partitioned").unwrap_err();
+    /// assert!(matches!(err, SetCookieIssue::UnknownAttribute { .. }));
+    /// ```
+    pub fn parse_strict(
         header_value: &'a str,
     ) -> Result<Reported<Self, SetCookieIssue<'a>>, SetCookieIssue<'a>> {
         let mut issues = Vec::new();
-        let value = Self::parse_with(header_value, true, Some(&mut issues))?;
+        let value = Self::parse_with(header_value, true, &mut issues)?;
         Ok(Reported { value, issues })
     }
 
     fn parse_with(
         header_value: &'a str,
         strict: bool,
-        mut report: Option<&mut Vec<SetCookieIssue<'a>>>,
+        report: &mut Vec<SetCookieIssue<'a>>,
     ) -> Result<Self, SetCookieIssue<'a>> {
         // The leading segment is the `name=value` pair; everything after the first `;`
         // is attributes. `str::split` always yields the leading segment, even for "".
@@ -189,7 +192,7 @@ impl<'a> SetCookie<'a> {
                     attribute = %attr.escape_debug(),
                     "ignoring an unrecognised attribute; the cookie is kept (RFC 6265 §5.2)"
                 );
-                record(&mut report, issue);
+                report.push(issue);
                 continue;
             };
             if seen & known.bit() != 0 {
@@ -205,7 +208,7 @@ impl<'a> SetCookie<'a> {
                     attribute = known.name(),
                     "duplicate attribute; the last occurrence that parses wins"
                 );
-                record(&mut report, issue);
+                report.push(issue);
             }
             seen |= known.bit();
             let attributes = &mut set_cookie.attributes;
@@ -214,32 +217,26 @@ impl<'a> SetCookie<'a> {
                 // shape, so it is reported — but the flag still sets, as ever.
                 KnownAttribute::HttpOnly => {
                     if !val.is_empty() {
-                        record(
-                            &mut report,
-                            SetCookieIssue::FlagWithValue {
-                                attribute: known,
-                                value: val,
-                            },
-                        );
+                        report.push(SetCookieIssue::FlagWithValue {
+                            attribute: known,
+                            value: val,
+                        });
                     }
                     attributes.http_only = true;
                 }
                 KnownAttribute::Secure => {
                     if !val.is_empty() {
-                        record(
-                            &mut report,
-                            SetCookieIssue::FlagWithValue {
-                                attribute: known,
-                                value: val,
-                            },
-                        );
+                        report.push(SetCookieIssue::FlagWithValue {
+                            attribute: known,
+                            value: val,
+                        });
                     }
                     attributes.secure = true;
                 }
                 // `.ok()` drops an unrecognised token (keeping the cookie), same as
                 // a malformed Max-Age — see `SameSite`'s case-insensitive `FromStr`.
                 KnownAttribute::SameSite => {
-                    if let Some(v) = noted(val.parse::<SameSite>().ok(), known, val, &mut report) {
+                    if let Some(v) = noted(val.parse::<SameSite>().ok(), known, val, report) {
                         attributes.same_site = Some(v);
                     }
                 }
@@ -248,17 +245,17 @@ impl<'a> SetCookie<'a> {
                 // and an earlier valid occurrence survives (RFC 6265 §5.2.2:
                 // "ignore the cookie-av", not the attribute).
                 KnownAttribute::Path => {
-                    if let Some(v) = noted(Path::new(val).ok(), known, val, &mut report) {
+                    if let Some(v) = noted(Path::new(val).ok(), known, val, report) {
                         attributes.path = Some(v);
                     }
                 }
                 KnownAttribute::Domain => {
-                    if let Some(v) = noted(Domain::new(val).ok(), known, val, &mut report) {
+                    if let Some(v) = noted(Domain::new(val).ok(), known, val, report) {
                         attributes.domain = Some(v);
                     }
                 }
                 KnownAttribute::MaxAge => {
-                    if let Some(v) = noted(val.parse::<u64>().ok(), known, val, &mut report) {
+                    if let Some(v) = noted(val.parse::<u64>().ok(), known, val, report) {
                         attributes.max_age = Some(v);
                     }
                 }
@@ -271,7 +268,7 @@ impl<'a> SetCookie<'a> {
                     } else {
                         parse_cookie_date(val)
                     };
-                    if let Some(v) = noted(parsed, known, val, &mut report) {
+                    if let Some(v) = noted(parsed, known, val, report) {
                         attributes.expires = Some(v);
                     }
                 }
@@ -640,14 +637,6 @@ impl fmt::Display for SetCookieIssue<'_> {
 
 impl std::error::Error for SetCookieIssue<'_> {}
 
-/// Push an issue into the report sink, when one is attached — the plain readers
-/// pass `None` and stay allocation-free.
-fn record<'a>(report: &mut Option<&mut Vec<SetCookieIssue<'a>>>, issue: SetCookieIssue<'a>) {
-    if let Some(sink) = report.as_deref_mut() {
-        sink.push(issue);
-    }
-}
-
 /// Pass a known attribute's parse result through, debug-logging and reporting
 /// the fail-soft drop when it is `None` — the malformed-known-attribute skip the
 /// crate docs promise, observable like the readers' pair-level skips. The cookie
@@ -658,7 +647,7 @@ fn noted<'a, T>(
     parsed: Option<T>,
     attribute: KnownAttribute,
     raw_value: &'a str,
-    report: &mut Option<&mut Vec<SetCookieIssue<'a>>>,
+    report: &mut Vec<SetCookieIssue<'a>>,
 ) -> Option<T> {
     if parsed.is_none() {
         #[cfg(feature = "tracing")]
@@ -667,13 +656,10 @@ fn noted<'a, T>(
             value = %raw_value.escape_debug(),
             "dropping a malformed known attribute; the cookie is kept"
         );
-        record(
-            report,
-            SetCookieIssue::InvalidAttributeValue {
-                attribute,
-                value: raw_value,
-            },
-        );
+        report.push(SetCookieIssue::InvalidAttributeValue {
+            attribute,
+            value: raw_value,
+        });
     }
     parsed
 }
@@ -815,12 +801,15 @@ mod tests {
         ] {
             let header = format!("n=v; {dup}");
             assert!(
-                SetCookie::parse_strict(&header).is_none(),
+                matches!(
+                    SetCookie::parse_strict(&header),
+                    Err(SetCookieIssue::DuplicateAttribute { .. })
+                ),
                 "strict must reject the duplicated {:?} in {header:?}",
                 known.name()
             );
             assert!(
-                SetCookie::parse(&header).is_some(),
+                SetCookie::parse(&header).is_ok(),
                 "lenient must keep the cookie for {header:?}"
             );
         }
@@ -1129,7 +1118,7 @@ mod tests {
             .path(Path::new("/").unwrap())
             .max_age(3600)
             .to_set_cookie();
-        let parsed = SetCookie::parse(&wire).unwrap();
+        let parsed = SetCookie::parse(&wire).unwrap().into_value();
         assert_eq!(parsed.name(), "SID");
         assert_eq!(parsed.value(), "deadbeef");
         assert!(parsed.attributes().http_only && parsed.attributes().secure);
@@ -1143,14 +1132,21 @@ mod tests {
 
     #[test]
     fn parse_decodes_value_like_the_request_reader() {
-        assert_eq!(SetCookie::parse("pref=caf%C3%A9").unwrap().value(), "café");
-        assert_eq!(SetCookie::parse(r#"pref="a b""#).unwrap().value(), "a b");
+        assert_eq!(
+            SetCookie::parse("pref=caf%C3%A9").unwrap().value.value(),
+            "café"
+        );
+        assert_eq!(
+            SetCookie::parse(r#"pref="a b""#).unwrap().value.value(),
+            "a b"
+        );
     }
 
     #[test]
     fn parse_attributes_are_case_insensitive() {
-        let p =
-            SetCookie::parse("n=v; SECURE; httponly; samesite=lax; PATH=/x; max-age=60").unwrap();
+        let p = SetCookie::parse("n=v; SECURE; httponly; samesite=lax; PATH=/x; max-age=60")
+            .unwrap()
+            .into_value();
         assert!(p.attributes().secure && p.attributes().http_only);
         assert_eq!(p.attributes().same_site, Some(SameSite::Lax));
         assert_eq!(p.attributes().path.map(|v| v.as_str()), Some("/x"));
@@ -1160,9 +1156,11 @@ mod tests {
     #[test]
     fn parse_strict_rejects_unknown_default_ignores() {
         // Strict (opt-in): an unrecognised attribute (`Priority`) rejects it.
-        assert!(SetCookie::parse_strict("SID=x; Priority=High; Max-Age=60").is_none());
+        assert!(SetCookie::parse_strict("SID=x; Priority=High; Max-Age=60").is_err());
         // Default (RFC §5.2): the unknown attribute is ignored and the cookie survives.
-        let p = SetCookie::parse("SID=x; Priority=High; Max-Age=60").unwrap();
+        let p = SetCookie::parse("SID=x; Priority=High; Max-Age=60")
+            .unwrap()
+            .into_value();
         assert_eq!(p.value(), "x");
         assert_eq!(p.attributes().max_age, Some(60));
     }
@@ -1172,8 +1170,9 @@ mod tests {
         use time::macros::datetime;
         // `Expires` is a known attribute, parsed into an `OffsetDateTime` (lenient
         // RFC 6265 §5.1.1 here); the cookie and a coexisting `Max-Age` are kept.
-        let p =
-            SetCookie::parse("SID=x; Expires=Wed, 09 Jun 2021 10:18:14 GMT; Max-Age=60").unwrap();
+        let p = SetCookie::parse("SID=x; Expires=Wed, 09 Jun 2021 10:18:14 GMT; Max-Age=60")
+            .unwrap()
+            .into_value();
         assert_eq!(p.value(), "x");
         assert_eq!(
             p.attributes().expires,
@@ -1182,7 +1181,9 @@ mod tests {
         assert_eq!(p.attributes().max_age, Some(60));
         // An unparseable date is dropped like any malformed known attribute; the
         // cookie survives.
-        let bad = SetCookie::parse("SID=x; Expires=not-a-date").unwrap();
+        let bad = SetCookie::parse("SID=x; Expires=not-a-date")
+            .unwrap()
+            .into_value();
         assert_eq!(bad.attributes().expires, None);
         assert_eq!(bad.value(), "x");
     }
@@ -1190,15 +1191,17 @@ mod tests {
     #[test]
     fn parse_strict_tolerates_empty_and_trailing_semicolons() {
         // A stray or trailing `;` is not an "unknown attribute" — strict keeps it.
-        assert_eq!(SetCookie::parse("SID=x;").unwrap().value(), "x");
-        let p = SetCookie::parse("SID=x; ; Secure").unwrap();
+        assert_eq!(SetCookie::parse("SID=x;").unwrap().value.value(), "x");
+        let p = SetCookie::parse("SID=x; ; Secure").unwrap().into_value();
         assert_eq!(p.value(), "x");
         assert!(p.attributes().secure);
     }
 
     #[test]
     fn parse_skips_malformed_attributes_but_keeps_the_cookie() {
-        let p = SetCookie::parse("SID=x; Max-Age=banana; SameSite=Bogus; HttpOnly").unwrap();
+        let p = SetCookie::parse("SID=x; Max-Age=banana; SameSite=Bogus; HttpOnly")
+            .unwrap()
+            .into_value();
         assert!(p.attributes().http_only);
         assert_eq!(p.attributes().max_age, None); // non-numeric dropped
         assert_eq!(p.attributes().same_site, None); // unrecognised SameSite dropped
@@ -1210,6 +1213,7 @@ mod tests {
         assert_eq!(
             SetCookie::parse("n=v; Max-Age=18446744073709551615")
                 .unwrap()
+                .value
                 .attributes()
                 .max_age,
             Some(u64::MAX)
@@ -1217,6 +1221,7 @@ mod tests {
         assert_eq!(
             SetCookie::parse("n=v; Max-Age=-1")
                 .unwrap()
+                .value
                 .attributes()
                 .max_age,
             None
@@ -1225,15 +1230,15 @@ mod tests {
 
     #[test]
     fn parse_rejects_no_equals_and_bad_name() {
-        assert!(SetCookie::parse("HttpOnly").is_none()); // no name=value pair
-        assert!(SetCookie::parse("na me=v; Secure").is_none()); // non-token name
-        assert!(SetCookie::parse("").is_none());
-        assert!(SetCookie::parse("=v").is_none()); // empty name
+        assert!(SetCookie::parse("HttpOnly").is_err()); // no name=value pair
+        assert!(SetCookie::parse("na me=v; Secure").is_err()); // non-token name
+        assert!(SetCookie::parse("").is_err());
+        assert!(SetCookie::parse("=v").is_err()); // empty name
     }
 
     #[test]
     fn parse_splits_first_semicolon_then_first_equals() {
-        let p = SetCookie::parse("a=b=c; Path=/x").unwrap();
+        let p = SetCookie::parse("a=b=c; Path=/x").unwrap().into_value();
         assert_eq!(p.name(), "a");
         assert_eq!(p.value(), "b=c"); // only the first '=' splits name/value
         assert_eq!(p.attributes().path.map(|v| v.as_str()), Some("/x"));
@@ -1242,54 +1247,9 @@ mod tests {
     // ---- the reporting readers ---------------------------------------------
 
     #[test]
-    fn try_parse_agrees_with_parse_and_renders_identically() {
-        // The identity pin: try_parse's Ok/Err exactly mirrors parse's Some/None,
-        // and the parsed cookie is the same cookie — over shapes covering clean,
-        // droppy, duplicate, unknown, and fatal inputs.
-        for header in [
-            "SID=x; HttpOnly; Secure; Path=/; Max-Age=60",
-            "SID=x; Max-Age=banana; SameSite=Bogus; HttpOnly",
-            "n=v; Priority=High; Partitioned",
-            "n=v; Path=/a; Path=/b",
-            "n=v; Secure=1",
-            "n=v; Expires=not-a-date",
-            "HttpOnly",
-            "na me=v; Secure",
-            "",
-            "=v",
-        ] {
-            let plain = SetCookie::parse(header);
-            let reported = SetCookie::try_parse(header);
-            assert_eq!(
-                plain.is_some(),
-                reported.is_ok(),
-                "lenient fatality on {header:?}"
-            );
-            if let (Some(plain), Ok(reported)) = (plain, reported) {
-                assert_eq!(plain, reported.value, "lenient cookie on {header:?}");
-                assert_eq!(
-                    plain.to_set_cookie(),
-                    reported.value.to_set_cookie(),
-                    "lenient rendering on {header:?}"
-                );
-            }
-            let plain = SetCookie::parse_strict(header);
-            let reported = SetCookie::try_parse_strict(header);
-            assert_eq!(
-                plain.is_some(),
-                reported.is_ok(),
-                "strict fatality on {header:?}"
-            );
-            if let (Some(plain), Ok(reported)) = (plain, reported) {
-                assert_eq!(plain, reported.value, "strict cookie on {header:?}");
-            }
-        }
-    }
-
-    #[test]
     fn mistyped_or_fused_attribute_is_reported_not_silent() {
         // The safety case that motivated the report: a misspelled HttpOnly.
-        let reported = SetCookie::try_parse("SID=x; Secure; HttpOnlyy").unwrap();
+        let reported = SetCookie::parse("SID=x; Secure; HttpOnlyy").unwrap();
         assert!(reported.value.attributes().secure);
         assert!(!reported.value.attributes().http_only); // still dropped (§5.2)…
         assert_eq!(
@@ -1298,7 +1258,7 @@ mod tests {
         );
         // A forgotten `;` fusing two flags: both vanish from the parsed cookie,
         // one UnknownAttribute names the fused token.
-        let reported = SetCookie::try_parse("SID=x; Secure HttpOnly").unwrap();
+        let reported = SetCookie::parse("SID=x; Secure HttpOnly").unwrap();
         assert!(!reported.value.attributes().secure);
         assert!(!reported.value.attributes().http_only);
         assert_eq!(
@@ -1309,7 +1269,7 @@ mod tests {
         );
         // Strict turns the unknown name into the fatal issue.
         assert_eq!(
-            SetCookie::try_parse_strict("SID=x; HttpOnlyy"),
+            SetCookie::parse_strict("SID=x; HttpOnlyy"),
             Err(SetCookieIssue::UnknownAttribute { name: "HttpOnlyy" })
         );
     }
@@ -1323,19 +1283,19 @@ mod tests {
             ("n=v; Path=a\u{1}b", KnownAttribute::Path, "a\u{1}b"),
         ] {
             let expected = vec![SetCookieIssue::InvalidAttributeValue { attribute, value }];
-            let lenient = SetCookie::try_parse(header).unwrap();
+            let lenient = SetCookie::parse(header).unwrap();
             assert_eq!(lenient.issues, expected, "lenient {header:?}");
             // Strict keeps the cookie too — the drop is reported, not fatal —
             // so `!is_clean()` is the caller's stricter-than-strict gate.
-            let strict = SetCookie::try_parse_strict(header).unwrap();
+            let strict = SetCookie::parse_strict(header).unwrap();
             assert_eq!(strict.issues, expected, "strict {header:?}");
             assert!(!strict.is_clean());
         }
         // Mode-relative dates: an RFC 850 date parses leniently but is an issue
         // under strict's IMF-fixdate-only reader.
         let rfc850 = "n=v; Expires=Sunday, 06-Nov-94 08:49:37 GMT";
-        assert!(SetCookie::try_parse(rfc850).unwrap().is_clean());
-        let strict = SetCookie::try_parse_strict(rfc850).unwrap();
+        assert!(SetCookie::parse(rfc850).unwrap().is_clean());
+        let strict = SetCookie::parse_strict(rfc850).unwrap();
         assert_eq!(
             strict.issues,
             vec![SetCookieIssue::InvalidAttributeValue {
@@ -1347,7 +1307,7 @@ mod tests {
 
     #[test]
     fn duplicates_and_valued_flags_are_reported() {
-        let reported = SetCookie::try_parse("n=v; Path=/a; Path=/b; Secure=1").unwrap();
+        let reported = SetCookie::parse("n=v; Path=/a; Path=/b; Secure=1").unwrap();
         assert_eq!(
             reported.issues,
             vec![
@@ -1369,7 +1329,7 @@ mod tests {
         assert!(reported.value.attributes().secure);
         // Strict: the duplicate is the fatal issue.
         assert_eq!(
-            SetCookie::try_parse_strict("n=v; Path=/a; Path=/b"),
+            SetCookie::parse_strict("n=v; Path=/a; Path=/b"),
             Err(SetCookieIssue::DuplicateAttribute {
                 attribute: KnownAttribute::Path
             })
@@ -1379,19 +1339,19 @@ mod tests {
     #[test]
     fn fatal_pair_issues_carry_the_pair_defect() {
         assert_eq!(
-            SetCookie::try_parse("HttpOnly"),
+            SetCookie::parse("HttpOnly"),
             Err(SetCookieIssue::InvalidPair(PairIssue::MissingEquals {
                 segment: b"HttpOnly"
             }))
         );
         assert_eq!(
-            SetCookie::try_parse("na me=v; Secure"),
+            SetCookie::parse("na me=v; Secure"),
             Err(SetCookieIssue::InvalidPair(PairIssue::InvalidName {
                 name: b"na me"
             }))
         );
         assert_eq!(
-            SetCookie::try_parse("n=a\u{1}b; Secure"),
+            SetCookie::parse("n=a\u{1}b; Secure"),
             Err(SetCookieIssue::InvalidPair(PairIssue::InvalidValue {
                 name: "n",
                 value: b"a\x01b"
@@ -1403,22 +1363,30 @@ mod tests {
     fn parse_keeps_earlier_valid_attribute_over_later_malformed() {
         // RFC 6265 §5.2.2: an unparseable cookie-av is ignored — it must not
         // erase an earlier valid occurrence of the same attribute.
-        let p = SetCookie::parse("n=v; Max-Age=60; Max-Age=banana").unwrap();
+        let p = SetCookie::parse("n=v; Max-Age=60; Max-Age=banana")
+            .unwrap()
+            .into_value();
         assert_eq!(p.attributes().max_age, Some(60));
-        let p = SetCookie::parse("n=v; Domain=valid.example.com; Domain=café").unwrap();
+        let p = SetCookie::parse("n=v; Domain=valid.example.com; Domain=café")
+            .unwrap()
+            .into_value();
         assert_eq!(
             p.attributes().domain.map(|d| d.as_str()),
             Some("valid.example.com")
         );
         // Among occurrences that PARSE, last-wins is unchanged.
-        let p = SetCookie::parse("n=v; Max-Age=1; Max-Age=2").unwrap();
+        let p = SetCookie::parse("n=v; Max-Age=1; Max-Age=2")
+            .unwrap()
+            .into_value();
         assert_eq!(p.attributes().max_age, Some(2));
         // A malformed occurrence with no valid predecessor still leaves the
         // attribute unset.
-        let p = SetCookie::parse("n=v; Max-Age=banana").unwrap();
+        let p = SetCookie::parse("n=v; Max-Age=banana")
+            .unwrap()
+            .into_value();
         assert_eq!(p.attributes().max_age, None);
         // The report sees both the duplicate and the malformed value.
-        let reported = SetCookie::try_parse("n=v; Max-Age=60; Max-Age=banana").unwrap();
+        let reported = SetCookie::parse("n=v; Max-Age=60; Max-Age=banana").unwrap();
         assert_eq!(
             reported.issues,
             vec![

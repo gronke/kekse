@@ -168,46 +168,63 @@ pub fn assert_report_consistency_bytes(wire: &[u8]) {
     }
 }
 
-/// `SetCookie`'s reporting readers agree with the plain ones: the same inputs
-/// are fatal (`Err` exactly when `parse*` is `None`), a parsed cookie is the
-/// same cookie (equal, and rendering identically), and every issue — fatal or
-/// reported — renders control-byte-free.
+/// The `Set-Cookie` gradings agree the way the request readers do. Three
+/// prongs:
+///
+/// - Strict-accepted ⊆ lenient-accepted: a cookie strict salvages, lenient
+///   salvages too (and a pair lenient finds fatal, strict finds fatal).
+/// - Strict's salvage carries no attribute lenient's does not: every
+///   attribute strict sets equals lenient's — strict grading can only drop
+///   more (an `Expires` outside the IMF-fixdate), never invent or alter.
+/// - Every issue — fatal or reported, either grading — renders
+///   control-byte-free (the no-echo promise).
 pub fn assert_set_cookie_report_consistency(wire: &str) {
-    for strict in [false, true] {
-        let plain = if strict {
-            SetCookie::parse_strict(wire)
-        } else {
-            SetCookie::parse(wire)
-        };
-        let reported = if strict {
-            SetCookie::try_parse_strict(wire)
-        } else {
-            SetCookie::try_parse(wire)
-        };
-        match (plain, reported) {
-            (Some(plain), Ok(reported)) => {
-                assert_eq!(
-                    plain, reported.value,
-                    "reported cookie diverges (strict={strict}) for {wire:?}"
-                );
-                assert_eq!(
-                    plain.to_set_cookie(),
-                    reported.value.to_set_cookie(),
-                    "reported cookie renders differently (strict={strict}) for {wire:?}"
-                );
-                for issue in &reported.issues {
-                    assert_issue_display_safe(&issue.to_string(), wire.as_bytes());
-                }
-            }
-            (None, Err(fatal)) => {
-                assert_issue_display_safe(&fatal.to_string(), wire.as_bytes());
-            }
-            (plain, reported) => panic!(
-                "fatality diverges (strict={strict}) for {wire:?}: plain parsed {}, reporting {}",
-                plain.is_some(),
-                reported.is_ok()
-            ),
+    let lenient = SetCookie::parse(wire);
+    let strict = SetCookie::parse_strict(wire);
+    if let Ok(reported) = &lenient {
+        for issue in &reported.issues {
+            assert_issue_display_safe(&issue.to_string(), wire.as_bytes());
         }
+    } else if let Err(fatal) = &lenient {
+        assert!(
+            strict.is_err(),
+            "lenient-fatal but strict-salvaged for {wire:?}"
+        );
+        assert_issue_display_safe(&fatal.to_string(), wire.as_bytes());
+    }
+    match &strict {
+        Ok(reported) => {
+            for issue in &reported.issues {
+                assert_issue_display_safe(&issue.to_string(), wire.as_bytes());
+            }
+            let lenient = lenient
+                .as_ref()
+                .expect("strict salvaged a cookie lenient found fatal");
+            let s = reported.value.attributes();
+            let l = lenient.value.attributes();
+            assert_eq!(s.http_only, l.http_only, "HttpOnly diverges for {wire:?}");
+            assert_eq!(s.secure, l.secure, "Secure diverges for {wire:?}");
+            for (name, strict_set, lenient_set) in [
+                ("SameSite", s.same_site.is_some(), l.same_site.is_some()),
+                ("Path", s.path.is_some(), l.path.is_some()),
+                ("Domain", s.domain.is_some(), l.domain.is_some()),
+                ("Max-Age", s.max_age.is_some(), l.max_age.is_some()),
+                ("Expires", s.expires.is_some(), l.expires.is_some()),
+            ] {
+                assert!(
+                    !strict_set || lenient_set,
+                    "{name} set under strict but not lenient for {wire:?}"
+                );
+            }
+            assert_eq!(s.same_site, l.same_site, "SameSite value for {wire:?}");
+            assert_eq!(s.path, l.path, "Path value for {wire:?}");
+            assert_eq!(s.domain, l.domain, "Domain value for {wire:?}");
+            assert_eq!(s.max_age, l.max_age, "Max-Age value for {wire:?}");
+            if s.expires.is_some() {
+                assert_eq!(s.expires, l.expires, "Expires value for {wire:?}");
+            }
+        }
+        Err(fatal) => assert_issue_display_safe(&fatal.to_string(), wire.as_bytes()),
     }
 }
 
@@ -224,7 +241,7 @@ pub fn assert_baseline_parses_clean(baseline: &str, direction: Direction) {
                 reported.issues
             );
         }
-        Direction::Response => match SetCookie::try_parse(baseline) {
+        Direction::Response => match SetCookie::parse(baseline) {
             Ok(reported) => assert!(
                 reported.is_clean(),
                 "kekse-rendered Set-Cookie baseline reported issues: {baseline:?} -> {:?}",
