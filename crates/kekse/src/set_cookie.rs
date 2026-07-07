@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::fmt;
 
 use rfc_6265::OffsetDateTime;
-use rfc_6265::date::{format_imf_fixdate, parse_cookie_date, parse_imf_fixdate};
+use rfc_6265::date::{ImfFixdate, parse_cookie_date, parse_imf_fixdate};
 
 use crate::attributes::{CookieAttributes, Domain, Path};
 use crate::cookie::Cookie;
@@ -725,7 +725,7 @@ impl fmt::Display for SetCookieAttribute<'_> {
             Self::Path(path) => write!(f, "{}={}", attr_name::PATH, path),
             Self::Domain(domain) => write!(f, "{}={}", attr_name::DOMAIN, domain),
             Self::Expires(when) => {
-                write!(f, "{}={}", attr_name::EXPIRES, format_imf_fixdate(when))
+                write!(f, "{}={}", attr_name::EXPIRES, ImfFixdate(when))
             }
             Self::MaxAge(seconds) => write!(f, "{}={}", attr_name::MAX_AGE, seconds),
         }
