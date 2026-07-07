@@ -167,7 +167,7 @@ mod same_site;
 mod set_cookie;
 mod wire;
 
-pub use attributes::{CookieAttributes, Domain, Path};
+pub use attributes::{CookieAttributes, Domain, InvalidDomain, InvalidPath, Path};
 #[cfg(feature = "axum")]
 pub use axum::{BadCookieHeader, CookieJarBuf};
 pub use cookie::Cookie;

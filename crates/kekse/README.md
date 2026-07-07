@@ -30,14 +30,14 @@ Every managed encoding is lossless and unambiguous.
 `%` always self-encodes to `%25`, and a quoted value never carries a raw `"`/`\` (they become `%22`/`%5C`), so the wrapping quotes can never be faked.
 
 ```rust
-use kekse::{SetCookie, SameSite, ValueEncoding};
+use kekse::{Path, SetCookie, SameSite, ValueEncoding};
 
 let header = SetCookie::new("SID", "deadbeef")
     .with_encoding(ValueEncoding::Percent)
     .http_only()
     .same_site(SameSite::Strict)
     .secure()
-    .path("/")
+    .path(Path::new("/")?)
     .max_age(3600)
     .to_set_cookie();
 assert_eq!(header, "SID=deadbeef; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age=3600");

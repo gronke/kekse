@@ -248,12 +248,12 @@ impl<'a> SetCookie<'a> {
                 // and an earlier valid occurrence survives (RFC 6265 §5.2.2:
                 // "ignore the cookie-av", not the attribute).
                 KnownAttribute::Path => {
-                    if let Some(v) = noted(Path::new(val), known, val, &mut report) {
+                    if let Some(v) = noted(Path::new(val).ok(), known, val, &mut report) {
                         attributes.path = Some(v);
                     }
                 }
                 KnownAttribute::Domain => {
-                    if let Some(v) = noted(Domain::new(val), known, val, &mut report) {
+                    if let Some(v) = noted(Domain::new(val).ok(), known, val, &mut report) {
                         attributes.domain = Some(v);
                     }
                 }
@@ -318,19 +318,21 @@ impl<'a> SetCookie<'a> {
         self
     }
 
-    /// Set the `Path` attribute. An invalid path (control byte, `;`, or non-ASCII
-    /// — see [`Path`](crate::Path)) is rejected and leaves the attribute unset.
+    /// Set the `Path` attribute from a validated [`Path`](crate::Path) —
+    /// [`Path::new`](crate::Path::new) is where an invalid value surfaces, so
+    /// the chain itself cannot swallow one.
     #[must_use]
-    pub fn path(mut self, path: &'a str) -> Self {
-        self.attributes.path = Path::new(path);
+    pub fn path(mut self, path: Path<'a>) -> Self {
+        self.attributes.path = Some(path);
         self
     }
 
-    /// Set the `Domain` attribute. Omit for a host-only cookie. An invalid domain
-    /// (see [`Domain`](crate::Domain)) is rejected and leaves the attribute unset.
+    /// Set the `Domain` attribute from a validated [`Domain`](crate::Domain) —
+    /// [`Domain::new`](crate::Domain::new) is where an invalid value surfaces,
+    /// so the chain itself cannot swallow one. Omit for a host-only cookie.
     #[must_use]
-    pub fn domain(mut self, domain: &'a str) -> Self {
-        self.attributes.domain = Domain::new(domain);
+    pub fn domain(mut self, domain: Domain<'a>) -> Self {
+        self.attributes.domain = Some(domain);
         self
     }
 
@@ -839,8 +841,8 @@ mod tests {
         assert_eq!(
             SetCookie::new("n", "v")
                 .max_age(60)
-                .domain("example.test")
-                .path("/app")
+                .domain(Domain::new("example.test").unwrap())
+                .path(Path::new("/app").unwrap())
                 .secure()
                 .same_site(SameSite::None)
                 .http_only()
@@ -880,7 +882,7 @@ mod tests {
             .http_only()
             .same_site(SameSite::Strict)
             .secure()
-            .path("/")
+            .path(Path::new("/").unwrap())
             .max_age(3600)
             .to_set_cookie();
         assert_eq!(
@@ -896,7 +898,7 @@ mod tests {
             .http_only()
             .secure()
             .same_site(SameSite::Strict)
-            .path("/")
+            .path(Path::new("/").unwrap())
             .max_age(3600);
         let c = Cookie::new("SID", "deadbeef")
             .with_encoding(ValueEncoding::Percent)
@@ -915,8 +917,8 @@ mod tests {
     fn set_cookie_attributes_are_typed_and_in_canonical_order() {
         let c = SetCookie::new("n", "v")
             .max_age(60)
-            .domain("example.test")
-            .path("/app")
+            .domain(Domain::new("example.test").unwrap())
+            .path(Path::new("/app").unwrap())
             .secure()
             .same_site(SameSite::Lax)
             .http_only();
@@ -955,10 +957,10 @@ mod tests {
                 sc = sc.secure();
             }
             if mask & 8 != 0 {
-                sc = sc.path("/app");
+                sc = sc.path(Path::new("/app").unwrap());
             }
             if mask & 16 != 0 {
-                sc = sc.domain("example.test");
+                sc = sc.domain(Domain::new("example.test").unwrap());
             }
             if mask & 32 != 0 {
                 sc = sc.expires(datetime!(2021-06-09 10:18:14 UTC));
@@ -1005,7 +1007,9 @@ mod tests {
 
     #[test]
     fn cookie_and_into_cookie_recover_the_kernel() {
-        let sc = SetCookie::new("n", "v").path("/x").secure();
+        let sc = SetCookie::new("n", "v")
+            .path(Path::new("/x").unwrap())
+            .secure();
         // The borrowed view ignores the attributes.
         assert_eq!(sc.cookie().name(), "n");
         assert_eq!(sc.cookie().to_request_pair(), "n=v");
@@ -1037,7 +1041,7 @@ mod tests {
                 .http_only()
                 .same_site(SameSite::Strict)
                 .secure()
-                .path("/")
+                .path(Path::new("/").unwrap())
                 .max_age(3600),
         )
         .unwrap();
@@ -1122,7 +1126,7 @@ mod tests {
             .http_only()
             .same_site(SameSite::Strict)
             .secure()
-            .path("/")
+            .path(Path::new("/").unwrap())
             .max_age(3600)
             .to_set_cookie();
         let parsed = SetCookie::parse(&wire).unwrap();

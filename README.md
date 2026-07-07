@@ -21,14 +21,14 @@ A strict, dependency-light cookie **codec** for Rust.
 ## Quick start
 
 ```rust
-use kekse::{CookieJar, SameSite, SetCookie};
+use kekse::{CookieJar, Path, SameSite, SetCookie};
 
 // WRITE — build a hardened `Set-Cookie` response value.
 let header = SetCookie::new("SID", "deadbeef")
     .http_only()
     .secure()
     .same_site(SameSite::Strict)
-    .path("/")
+    .path(Path::new("/")?)
     .max_age(3600)
     .to_set_cookie();
 assert_eq!(header, "SID=deadbeef; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age=3600");

@@ -4,7 +4,7 @@
 // Each bench target compiles this module on its own and uses its own subset.
 #![allow(dead_code)]
 
-use kekse::{CookieJar, SameSite, SetCookie};
+use kekse::{CookieJar, Domain, Path, SameSite, SetCookie};
 use time::OffsetDateTime;
 use time::macros::datetime;
 
@@ -83,11 +83,13 @@ pub fn set_cookie_full() -> SetCookie<'static> {
         .http_only()
         .same_site(SameSite::Strict)
         .secure()
-        .path("/")
+        .path(Path::new("/").unwrap())
         .max_age(3600)
 }
 
 /// The builder-made counterpart of [`SET_COOKIE_EXPIRES`].
 pub fn set_cookie_expires() -> SetCookie<'static> {
-    set_cookie_full().domain("example.com").expires(EXPIRY)
+    set_cookie_full()
+        .domain(Domain::new("example.com").unwrap())
+        .expires(EXPIRY)
 }

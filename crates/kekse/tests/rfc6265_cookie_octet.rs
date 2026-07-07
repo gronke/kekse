@@ -97,14 +97,14 @@ fn managed_encodings_never_emit_injection_bytes() {
 fn av_octet_boundary_governs_path_and_domain() {
     for (b, s) in common::ascii_singletons() {
         assert_eq!(
-            Path::new(&s).is_some(),
+            Path::new(&s).is_ok(),
             is_rfc_av_octet(b),
             "Path byte 0x{b:02x}"
         );
         // For the pure codec the av-octet rule alone governs `Domain` acceptance.
         #[cfg(not(any(feature = "psl", feature = "idna")))]
         assert_eq!(
-            Domain::new(&s).is_some(),
+            Domain::new(&s).is_ok(),
             is_rfc_av_octet(b),
             "Domain byte 0x{b:02x}"
         );
@@ -114,13 +114,13 @@ fn av_octet_boundary_governs_path_and_domain() {
         #[cfg(any(feature = "psl", feature = "idna"))]
         if !is_rfc_av_octet(b) {
             assert!(
-                Domain::new(&s).is_none(),
+                Domain::new(&s).is_err(),
                 "Domain byte 0x{b:02x} must be refused"
             );
         }
     }
     // SP is an av-octet (allowed) though not a cookie-octet; `;` and non-ASCII not.
-    assert!(Path::new("/a b").is_some());
-    assert!(Path::new("/a;b").is_none());
-    assert!(Domain::new("café.test").is_none());
+    assert!(Path::new("/a b").is_ok());
+    assert!(Path::new("/a;b").is_err());
+    assert!(Domain::new("café.test").is_err());
 }

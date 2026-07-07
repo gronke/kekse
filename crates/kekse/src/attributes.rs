@@ -4,6 +4,8 @@
 //! `CookieAttributes`. The `Path` and `Domain` values are validated [`Path`] /
 //! [`Domain`] newtypes, so the public fields cannot carry an injection byte.
 
+use std::fmt;
+
 use rfc_6265::OffsetDateTime;
 use rfc_6265::grammar::is_av_octet;
 
@@ -18,10 +20,23 @@ use crate::same_site::SameSite;
 pub struct Path<'a>(&'a str);
 
 impl<'a> Path<'a> {
-    /// `Some(Path)` iff every byte is an av-octet; `None` otherwise — a control
-    /// byte, a `;`, or non-ASCII, anything that could break the header line.
-    pub fn new(value: &'a str) -> Option<Self> {
-        value.bytes().all(is_av_octet).then_some(Self(value))
+    /// `Ok(Path)` iff every byte is an av-octet; the [`InvalidPath`] refusal
+    /// otherwise — a control byte, a `;`, or non-ASCII, anything that could
+    /// break the header line — carrying the refused value.
+    ///
+    /// ```
+    /// use kekse::Path;
+    ///
+    /// assert_eq!(Path::new("/app")?.as_str(), "/app");
+    /// assert!(Path::new("/a;b").is_err()); // `;` would split the header line
+    /// # Ok::<(), kekse::InvalidPath<'static>>(())
+    /// ```
+    pub fn new(value: &'a str) -> Result<Self, InvalidPath<'a>> {
+        if value.bytes().all(is_av_octet) {
+            Ok(Self(value))
+        } else {
+            Err(InvalidPath { value })
+        }
     }
 
     /// The validated path value.
@@ -37,22 +52,55 @@ impl AsRef<str> for Path<'_> {
     }
 }
 
+/// The refusal [`Path::new`] returns: the would-be `Path` value carries a byte
+/// outside the RFC 6265 §4.1.1 av-octet set — a control byte, a `;`, or
+/// non-ASCII — which could break the `Set-Cookie` line it would be rendered
+/// into. Carries the refused value; the [`Display`](fmt::Display) form escapes
+/// it (`escape_debug`), so a rendered refusal never carries a raw control byte.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct InvalidPath<'a> {
+    /// The refused value.
+    pub value: &'a str,
+}
+
+impl fmt::Display for InvalidPath<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "cookie Path `{}` carries a byte outside the av-octet set",
+            self.value.escape_debug()
+        )
+    }
+}
+
+impl std::error::Error for InvalidPath<'_> {}
+
 /// A validated `Domain` attribute value — the same av-octet guarantee as
 /// [`Path`], so the public [`CookieAttributes::domain`] field is unforgeable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Domain<'a>(&'a str);
 
 impl<'a> Domain<'a> {
-    /// `Some(Domain)` iff every byte is an av-octet (no control byte, `;`, or non-ASCII). With any
+    /// `Ok(Domain)` iff every byte is an av-octet (no control byte, `;`, or non-ASCII). With any
     /// Domain-hardening feature on (`psl` / `idna` — the `hardened` build has both), the value must
     /// also be LDH host-name syntax ([`rfc_6265::domain::is_host_name`], after stripping the one
     /// leading dot of the RFC 6265 §5.2.3 wire form) — a `Domain` that could never domain-match is
     /// refused rather than stored as dead weight. On top of that, the `psl` feature refuses a
     /// public-suffix value (a supercookie `Domain` such as `com` / `.co.uk`) and the `idna` feature
-    /// refuses malformed punycode.
-    pub fn new(value: &'a str) -> Option<Self> {
+    /// refuses malformed punycode. A refusal is the [`InvalidDomain`] naming the failed gate and
+    /// carrying the refused value.
+    ///
+    /// ```
+    /// use kekse::Domain;
+    ///
+    /// assert_eq!(Domain::new("example.test")?.as_str(), "example.test");
+    /// assert!(Domain::new("ex\u{0}ample").is_err()); // control byte
+    /// # Ok::<(), kekse::InvalidDomain<'static>>(())
+    /// ```
+    pub fn new(value: &'a str) -> Result<Self, InvalidDomain<'a>> {
         if !value.bytes().all(is_av_octet) {
-            return None;
+            return Err(InvalidDomain::NotAvOctets { value });
         }
         // Host-name syntax (any hardening feature): the policies below are only meaningful over a
         // well-formed host name, and `domain_matches` requires one anyway — a stored `Domain` it
@@ -61,20 +109,20 @@ impl<'a> Domain<'a> {
         // it too). The pure-codec default stays byte-identical.
         #[cfg(any(feature = "psl", feature = "idna"))]
         if !rfc_6265::domain::is_host_name(value.strip_prefix('.').unwrap_or(value)) {
-            return None;
+            return Err(InvalidDomain::NotAHostName { value });
         }
         // Supercookie defense (`psl`): a `Domain` that is itself a public suffix can never be set,
         // so a cookie cannot escape its registrable domain.
         #[cfg(feature = "psl")]
         if rfc_6265::domain::is_public_suffix(value) {
-            return None;
+            return Err(InvalidDomain::PublicSuffix { value });
         }
         // IDN validation (`idna`): reject an av-octet-clean but malformed punycode label.
         #[cfg(feature = "idna")]
         if !rfc_6265::domain::is_valid_domain(value) {
-            return None;
+            return Err(InvalidDomain::MalformedIdn { value });
         }
-        Some(Self(value))
+        Ok(Self(value))
     }
 
     /// The validated domain value.
@@ -89,6 +137,75 @@ impl AsRef<str> for Domain<'_> {
         self.0
     }
 }
+
+/// The refusal [`Domain::new`] returns, naming the failed gate and carrying
+/// the refused value. The byte gate always applies; the other three arise only
+/// with the matching Domain-hardening feature enabled, so which variants a
+/// build can produce follows its feature set. The [`Display`](fmt::Display)
+/// form escapes the value (`escape_debug`), so a rendered refusal never
+/// carries a raw control byte.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum InvalidDomain<'a> {
+    /// A byte outside the RFC 6265 §4.1.1 av-octet set — a control byte, a
+    /// `;`, or non-ASCII — which could break the `Set-Cookie` line.
+    #[non_exhaustive]
+    NotAvOctets {
+        /// The refused value.
+        value: &'a str,
+    },
+    /// Not RFC 952/1123 LDH host-name syntax, checked after stripping the one
+    /// leading dot of the RFC 6265 §5.2.3 wire form — produced only with a
+    /// hardening feature (`psl` / `idna`) enabled.
+    #[non_exhaustive]
+    NotAHostName {
+        /// The refused value.
+        value: &'a str,
+    },
+    /// The value is itself a public suffix — a supercookie `Domain` such as
+    /// `com` / `.co.uk` — produced only with the `psl` feature.
+    #[non_exhaustive]
+    PublicSuffix {
+        /// The refused value.
+        value: &'a str,
+    },
+    /// No canonical ASCII form under UTS-46 (malformed punycode) — produced
+    /// only with the `idna` feature.
+    #[non_exhaustive]
+    MalformedIdn {
+        /// The refused value.
+        value: &'a str,
+    },
+}
+
+impl fmt::Display for InvalidDomain<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotAvOctets { value } => write!(
+                f,
+                "cookie Domain `{}` carries a byte outside the av-octet set",
+                value.escape_debug()
+            ),
+            Self::NotAHostName { value } => write!(
+                f,
+                "cookie Domain `{}` is not an LDH host name",
+                value.escape_debug()
+            ),
+            Self::PublicSuffix { value } => write!(
+                f,
+                "cookie Domain `{}` is a public suffix",
+                value.escape_debug()
+            ),
+            Self::MalformedIdn { value } => write!(
+                f,
+                "cookie Domain `{}` has no canonical ASCII form",
+                value.escape_debug()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for InvalidDomain<'_> {}
 
 /// The response attributes of a `Set-Cookie:` line: `HttpOnly`, `Secure`,
 /// `SameSite`, `Path`, `Domain`, `Max-Age` — everything a request `Cookie:`
@@ -106,9 +223,11 @@ impl AsRef<str> for Domain<'_> {
 /// `HttpOnly` and `Secure` are valueless presence flags on the wire, so their
 /// setters are **nullary**: calling [`http_only`](CookieAttributes::http_only)
 /// or [`secure`](CookieAttributes::secure) adds the attribute; not calling it
-/// omits it. There is no "set to false" — leave it unset. `path` / `domain` are
-/// validated [`Path`] / [`Domain`] newtypes (read them with `.as_str()`); an
-/// invalid value leaves the attribute unset.
+/// omits it. There is no "set to false" — leave it unset. `path` / `domain`
+/// take the validated [`Path`] / [`Domain`] newtypes (read them with
+/// `.as_str()`), so construction — [`Path::new`] / [`Domain::new`] — is where
+/// an invalid value surfaces, as an error naming the refused value; a chain
+/// can never swallow one.
 ///
 /// ```
 /// use kekse::{CookieAttributes, Path, SameSite};
@@ -118,9 +237,10 @@ impl AsRef<str> for Domain<'_> {
 ///     .http_only()
 ///     .secure()
 ///     .same_site(SameSite::Strict)
-///     .path("/");
+///     .path(Path::new("/")?);
 /// assert!(hardened.secure); // read a field
-/// assert_eq!(hardened.path, Path::new("/"));
+/// assert_eq!(hardened.path.map(|p| p.as_str()), Some("/"));
+/// # Ok::<(), kekse::InvalidPath<'static>>(())
 /// ```
 #[derive(Default, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CookieAttributes<'a> {
@@ -169,19 +289,20 @@ impl<'a> CookieAttributes<'a> {
         self
     }
 
-    /// Set the `Path` attribute. An invalid path (a control byte, `;`, or
-    /// non-ASCII — see [`Path`]) is rejected and leaves the attribute unset.
+    /// Set the `Path` attribute from a validated [`Path`] — [`Path::new`] is
+    /// where an invalid value surfaces, so the chain itself cannot swallow one.
     #[must_use]
-    pub fn path(mut self, path: &'a str) -> Self {
-        self.path = Path::new(path);
+    pub fn path(mut self, path: Path<'a>) -> Self {
+        self.path = Some(path);
         self
     }
 
-    /// Set the `Domain` attribute. Omit for a host-only cookie. An invalid domain
-    /// (see [`Domain`]) is rejected and leaves the attribute unset.
+    /// Set the `Domain` attribute from a validated [`Domain`] — [`Domain::new`]
+    /// is where an invalid value surfaces, so the chain itself cannot swallow
+    /// one. Omit for a host-only cookie.
     #[must_use]
-    pub fn domain(mut self, domain: &'a str) -> Self {
-        self.domain = Domain::new(domain);
+    pub fn domain(mut self, domain: Domain<'a>) -> Self {
+        self.domain = Some(domain);
         self
     }
 
@@ -233,26 +354,44 @@ mod tests {
             .http_only()
             .secure()
             .same_site(SameSite::Lax)
-            .path("/app")
-            .domain("example.test")
+            .path(Path::new("/app").unwrap())
+            .domain(Domain::new("example.test").unwrap())
             .max_age(60);
         assert!(a.http_only && a.secure);
         assert_eq!(a.same_site, Some(SameSite::Lax));
-        assert_eq!(a.path, Path::new("/app"));
-        assert_eq!(a.domain, Domain::new("example.test"));
+        assert_eq!(a.path, Path::new("/app").ok());
+        assert_eq!(a.domain, Domain::new("example.test").ok());
         assert_eq!(a.max_age, Some(60));
     }
 
     #[test]
     fn path_and_domain_reject_injection() {
-        // A `;` or a control byte cannot be smuggled into a Path/Domain value.
-        assert_eq!(Path::new("/a;b"), None);
-        assert_eq!(Path::new("/a\r\nb"), None);
-        assert_eq!(Domain::new("ex\0ample"), None);
-        // The attribute setter drops an invalid value rather than storing it.
-        assert_eq!(CookieAttributes::default().path("/a\0b").path, None);
+        // A `;` or a control byte cannot be smuggled into a Path/Domain value;
+        // the refusal names the value, so nothing is dropped without a trace.
+        assert_eq!(Path::new("/a;b"), Err(InvalidPath { value: "/a;b" }));
+        assert_eq!(Path::new("/a\r\nb"), Err(InvalidPath { value: "/a\r\nb" }));
+        assert_eq!(
+            Domain::new("ex\0ample"),
+            Err(InvalidDomain::NotAvOctets { value: "ex\0ample" })
+        );
         // A clean value round-trips.
-        assert_eq!(Path::new("/ok").map(|p| p.as_str()), Some("/ok"));
+        assert_eq!(Path::new("/ok").map(|p| p.as_str()), Ok("/ok"));
+    }
+
+    #[test]
+    fn refusals_render_without_control_bytes() {
+        // The refusal's own no-echo promise: printing what was refused must
+        // not let the refused bytes break the log line they land in.
+        let rendered = [
+            Path::new("/a\r\n\0b").unwrap_err().to_string(),
+            Domain::new("ex\0am\rple").unwrap_err().to_string(),
+        ];
+        for line in rendered {
+            assert!(
+                !line.bytes().any(|b| b.is_ascii_control()),
+                "{line:?} carries a raw control byte"
+            );
+        }
     }
 
     #[test]
@@ -275,23 +414,26 @@ mod tests {
         // Empty: every byte is an av-octet (vacuously). `Path` always accepts it; `Domain` accepts
         // it in the pure-codec default, but any hardening feature refuses it — an empty string is
         // not a host name (and under `idna` it is not a valid domain either).
-        assert_eq!(Path::new("").map(|p| p.as_str()), Some(""));
+        assert_eq!(Path::new("").map(|p| p.as_str()), Ok(""));
         #[cfg(not(any(feature = "psl", feature = "idna")))]
-        assert_eq!(Domain::new("").map(|d| d.as_str()), Some(""));
+        assert_eq!(Domain::new("").map(|d| d.as_str()), Ok(""));
         #[cfg(any(feature = "psl", feature = "idna"))]
-        assert!(Domain::new("").is_none());
+        assert_eq!(
+            Domain::new(""),
+            Err(InvalidDomain::NotAHostName { value: "" })
+        );
         // SP (0x20) is an av-octet → space-only paths are valid.
-        assert!(Path::new(" ").is_some());
-        assert!(Path::new("   ").is_some());
+        assert!(Path::new(" ").is_ok());
+        assert!(Path::new("   ").is_ok());
         // HTAB (0x09) is a control, not an av-octet → rejected.
-        assert!(Path::new("\t").is_none());
-        assert!(Path::new("a\tb").is_none());
+        assert!(Path::new("\t").is_err());
+        assert!(Path::new("a\tb").is_err());
         // Digits (0x30..=0x39) are av-octets.
-        assert!(Path::new("12345").is_some());
+        assert!(Path::new("12345").is_ok());
         // A bare single label is a public suffix under the `psl` rule, so only assert the default
         // (av-octet-only) acceptance here; `psl` Domain behaviour is pinned separately.
         #[cfg(not(feature = "psl"))]
-        assert!(Domain::new("123").is_some());
+        assert!(Domain::new("123").is_ok());
     }
 
     #[cfg(any(feature = "psl", feature = "idna"))]
@@ -301,39 +443,58 @@ mod tests {
         // (pinned by keksbruch's `domain-not-a-host-name` scenario), refused under any
         // hardening feature — `domain_matches` could never match them, so storing them
         // would be dead weight.
-        assert!(Domain::new("ex_ample.com").is_none()); // underscore is not LDH
-        assert!(Domain::new("a..b").is_none()); // empty label
-        assert!(Domain::new("example.com.").is_none()); // FQDN root dot: unmatchable suffix
-        assert!(Domain::new("exa mple.com").is_none()); // SP is av-octet but never LDH
-        assert!(Domain::new("example.com:8080").is_none()); // smuggled port
+        for refused in [
+            "ex_ample.com",     // underscore is not LDH
+            "a..b",             // empty label
+            "example.com.",     // FQDN root dot: unmatchable suffix
+            "exa mple.com",     // SP is av-octet but never LDH
+            "example.com:8080", // smuggled port
+        ] {
+            assert_eq!(
+                Domain::new(refused),
+                Err(InvalidDomain::NotAHostName { value: refused })
+            );
+        }
         // One leading dot is the RFC 6265 §5.2.3 wire form — stripped before the check,
         // consistent with `is_public_suffix`. (Under `psl` the example must not be a
         // public suffix, so use a registrable name.)
-        assert!(Domain::new(".example.com").is_some());
+        assert!(Domain::new(".example.com").is_ok());
         // LDH includes digits: an IP-shaped value still stores (it domain-matches by
         // identity), and hyphens are fine anywhere `is_host_name` allows them.
-        assert!(Domain::new("192.168.0.1").is_some());
-        assert!(Domain::new("my-host.example.com").is_some());
+        assert!(Domain::new("192.168.0.1").is_ok());
+        assert!(Domain::new("my-host.example.com").is_ok());
     }
 
     #[cfg(feature = "psl")]
     #[test]
     fn psl_feature_rejects_public_suffix_domains() {
         // Supercookie defense: a public-suffix value can never become a `Domain`.
-        assert!(Domain::new("com").is_none());
-        assert!(Domain::new("co.uk").is_none());
-        // The leading dot is stripped before the check, so `.com` is refused too.
-        assert!(Domain::new(".com").is_none());
+        for refused in ["com", "co.uk", ".com"] {
+            // The leading dot is stripped before the check, so `.com` is refused too.
+            assert_eq!(
+                Domain::new(refused),
+                Err(InvalidDomain::PublicSuffix { value: refused })
+            );
+        }
         // A registrable domain is still accepted.
-        assert!(Domain::new("example.com").is_some());
-        assert!(Domain::new("example.co.uk").is_some());
+        assert!(Domain::new("example.com").is_ok());
+        assert!(Domain::new("example.co.uk").is_ok());
     }
 
     #[cfg(feature = "idna")]
     #[test]
     fn idna_feature_rejects_malformed_punycode() {
-        assert!(Domain::new("xn--").is_none()); // malformed punycode
-        assert!(Domain::new("xn--mnchen-3ya.de").is_some()); // valid punycode IDN
-        assert!(Domain::new("example.com").is_some());
+        // Malformed punycode in a registrable shape — only the IDN gate can
+        // refuse it, so the reason is stable across feature combinations.
+        assert_eq!(
+            Domain::new("xn--.de"),
+            Err(InvalidDomain::MalformedIdn { value: "xn--.de" })
+        );
+        // A bare `xn--` is refused in every hardened build, but the gate that
+        // catches it differs: with `psl` on, the PSL wildcard rule claims a
+        // lone label as a public suffix before the IDN check runs.
+        assert!(Domain::new("xn--").is_err());
+        assert!(Domain::new("xn--mnchen-3ya.de").is_ok()); // valid punycode IDN
+        assert!(Domain::new("example.com").is_ok());
     }
 }

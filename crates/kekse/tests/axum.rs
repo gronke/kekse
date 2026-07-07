@@ -18,7 +18,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use tower::ServiceExt; // oneshot
 
-use kekse::{SameSite, SetCookie, ValueEncoding, parse_pairs, parse_pairs_strict};
+use kekse::{Path, SameSite, SetCookie, ValueEncoding, parse_pairs, parse_pairs_strict};
 
 /// Values a real app might try to stuff into a cookie — separators, control
 /// bytes, quotes, percent, non-ASCII, whitespace.
@@ -56,7 +56,7 @@ fn managed_set_cookie_is_always_a_valid_header_value() {
                 .http_only()
                 .secure()
                 .same_site(SameSite::Strict)
-                .path("/")
+                .path(Path::new("/").unwrap())
                 .max_age(3600)
                 .to_set_cookie();
             let hv = HeaderValue::from_str(&rendered);
@@ -91,7 +91,7 @@ async fn set_handler() -> impl IntoResponse {
             .http_only()
             .secure()
             .same_site(SameSite::Strict)
-            .path("/")
+            .path(Path::new("/").unwrap())
             .max_age(3600)
             .to_set_cookie(),
     )
