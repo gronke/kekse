@@ -17,6 +17,7 @@ use crate::report::PairIssue;
 /// NOT `trim_ascii`, which would also strip CR/LF/FF/VT: RFC 6265 OWS is `SP`/`HTAB` only, and a
 /// control byte must *survive* into the token/octet gates to be rejected there, not be trimmed
 /// into acceptance.
+#[inline]
 pub(crate) fn trim_ws(mut bytes: &[u8]) -> &[u8] {
     while let [first, rest @ ..] = bytes
         && is_ws(*first)
