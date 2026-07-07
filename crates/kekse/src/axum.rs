@@ -198,8 +198,15 @@ where
         // taken verbatim — no `to_str()` gate — so a header value carrying
         // obs-text loses only the pair that carries it, at parse time, not every
         // pair it arrived with. Extraction stays infallible.
-        let mut raw = Vec::new();
-        for value in parts.headers.get_all(COOKIE) {
+        let values = parts.headers.get_all(COOKIE);
+        let (count, bytes) = values
+            .iter()
+            .fold((0usize, 0usize), |(count, bytes), value| {
+                (count + 1, bytes + value.as_bytes().len())
+            });
+        // Exact size: every value plus one "; " joint between adjacent ones.
+        let mut raw = Vec::with_capacity(bytes + 2 * count.saturating_sub(1));
+        for value in values {
             if !raw.is_empty() {
                 raw.extend_from_slice(b"; ");
             }
