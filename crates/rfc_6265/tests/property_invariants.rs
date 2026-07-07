@@ -27,7 +27,9 @@ proptest! {
 mod date_props {
     use proptest::prelude::*;
     use rfc_6265::OffsetDateTime;
-    use rfc_6265::date::{HttpDateFormat, format_http_date, parse_cookie_date, parse_imf_fixdate};
+    use rfc_6265::date::{
+        HttpDateFormat, ImfFixdate, format_http_date, parse_cookie_date, parse_imf_fixdate,
+    };
 
     prop_compose! {
         // Whole-second UTC instants in [1970-01-01, 2070-01-01) — the range where all three
@@ -59,6 +61,15 @@ mod date_props {
             let s = format_http_date(t, HttpDateFormat::ImfFixdate);
             prop_assert_eq!(parse_imf_fixdate(&s), Some(t));
             prop_assert_eq!(parse_cookie_date(&s), Some(t));
+        }
+
+        /// The lazy [`ImfFixdate`] display renders the same bytes as the eager formatter.
+        #[test]
+        fn imf_fixdate_display_equals_the_eager_formatter(t in instants()) {
+            prop_assert_eq!(
+                ImfFixdate(t).to_string(),
+                format_http_date(t, HttpDateFormat::ImfFixdate)
+            );
         }
     }
 }
