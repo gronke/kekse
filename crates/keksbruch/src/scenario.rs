@@ -20,12 +20,13 @@ pub enum Expect {
     },
     /// Both modes yield exactly this many pairs (for values too large to spell out).
     BothPairsCount(usize),
-    /// Response: strict `parse` rejects (`None`); lenient keeps a cookie with `value`.
-    ResponseStrictRejectsLenientKeeps { value: &'static str },
-    /// Response: strict `parse` rejects (`None`); lenient keeps a cookie with `value`
-    /// whose `Domain` is exactly `domain` — pinning RFC 6265 §5.2.2: a later
-    /// malformed occurrence never erases an earlier valid one.
-    ResponseStrictRejectsLenientKeepsDomain {
+    /// Response: both gradings keep a cookie with `value` and neither report
+    /// is clean — the deviation is recovered and witnessed, never silent.
+    ResponseKeptWithIssues { value: &'static str },
+    /// Response: both gradings keep a cookie with `value` whose `Domain` is
+    /// exactly `domain`, with a dirty report — pinning RFC 6265 §5.2.2: a
+    /// later malformed occurrence never erases an earlier valid one.
+    ResponseKeptWithIssuesDomain {
         value: &'static str,
         domain: Option<&'static str>,
     },
@@ -324,11 +325,11 @@ pub fn scenarios() -> Vec<Scenario> {
         // ── attribute abuse (Response) ──────────────────────────────────────
         s(
             "attr-unknown",
-            "strict rejects an unknown attribute; lenient keeps the cookie",
+            "an unknown attribute is recovered and witnessed in both gradings",
             Response,
             "SID",
             Keksbruch::UnknownAttribute("Priority"),
-            Expect::ResponseStrictRejectsLenientKeeps { value: "abc" },
+            Expect::ResponseKeptWithIssues { value: "abc" },
         ),
         s(
             "attr-bad-maxage",
@@ -371,11 +372,11 @@ pub fn scenarios() -> Vec<Scenario> {
         ),
         s(
             "attr-duplicate",
-            "a duplicated known attribute: lenient keeps it (last wins), strict rejects the cookie",
+            "a duplicated known attribute keeps last-wins, witnessed in both gradings",
             Response,
             "SID",
             Keksbruch::DuplicateAttribute("Path"),
-            Expect::ResponseStrictRejectsLenientKeeps { value: "abc" },
+            Expect::ResponseKeptWithIssues { value: "abc" },
         ),
         // ── SameSite values (Response) ──────────────────────────────────────
         // The three well-defined tokens (RFC 6265bis samesite-av), case-folding,
@@ -1007,18 +1008,18 @@ pub fn scenarios() -> Vec<Scenario> {
                 first: "a.example.com",
                 second: "b.example.com",
             },
-            Expect::ResponseStrictRejectsLenientKeeps { value: "abc" },
+            Expect::ResponseKeptWithIssues { value: "abc" },
         ),
         s(
             "domain-dup-valid-then-invalid",
-            "a valid then an invalid Domain: lenient keeps the earlier valid Domain (§5.2.2), strict rejects the duplicate",
+            "a valid then an invalid Domain: the earlier valid Domain survives (§5.2.2), duplicate witnessed",
             Response,
             "SID",
             Keksbruch::DuplicateDomain {
                 first: "valid.example.com",
                 second: "café",
             },
-            Expect::ResponseStrictRejectsLenientKeepsDomain {
+            Expect::ResponseKeptWithIssuesDomain {
                 value: "abc",
                 domain: Some("valid.example.com"),
             },
@@ -1256,11 +1257,11 @@ pub fn scenarios() -> Vec<Scenario> {
         ),
         s(
             "attr-nul-name",
-            "a NUL in an attribute name is an unknown attribute: strict rejects, lenient keeps",
+            "a NUL in an attribute name is an unknown attribute: recovered and witnessed",
             Response,
             "SID",
             Keksbruch::NulInAttrName,
-            Expect::ResponseStrictRejectsLenientKeeps { value: "abc" },
+            Expect::ResponseKeptWithIssues { value: "abc" },
         ),
         s(
             "attr-nul-value",

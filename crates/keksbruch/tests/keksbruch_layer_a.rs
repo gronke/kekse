@@ -127,30 +127,38 @@ fn each_scenario_matches_its_pinned_expectation() {
                     "{id} strict count"
                 );
             }
-            Expect::ResponseStrictRejectsLenientKeeps { value } => {
-                assert!(
-                    SetCookie::parse_strict(&wire).is_err(),
-                    "{id} strict must reject"
-                );
-                let sc = SetCookie::parse(&wire)
-                    .unwrap_or_else(|_| panic!("{id} default must keep the cookie"))
-                    .into_value();
-                assert_eq!(sc.value(), *value, "{id} value");
+            Expect::ResponseKeptWithIssues { value } => {
+                for (mode, parsed) in [
+                    ("strict", SetCookie::parse_strict(&wire)),
+                    ("default", SetCookie::parse(&wire)),
+                ] {
+                    let reported =
+                        parsed.unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"));
+                    assert!(
+                        !reported.is_clean(),
+                        "{id} {mode} must witness the deviation"
+                    );
+                    assert_eq!(reported.value.value(), *value, "{id} {mode} value");
+                }
             }
-            Expect::ResponseStrictRejectsLenientKeepsDomain { value, domain } => {
-                assert!(
-                    SetCookie::parse_strict(&wire).is_err(),
-                    "{id} strict must reject"
-                );
-                let sc = SetCookie::parse(&wire)
-                    .unwrap_or_else(|_| panic!("{id} default must keep the cookie"))
-                    .into_value();
-                assert_eq!(sc.value(), *value, "{id} value");
-                assert_eq!(
-                    sc.attributes().domain.map(|d| d.as_str()),
-                    *domain,
-                    "{id} lenient Domain — §5.2.2 keeps the earlier valid occurrence"
-                );
+            Expect::ResponseKeptWithIssuesDomain { value, domain } => {
+                for (mode, parsed) in [
+                    ("strict", SetCookie::parse_strict(&wire)),
+                    ("default", SetCookie::parse(&wire)),
+                ] {
+                    let reported =
+                        parsed.unwrap_or_else(|_| panic!("{id} {mode} must keep the cookie"));
+                    assert!(
+                        !reported.is_clean(),
+                        "{id} {mode} must witness the deviation"
+                    );
+                    assert_eq!(reported.value.value(), *value, "{id} {mode} value");
+                    assert_eq!(
+                        reported.value.attributes().domain.map(|d| d.as_str()),
+                        *domain,
+                        "{id} {mode} Domain — §5.2.2 keeps the earlier valid occurrence"
+                    );
+                }
             }
             Expect::ResponseValue {
                 value,

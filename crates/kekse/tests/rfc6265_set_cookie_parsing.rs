@@ -105,9 +105,9 @@ fn attribute_names_are_case_insensitive() {
 }
 
 #[test]
-fn unknown_attribute_recovered_by_default_fatal_in_strict() {
-    // §5.2: an unrecognised attribute is ignored by default — and witnessed —
-    // where strict grading refuses the cookie.
+fn unknown_attribute_is_recovered_and_witnessed_in_both_gradings() {
+    // §5.2: an unrecognised attribute is ignored — and witnessed — under
+    // either grading; refusing it is the caller's is_clean gate.
     let parsed = SetCookie::parse("SID=x; Priority=High; Partitioned; Max-Age=60").unwrap();
     assert_eq!(parsed.value.attributes().max_age, Some(60));
     assert!(matches!(
@@ -123,14 +123,19 @@ fn unknown_attribute_recovered_by_default_fatal_in_strict() {
             },
         ]
     ));
+    let strict = SetCookie::parse_strict("SID=x; Priority=High").unwrap();
     assert!(matches!(
-        SetCookie::parse_strict("SID=x; Priority=High").unwrap_err(),
-        SetCookieIssue::UnknownAttribute {
+        strict.issues[..],
+        [SetCookieIssue::UnknownAttribute {
             name: "Priority",
             ..
-        }
+        }]
     ));
-    assert!(SetCookie::parse_strict("SID=x; Partitioned").is_err());
+    assert!(
+        !SetCookie::parse_strict("SID=x; Partitioned")
+            .unwrap()
+            .is_clean()
+    );
 }
 
 #[test]

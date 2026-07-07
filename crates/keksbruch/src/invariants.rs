@@ -168,28 +168,31 @@ pub fn assert_report_consistency_bytes(wire: &[u8]) {
     }
 }
 
-/// The `Set-Cookie` gradings agree the way the request readers do. Three
+/// The `Set-Cookie` gradings agree the way the request readers do. Four
 /// prongs:
 ///
-/// - Strict-accepted ⊆ lenient-accepted: a cookie strict salvages, lenient
-///   salvages too (and a pair lenient finds fatal, strict finds fatal).
+/// - Fatality is grading-independent: strict and lenient reject exactly the
+///   same wires (the unusable pair), so strict-accepted = lenient-accepted.
 /// - Strict's salvage carries no attribute lenient's does not: every
 ///   attribute strict sets equals lenient's — strict grading can only drop
 ///   more (an `Expires` outside the IMF-fixdate), never invent or alter.
+/// - Lenient's issues are a subset of strict's — everything lenient
+///   witnesses, strict witnesses too.
 /// - Every issue — fatal or reported, either grading — renders
 ///   control-byte-free (the no-echo promise).
 pub fn assert_set_cookie_report_consistency(wire: &str) {
     let lenient = SetCookie::parse(wire);
     let strict = SetCookie::parse_strict(wire);
+    assert_eq!(
+        lenient.is_ok(),
+        strict.is_ok(),
+        "fatality diverges between the gradings for {wire:?}"
+    );
     if let Ok(reported) = &lenient {
         for issue in &reported.issues {
             assert_issue_display_safe(&issue.to_string(), wire.as_bytes());
         }
     } else if let Err(fatal) = &lenient {
-        assert!(
-            strict.is_err(),
-            "lenient-fatal but strict-salvaged for {wire:?}"
-        );
         assert_issue_display_safe(&fatal.to_string(), wire.as_bytes());
     }
     match &strict {
@@ -200,6 +203,12 @@ pub fn assert_set_cookie_report_consistency(wire: &str) {
             let lenient = lenient
                 .as_ref()
                 .expect("strict salvaged a cookie lenient found fatal");
+            for issue in &lenient.issues {
+                assert!(
+                    reported.issues.contains(issue),
+                    "lenient witnessed {issue:?}, absent from strict, for {wire:?}"
+                );
+            }
             let s = reported.value.attributes();
             let l = lenient.value.attributes();
             assert_eq!(s.http_only, l.http_only, "HttpOnly diverges for {wire:?}");
