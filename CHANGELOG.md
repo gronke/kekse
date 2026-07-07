@@ -5,6 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `rfc_6265`: `date::ImfFixdate`, a lazy `Display` of the canonical IMF-fixdate that renders onto a stack buffer; `format_imf_fixdate` delegates to it.
+- Criterion benchmarks for the codec hot paths (`benches/codec.rs`) and a deterministic allocation-count companion (`benches/allocs.rs`), both dev-only.
+
+### Changed
+
+- The value decoder gates and escape-scans each value in one pass, so a clean value skips percent-decoding entirely; typical `Cookie:` headers parse 25-30% faster.
+- Pairs, jars, and `Set-Cookie` values render into one pre-sized buffer: a full `Set-Cookie` makes a single heap request (previously thirteen), and `CookieJar::to_header_string` one (previously two per cookie plus the join).
+- The axum extractor sizes its joined header buffer exactly instead of growing it per value.
+
 ## [0.1.0]
 
 ### Added
