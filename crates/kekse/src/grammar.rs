@@ -32,6 +32,7 @@ pub(crate) const ENCODE_IN_QUOTES: &AsciiSet = &ENCODE_FULL.remove(b' ').remove(
 
 /// Whether `c` is `SP` or `HTAB` — the `char` form, for `trim_matches`. (The byte form is
 /// [`rfc_6265::grammar::is_ws`].)
+#[inline]
 pub(crate) const fn is_ws_char(c: char) -> bool {
     c == ' ' || c == '\t'
 }

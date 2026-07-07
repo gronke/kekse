@@ -283,11 +283,21 @@ impl<'a> CookieJar<'a> {
     /// (no raw retention). For the typed header use
     /// [`to_header_value`](CookieJar::to_header_value).
     pub fn to_header_string(&self, encoding: ValueEncoding) -> String {
-        self.cookies
+        // Decoded lengths lower-bound their encoded forms, so the reservation
+        // is exact for clean values and a floor for values the encoding grows.
+        let pairs: usize = self
+            .cookies
             .iter()
-            .map(|c| c.to_pair(encoding))
-            .collect::<Vec<_>>()
-            .join("; ")
+            .map(|c| c.name().len() + 1 + c.value().len())
+            .sum();
+        let mut out = String::with_capacity(pairs + 2 * self.cookies.len().saturating_sub(1));
+        for (i, cookie) in self.cookies.iter().enumerate() {
+            if i > 0 {
+                out.push_str("; ");
+            }
+            cookie.write_pair_into(&mut out, encoding);
+        }
+        out
     }
 
     /// Render the jar as an `http::HeaderValue` ready to set on a request.
@@ -725,6 +735,31 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("a", "1"), ("b", "2"), ("c", "3")]
         );
+    }
+
+    #[test]
+    fn header_string_equals_the_join_of_individual_pairs() {
+        // The single-buffer writer and the per-pair renderer are the same
+        // serialization: joining `to_pair` outputs with "; " reconstructs
+        // `to_header_string` for every encoding, jar size, and value shape.
+        let empty = CookieJar::new();
+        let single = CookieJar::parse("SID=deadbeef");
+        let mixed = CookieJar::parse(r#"a=1; pref="dark mode"; name=caf%C3%A9; q=100%25; e="#);
+        for jar in [&empty, &single, &mixed] {
+            for encoding in [
+                ValueEncoding::Auto,
+                ValueEncoding::Percent,
+                ValueEncoding::Quoted,
+                ValueEncoding::Raw,
+            ] {
+                let oracle = jar
+                    .iter()
+                    .map(|c| c.to_pair(encoding))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                assert_eq!(jar.to_header_string(encoding), oracle, "{encoding:?}");
+            }
+        }
     }
 
     #[test]

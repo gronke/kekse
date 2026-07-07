@@ -75,7 +75,21 @@ impl<'a> Cookie<'a> {
     /// — the form [`CookieJar`](crate::CookieJar) uses to re-encode an entire
     /// header to one canonical encoding regardless of how each value arrived.
     pub fn to_pair(&self, encoding: ValueEncoding) -> String {
-        format!("{}={}", self.name, encode_value(&self.value, encoding))
+        let mut out = String::new();
+        self.write_pair_into(&mut out, encoding);
+        out
+    }
+
+    /// Append `name=value` to `out`, the value escaped per `encoding` — the one
+    /// pair writer [`to_pair`](Cookie::to_pair) and the jar serializer share.
+    /// Reserves the pair's exact length up front, so a fresh `String` ends up
+    /// allocated once.
+    pub(crate) fn write_pair_into(&self, out: &mut String, encoding: ValueEncoding) {
+        let value = encode_value(&self.value, encoding);
+        out.reserve(self.name.len() + 1 + value.len());
+        out.push_str(self.name);
+        out.push('=');
+        out.push_str(&value);
     }
 
     /// Complete this request kernel into a response
