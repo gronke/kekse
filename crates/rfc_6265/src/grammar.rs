@@ -124,9 +124,13 @@ pub const fn is_cookie_name_bytes(name: &[u8]) -> bool {
     true
 }
 
-/// Whether `name` begins with the RFC 6265bis (draft) §4.1.3 `__Secure-` cookie-name prefix,
-/// matched ASCII-case-insensitively — the way user agents match it, so `__SeCuRe-` cannot dodge
-/// the prefix's requirements.
+/// Whether `name` begins with the `__Secure-` cookie-name prefix (RFC 6265bis, draft),
+/// matched ASCII-case-insensitively.
+///
+/// The draft splits the two sides: §4.1.3 spells the *server* contract case-sensitively — a
+/// conformant server emits exactly `__Secure-` — while the storage model has *user agents*
+/// enforce the prefix rules case-insensitively. This predicate matches the enforcement side,
+/// so `__SeCuRe-` cannot dodge the prefix's requirements.
 ///
 /// <https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#section-4.1.3>
 ///
@@ -159,9 +163,13 @@ pub const fn has_secure_prefix_bytes(name: &[u8]) -> bool {
     starts_with_ignore_ascii_case(name, b"__secure-")
 }
 
-/// Whether `name` begins with the RFC 6265bis (draft) §4.1.3 `__Host-` cookie-name prefix,
-/// matched ASCII-case-insensitively — the way user agents match it, so `__hOsT-` cannot dodge
-/// the prefix's requirements.
+/// Whether `name` begins with the `__Host-` cookie-name prefix (RFC 6265bis, draft),
+/// matched ASCII-case-insensitively.
+///
+/// The draft splits the two sides: §4.1.3 spells the *server* contract case-sensitively — a
+/// conformant server emits exactly `__Host-` — while the storage model has *user agents*
+/// enforce the prefix rules case-insensitively. This predicate matches the enforcement side,
+/// so `__hOsT-` cannot dodge the prefix's requirements.
 ///
 /// <https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#section-4.1.3>
 ///

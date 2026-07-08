@@ -51,7 +51,7 @@ More runnable programs live in [`crates/kekse/examples/`](crates/kekse/examples)
 | **RFC 6265** | The core: §4.1.1 cookie grammar (the cookie-octet alphabet, the cookie-name token), §5.2 `Set-Cookie` parsing (unknown attributes are ignored, not fatal), §5.1.1 cookie-date, §5.4 the `Cookie` request header. |
 | **RFC 7230** §3.2.6 | The `token` grammar for cookie-names — borrowed from the `http` crate, not re-implemented as a homemade table. |
 | **RFC 7231** §7.1.1.1 | IMF-fixdate, the strict `Expires` format. |
-| **RFC 6265bis** (draft) | The `SameSite` attribute (`Strict` / `Lax` / `None`), and the `__Host-` / `__Secure-` cookie-name prefixes (§4.1.3, matched case-insensitively) — a violated prefix rule is witnessed as a constraint issue, never enforced. |
+| **RFC 6265bis** (draft) | The `SameSite` attribute (`Strict` / `Lax` / `None`), and the `__Host-` / `__Secure-` cookie-name prefixes (§4.1.3) — a violated prefix rule is witnessed as a constraint issue, never enforced. The checks match case-insensitively like user-agent *enforcement*; §4.1.3's server contract is the canonical, case-sensitive spelling. |
 | **CHIPS** (draft) | The `Partitioned` attribute, a typed presence flag; its required `Secure` pairing is witnessed the same way. |
 
 ## Tested hard — keksbruch & the parser matrix
