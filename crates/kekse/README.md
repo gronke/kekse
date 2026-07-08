@@ -5,7 +5,7 @@ A strict, dependency-light cookie codec.
 ## Highlights
 
 - **Both directions.** Build `Set-Cookie` via `SetCookie`. Read and write `Cookie` via a `CookieJar` of typed `Cookie`s. Convert either into an `http::HeaderValue`.
-- **Built to RFC 6265.** Plus RFC 7230 tokens, RFC 7231 dates, and RFC 6265bis `SameSite`.
+- **Built to RFC 6265.** Plus RFC 7230 tokens, RFC 7231 dates, RFC 6265bis `SameSite` and name prefixes, and CHIPS `Partitioned`.
 - **One interface, two gradings.** Both refuse injection bytes (`;`, CR, LF, NUL, controls, non-ASCII); strict also demands cookie-octets only, and accepts a subset of what lenient accepts.
 - **Fail-soft, never silent.** A junk pair is skipped, not fatal — it can't evict a valid cookie — and every reader returns what it refused, plus an opt-in axum `400`.
 - **Strongly typed.** `Cookie`, `SetCookie`, `CookieJar`, and typed attributes. Never string maps.
@@ -45,7 +45,9 @@ assert_eq!(header, "SID=deadbeef; HttpOnly; SameSite=Strict; Secure; Path=/; Max
 
 The verbs are optional sugar over `CookieAttributes`, a plain `Default` struct; the [`build_set_cookie`](examples/build_set_cookie.rs) example builds the same cookie three ways.
 
-Attributes are emitted in a fixed order: `HttpOnly`, `SameSite`, `Secure`, `Path`, `Domain`, `Expires`, `Max-Age`, each only when set.
+Attributes are emitted in a fixed order: `HttpOnly`, `SameSite`, `Secure`, `Partitioned`, `Path`, `Domain`, `Expires`, `Max-Age`, each only when set.
+
+The RFC 6265bis §4.1.3 name prefixes (`__Host-`/`__Secure-`, matched case-insensitively) and CHIPS' `Partitioned`/`Secure` pairing are modeled as *witnessed* constraints, never enforced: a parse keeps a violating cookie exactly as written and reports a `ConstraintViolation` issue in both gradings, and `set_cookie.constraint_violations()` runs the same checks on a cookie you build.
 
 To hand the cookie straight to `http`, use `HeaderValue::try_from(set_cookie)` (or `&set_cookie`) instead of `.to_set_cookie()`: the managed encodings are always valid header bytes, so it fails only for a `Raw` value the caller deliberately built with non-header bytes.
 
@@ -88,7 +90,7 @@ async fn whoami(cookies: CookieJarBuf) -> Result<String, BadCookieHeader> {
 | Type | What it is |
 | --- | --- |
 | `Cookie` | one `name=value` from a request `Cookie:` header — no attributes; the shared core |
-| `SetCookie` | a response `Set-Cookie:` — a `Cookie` plus typed `CookieAttributes` (`HttpOnly`, `Secure`, `SameSite`, `Path`, `Domain`, `Expires`, `Max-Age`) |
+| `SetCookie` | a response `Set-Cookie:` — a `Cookie` plus typed `CookieAttributes` (`HttpOnly`, `Secure`, `Partitioned`, `SameSite`, `Path`, `Domain`, `Expires`, `Max-Age`) |
 | `CookieJar` | an ordered, writable view over a `Cookie:` header — parsed and rebuildable, not a store |
 
 A request `Cookie` completes into a `SetCookie` with `into_set_cookie()` (default attributes) or `with_attributes(..)`, and drops back with `into_cookie()`. The attribute verbs also build a standalone `CookieAttributes`, so one hardened policy can be reused across cookies.

@@ -6,7 +6,7 @@ A strict, dependency-light cookie **codec** for Rust.
 
 ## Highlights
 
-- **Built to RFC 6265.** With RFC 7230 tokens, RFC 7231 dates, and RFC 6265bis `SameSite` — see [Standards](#standards).
+- **Built to RFC 6265.** With RFC 7230 tokens, RFC 7231 dates, RFC 6265bis `SameSite` and name prefixes, and CHIPS `Partitioned` — see [Standards](#standards).
 - **Strict mode.** Brutally strict — cookie-octets only.
 - **Lenient mode.** Compliant and tolerant — yet, like strict, refuses injection bytes (`;`, CR, LF, NUL, controls, raw non-ASCII).
 - **Strongly typed.** `Cookie`, `SetCookie`, `CookieJar`, `SameSite`, and typed attributes — never stringly-typed maps.
@@ -51,7 +51,8 @@ More runnable programs live in [`crates/kekse/examples/`](crates/kekse/examples)
 | **RFC 6265** | The core: §4.1.1 cookie grammar (the cookie-octet alphabet, the cookie-name token), §5.2 `Set-Cookie` parsing (unknown attributes are ignored, not fatal), §5.1.1 cookie-date, §5.4 the `Cookie` request header. |
 | **RFC 7230** §3.2.6 | The `token` grammar for cookie-names — borrowed from the `http` crate, not re-implemented as a homemade table. |
 | **RFC 7231** §7.1.1.1 | IMF-fixdate, the strict `Expires` format. |
-| **RFC 6265bis** (draft) | The `SameSite` attribute (`Strict` / `Lax` / `None`). |
+| **RFC 6265bis** (draft) | The `SameSite` attribute (`Strict` / `Lax` / `None`), and the `__Host-` / `__Secure-` cookie-name prefixes (§4.1.3, matched case-insensitively) — a violated prefix rule is witnessed as a constraint issue, never enforced. |
+| **CHIPS** (draft) | The `Partitioned` attribute, a typed presence flag; its required `Secure` pairing is witnessed the same way. |
 
 ## Tested hard — keksbruch & the parser matrix
 
