@@ -142,8 +142,11 @@ pub fn assert_pair_conservation_bytes(wire: &[u8]) {
 ///   dropped `Max-Age=banana` or an ignored `Priority` can never vanish
 ///   without a trace.
 /// - The salvage is a fixpoint: re-rendering it and re-parsing under the same
-///   grading yields the same cookie with a clean report — whatever the parse
-///   changed is visible in the salvage, never smuggled.
+///   grading yields the same cookie, and the only surviving issues are the
+///   salvage's own standing constraint violations
+///   (`SetCookie::constraint_violations`) — properties of the cookie itself,
+///   not of the wire's syntax. Whatever the parse changed is visible in the
+///   salvage, never smuggled.
 pub fn assert_response_divergence_witnessed(wire: &str) {
     for strict in [false, true] {
         let parsed = if strict {
@@ -183,11 +186,11 @@ pub fn assert_response_divergence_witnessed(wire: &str) {
         .unwrap_or_else(|fatal| {
             panic!("salvage of {wire:?} re-renders unparseable ({fatal}): {rendered:?}")
         });
-        assert!(
-            again.is_clean(),
-            "salvage of {wire:?} is not a fixpoint (strict={strict}): {rendered:?} \
-             re-parses with {:?}",
-            again.issues
+        assert_eq!(
+            again.issues,
+            reported.value.constraint_violations(),
+            "salvage of {wire:?} re-parses with issues beyond its own standing \
+             constraint violations (strict={strict}): {rendered:?}"
         );
         assert_eq!(
             again.value, reported.value,
