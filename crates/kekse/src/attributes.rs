@@ -208,9 +208,9 @@ impl fmt::Display for InvalidDomain<'_> {
 impl std::error::Error for InvalidDomain<'_> {}
 
 /// The response attributes of a `Set-Cookie:` line: `HttpOnly`, `Secure`,
-/// `SameSite`, `Path`, `Domain`, `Max-Age` — everything a request `Cookie:`
-/// cookie does not carry. A [`SetCookie`](crate::SetCookie) is a
-/// [`Cookie`](crate::Cookie) kernel plus one of these.
+/// `Partitioned`, `SameSite`, `Path`, `Domain`, `Max-Age` — everything a
+/// request `Cookie:` cookie does not carry. A [`SetCookie`](crate::SetCookie)
+/// is a [`Cookie`](crate::Cookie) kernel plus one of these.
 ///
 /// The fields are **public and read directly** (`attrs.secure`, `attrs.max_age`);
 /// the **same-named methods set them** as a fluent builder. Field access and the
@@ -220,10 +220,11 @@ impl std::error::Error for InvalidDomain<'_> {}
 /// [`Default`] is "nothing set": the baseline a freshly completed cookie carries
 /// and the one [`SetCookie::new`](crate::SetCookie::new) starts from.
 ///
-/// `HttpOnly` and `Secure` are valueless presence flags on the wire, so their
-/// setters are **nullary**: calling [`http_only`](CookieAttributes::http_only)
-/// or [`secure`](CookieAttributes::secure) adds the attribute; not calling it
-/// omits it. There is no "set to false" — leave it unset. `path` / `domain`
+/// `HttpOnly`, `Secure`, and `Partitioned` are valueless presence flags on the
+/// wire, so their setters are **nullary**: calling
+/// [`http_only`](CookieAttributes::http_only), [`secure`](CookieAttributes::secure),
+/// or [`partitioned`](CookieAttributes::partitioned) adds the attribute; not
+/// calling it omits it. There is no "set to false" — leave it unset. `path` / `domain`
 /// take the validated [`Path`] / [`Domain`] newtypes (read them with
 /// `.as_str()`), so construction — [`Path::new`] / [`Domain::new`] — is where
 /// an invalid value surfaces, as an error naming the refused value; a chain
@@ -248,6 +249,9 @@ pub struct CookieAttributes<'a> {
     pub http_only: bool,
     /// The `Secure` flag.
     pub secure: bool,
+    /// The `Partitioned` flag (CHIPS) — the cookie is keyed to the top-level
+    /// site it was set under. CHIPS requires `Secure` alongside it.
+    pub partitioned: bool,
     /// The `SameSite` attribute, if set.
     pub same_site: Option<SameSite>,
     /// The `Path` attribute, if set — a validated [`Path`].
@@ -279,6 +283,15 @@ impl<'a> CookieAttributes<'a> {
     #[must_use]
     pub fn secure(mut self) -> Self {
         self.secure = true;
+        self
+    }
+
+    /// Add the `Partitioned` attribute (CHIPS) — a valueless presence flag
+    /// (nullary). Reads back as the field `attributes.partitioned`. CHIPS
+    /// requires `Secure` alongside it.
+    #[must_use]
+    pub fn partitioned(mut self) -> Self {
+        self.partitioned = true;
         self
     }
 
@@ -332,6 +345,7 @@ mod tests {
         let a = CookieAttributes::default();
         assert!(!a.http_only);
         assert!(!a.secure);
+        assert!(!a.partitioned);
         assert_eq!(a.same_site, None);
         assert_eq!(a.path, None);
         assert_eq!(a.domain, None);
@@ -353,11 +367,12 @@ mod tests {
         let a = CookieAttributes::default()
             .http_only()
             .secure()
+            .partitioned()
             .same_site(SameSite::Lax)
             .path(Path::new("/app").unwrap())
             .domain(Domain::new("example.test").unwrap())
             .max_age(60);
-        assert!(a.http_only && a.secure);
+        assert!(a.http_only && a.secure && a.partitioned);
         assert_eq!(a.same_site, Some(SameSite::Lax));
         assert_eq!(a.path, Path::new("/app").ok());
         assert_eq!(a.domain, Domain::new("example.test").ok());

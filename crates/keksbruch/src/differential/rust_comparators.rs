@@ -142,6 +142,7 @@ fn kekse_view(sc: &kekse::SetCookie) -> SetCookieView {
         value: sc.value().to_string(),
         http_only: a.http_only,
         secure: a.secure,
+        partitioned: a.partitioned,
         same_site: a.same_site.map(|s| s.as_str().to_string()),
         path: a.path.map(|p| p.as_str().to_string()),
         domain: a.domain.map(|d| d.as_str().to_string()),
@@ -185,6 +186,8 @@ fn cookie_view(c: &cookie::Cookie) -> SetCookieView {
         value: c.value().to_string(),
         http_only: c.http_only().unwrap_or(false),
         secure: c.secure().unwrap_or(false),
+        // The `cookie` crate does not model CHIPS' `Partitioned`.
+        partitioned: false,
         same_site: c.same_site().map(|s| format!("{s:?}")),
         path: c.path().map(str::to_string),
         domain: c.domain().map(str::to_string),
@@ -250,6 +253,8 @@ fn cookie_store_view(c: &cookie_store::Cookie<'_>) -> SetCookieView {
         value: c.value().to_string(),
         http_only: c.http_only().unwrap_or(false),
         secure: c.secure().unwrap_or(false),
+        // Derefs to the `cookie` crate's cookie, which does not model `Partitioned`.
+        partitioned: false,
         same_site: c.same_site().map(|s| format!("{s:?}")),
         path: c.path().map(str::to_string),
         domain: c.domain().map(str::to_string),

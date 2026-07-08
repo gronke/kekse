@@ -18,8 +18,8 @@ use crate::wire::split_checked_pair;
 
 /// A `Set-Cookie:` response cookie: a [`Cookie`] kernel (name, value, wire
 /// encoding) plus [`CookieAttributes`] (`HttpOnly`, `SameSite`, `Secure`,
-/// `Path`, `Domain`, `Expires`, `Max-Age`). A `Set-Cookie` line is *fully
-/// observed*, so the
+/// `Partitioned`, `Path`, `Domain`, `Expires`, `Max-Age`). A `Set-Cookie` line
+/// is *fully observed*, so the
 /// flags are plain `bool` — present or absent on the line — never an `Option`.
 ///
 /// Build one from a request [`Cookie`] with
@@ -33,8 +33,8 @@ use crate::wire::split_checked_pair;
 /// fields (`sc.attributes().secure`, `sc.attributes().max_age`). Render with
 /// [`to_set_cookie`](SetCookie::to_set_cookie) or convert straight into an
 /// `http::HeaderValue` with `HeaderValue::try_from`. Attributes emit in a fixed
-/// order — `HttpOnly`, `SameSite`, `Secure`, `Path`, `Domain`, `Expires`,
-/// `Max-Age` — each only when set. The builder does **not** validate the name (check
+/// order — `HttpOnly`, `SameSite`, `Secure`, `Partitioned`, `Path`, `Domain`,
+/// `Expires`, `Max-Age` — each only when set. The builder does **not** validate the name (check
 /// [`is_cookie_name`](crate::is_cookie_name) at the call site if it is
 /// untrusted); [`parse`](SetCookie::parse) does.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -65,8 +65,8 @@ impl<'a> SetCookie<'a> {
     /// order; `Err` is the single fatal issue — without a usable `name=value`
     /// pair there is no cookie to salvage. Lenient grading: an **unrecognised
     /// attribute is ignored** and reported, per §5.2 — so a modern attribute
-    /// this version does not model (`Partitioned`, `Priority`, …) never costs
-    /// you the cookie, and never vanishes without a trace. A duplicate keeps
+    /// this version does not model (`Priority`, …) never costs you the cookie,
+    /// and never vanishes without a trace. A duplicate keeps
     /// last-wins, a malformed known value is dropped (§5.2.2), a valued flag
     /// still sets — each recovered piece lands in `issues`, and
     /// [`is_clean`](Reported::is_clean) is the opt-in fail-hard gate.
@@ -76,7 +76,7 @@ impl<'a> SetCookie<'a> {
     /// value runs through the same lenient pipeline as
     /// [`parse_pairs`](crate::parse_pairs) (one wrapping quote pair stripped,
     /// cookie-octets plus whitespace, percent-decoded). Attributes are matched
-    /// ASCII-case-insensitively: `HttpOnly`, `Secure`, `SameSite`
+    /// ASCII-case-insensitively: `HttpOnly`, `Secure`, `Partitioned`, `SameSite`
     /// (`Strict`/`Lax`/`None`), `Path`, `Domain`, `Max-Age` (a `u64`; a negative
     /// or non-numeric delta is dropped), and `Expires` (the lenient RFC 6265
     /// §5.1.1 cookie-date here; [`parse_strict`](SetCookie::parse_strict) takes
@@ -90,7 +90,7 @@ impl<'a> SetCookie<'a> {
     /// ```
     /// use kekse::SetCookie;
     ///
-    /// let parsed = SetCookie::parse("SID=x; HttpOnly; Partitioned")?;
+    /// let parsed = SetCookie::parse("SID=x; HttpOnly; Priority=High")?;
     /// assert_eq!(parsed.value.name(), "SID");
     /// assert!(parsed.value.attributes().http_only);
     /// assert_eq!(parsed.issues.len(), 1); // the unmodeled attribute, witnessed
@@ -241,6 +241,15 @@ impl<'a> SetCookie<'a> {
                     }
                     attributes.secure = true;
                 }
+                KnownAttribute::Partitioned => {
+                    if !val.is_empty() {
+                        report.push(SetCookieIssue::FlagWithValue {
+                            attribute: known,
+                            value: val,
+                        });
+                    }
+                    attributes.partitioned = true;
+                }
                 // `.ok()` drops an unrecognised token (keeping the cookie), same as
                 // a malformed Max-Age — see `SameSite`'s case-insensitive `FromStr`.
                 KnownAttribute::SameSite => {
@@ -313,6 +322,15 @@ impl<'a> SetCookie<'a> {
     #[must_use]
     pub fn secure(mut self) -> Self {
         self.attributes.secure = true;
+        self
+    }
+
+    /// Add the `Partitioned` attribute (CHIPS) — a valueless presence flag
+    /// (nullary). Reads back as `self.attributes().partitioned`. CHIPS requires
+    /// `Secure` alongside it.
+    #[must_use]
+    pub fn partitioned(mut self) -> Self {
+        self.attributes.partitioned = true;
         self
     }
 
@@ -406,9 +424,9 @@ impl<'a> SetCookie<'a> {
     }
 
     /// Render the response `Set-Cookie:` value — `name=value` plus the set
-    /// attributes, in the fixed order `HttpOnly`, `SameSite`, `Secure`, `Path`,
-    /// `Domain`, `Expires`, `Max-Age` (each only when set; a flag only when
-    /// `true`).
+    /// attributes, in the fixed order `HttpOnly`, `SameSite`, `Secure`,
+    /// `Partitioned`, `Path`, `Domain`, `Expires`, `Max-Age` (each only when
+    /// set; a flag only when `true`).
     ///
     /// The pair and each rendered attribute are joined with `"; "` exactly once.
     /// Each attribute is a typed value that renders itself, and its name comes
@@ -448,6 +466,7 @@ impl<'a> SetCookie<'a> {
             a.http_only.then_some(SetCookieAttribute::HttpOnly),
             a.same_site.map(SetCookieAttribute::SameSite),
             a.secure.then_some(SetCookieAttribute::Secure),
+            a.partitioned.then_some(SetCookieAttribute::Partitioned),
             a.path.map(|p| SetCookieAttribute::Path(p.as_str())),
             a.domain.map(|d| SetCookieAttribute::Domain(d.as_str())),
             a.expires.map(SetCookieAttribute::Expires),
@@ -479,6 +498,7 @@ impl<'a> From<(Cookie<'a>, CookieAttributes<'a>)> for SetCookie<'a> {
 mod attr_name {
     pub const HTTP_ONLY: &str = "HttpOnly";
     pub const SECURE: &str = "Secure";
+    pub const PARTITIONED: &str = "Partitioned";
     pub const SAME_SITE: &str = "SameSite";
     pub const PATH: &str = "Path";
     pub const DOMAIN: &str = "Domain";
@@ -511,13 +531,15 @@ pub enum KnownAttribute {
     MaxAge,
     /// The `Expires` attribute.
     Expires,
+    /// The `Partitioned` presence flag (CHIPS).
+    Partitioned,
 }
 
 impl KnownAttribute {
     /// Every recognisable attribute. [`recognize`](KnownAttribute::recognize)
     /// scans this list, so a variant missing here would be unreachable from the
     /// wire — the recognition test walks it against every canonical name.
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::HttpOnly,
         Self::Secure,
         Self::SameSite,
@@ -525,6 +547,7 @@ impl KnownAttribute {
         Self::Domain,
         Self::MaxAge,
         Self::Expires,
+        Self::Partitioned,
     ];
 
     /// The canonical wire name — the same `attr_name` constant the serializer
@@ -538,6 +561,7 @@ impl KnownAttribute {
             Self::Domain => attr_name::DOMAIN,
             Self::MaxAge => attr_name::MAX_AGE,
             Self::Expires => attr_name::EXPIRES,
+            Self::Partitioned => attr_name::PARTITIONED,
         }
     }
 
@@ -549,7 +573,7 @@ impl KnownAttribute {
     }
 
     /// This attribute's bit in the strict-mode duplicate mask, derived from the
-    /// discriminant (7 variants fit a `u8`) — collision-free by construction.
+    /// discriminant (8 variants fit a `u8`) — collision-free by construction.
     const fn bit(self) -> u8 {
         1 << (self as u8)
     }
@@ -570,8 +594,8 @@ impl KnownAttribute {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SetCookieIssue<'a> {
     /// An attribute name this version does not model — a genuinely new
-    /// attribute (`Partitioned`, `Priority`, …), a mistyped one (`HttpOnlyy`),
-    /// or two attributes fused by a forgotten `;`. Ignored (RFC 6265 §5.2) and
+    /// attribute (`Priority`, …), a mistyped one (`HttpOnlyy`), or two
+    /// attributes fused by a forgotten `;`. Ignored (RFC 6265 §5.2) and
     /// reported, in both gradings.
     #[non_exhaustive]
     UnknownAttribute {
@@ -671,13 +695,14 @@ fn noted<'a, T>(
 /// [`to_set_cookie`](SetCookie::to_set_cookie) turns each set attribute into one
 /// of these and joins their [`Display`](fmt::Display) with `"; "`. Their names
 /// come from the `attr_name` constants the parser also matches, so the wire form
-/// has a single source of truth. Boolean flags are presence-only: `HttpOnly` and
-/// `Secure` render bare, with no `=value`.
+/// has a single source of truth. Boolean flags are presence-only: `HttpOnly`,
+/// `Secure`, and `Partitioned` render bare, with no `=value`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum SetCookieAttribute<'a> {
     HttpOnly,
     SameSite(SameSite),
     Secure,
+    Partitioned,
     Path(&'a str),
     Domain(&'a str),
     Expires(OffsetDateTime),
@@ -692,6 +717,7 @@ impl SetCookieAttribute<'_> {
             Self::HttpOnly => attr_name::HTTP_ONLY.len(),
             Self::SameSite(same_site) => attr_name::SAME_SITE.len() + 1 + same_site.as_str().len(),
             Self::Secure => attr_name::SECURE.len(),
+            Self::Partitioned => attr_name::PARTITIONED.len(),
             Self::Path(path) => attr_name::PATH.len() + 1 + path.len(),
             Self::Domain(domain) => attr_name::DOMAIN.len() + 1 + domain.len(),
             // An IMF-fixdate is 29 bytes for the four-digit years `time` emits.
@@ -712,6 +738,7 @@ impl fmt::Display for SetCookieAttribute<'_> {
                 write!(f, "{}={}", attr_name::SAME_SITE, same_site.as_str())
             }
             Self::Secure => f.write_str(attr_name::SECURE),
+            Self::Partitioned => f.write_str(attr_name::PARTITIONED),
             Self::Path(path) => write!(f, "{}={}", attr_name::PATH, path),
             Self::Domain(domain) => write!(f, "{}={}", attr_name::DOMAIN, domain),
             Self::Expires(when) => {
@@ -781,7 +808,7 @@ mod tests {
             );
         }
         // An attribute this version does not model stays unrecognised.
-        assert_eq!(KnownAttribute::recognize("Partitioned"), None);
+        assert_eq!(KnownAttribute::recognize("Priority"), None);
         assert_eq!(KnownAttribute::recognize(""), None);
     }
 
@@ -792,6 +819,7 @@ mod tests {
         for (known, dup) in [
             (KnownAttribute::HttpOnly, "HttpOnly; HttpOnly"),
             (KnownAttribute::Secure, "Secure; Secure"),
+            (KnownAttribute::Partitioned, "Partitioned; Partitioned"),
             (KnownAttribute::SameSite, "SameSite=Lax; SameSite=Strict"),
             (KnownAttribute::Path, "Path=/a; Path=/b"),
             (KnownAttribute::Domain, "Domain=a.test; Domain=b.test"),
@@ -819,7 +847,7 @@ mod tests {
             }
         }
         // The ALL table drives the loop above; make sure the loop covered it fully.
-        assert_eq!(KnownAttribute::ALL.len(), 7);
+        assert_eq!(KnownAttribute::ALL.len(), 8);
     }
 
     // ---- rendering --------------------------------------------------------
@@ -837,11 +865,13 @@ mod tests {
                 .max_age(60)
                 .domain(Domain::new("example.test").unwrap())
                 .path(Path::new("/app").unwrap())
+                .partitioned()
                 .secure()
                 .same_site(SameSite::None)
                 .http_only()
                 .to_set_cookie(),
-            "n=v; HttpOnly; SameSite=None; Secure; Path=/app; Domain=example.test; Max-Age=60"
+            "n=v; HttpOnly; SameSite=None; Secure; Partitioned; Path=/app; Domain=example.test; \
+             Max-Age=60"
         );
         // A flag never called is simply absent.
         assert_eq!(
@@ -913,6 +943,7 @@ mod tests {
             .max_age(60)
             .domain(Domain::new("example.test").unwrap())
             .path(Path::new("/app").unwrap())
+            .partitioned()
             .secure()
             .same_site(SameSite::Lax)
             .http_only();
@@ -923,6 +954,7 @@ mod tests {
                 SetCookieAttribute::HttpOnly,
                 SetCookieAttribute::SameSite(SameSite::Lax),
                 SetCookieAttribute::Secure,
+                SetCookieAttribute::Partitioned,
                 SetCookieAttribute::Path("/app"),
                 SetCookieAttribute::Domain("example.test"),
                 SetCookieAttribute::MaxAge(60),
@@ -936,10 +968,10 @@ mod tests {
     fn to_set_cookie_equals_the_joined_attribute_renderings() {
         // The single-buffer writer is byte-identical to joining the pair and
         // each attribute's own rendering with "; " — checked over every one of
-        // the 2^7 set/unset attribute combinations, with a value the default
+        // the 2^8 set/unset attribute combinations, with a value the default
         // encoding escapes.
         use time::macros::datetime;
-        for mask in 0u8..128 {
+        for mask in 0u16..256 {
             let mut sc = SetCookie::new("SID", "dead beef");
             if mask & 1 != 0 {
                 sc = sc.http_only();
@@ -961,6 +993,9 @@ mod tests {
             }
             if mask & 64 != 0 {
                 sc = sc.max_age(3600);
+            }
+            if mask & 128 != 0 {
+                sc = sc.partitioned();
             }
             let oracle = std::iter::once(sc.to_request_pair())
                 .chain(sc.set_cookie_attributes().iter().map(ToString::to_string))

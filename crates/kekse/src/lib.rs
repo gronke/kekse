@@ -15,9 +15,9 @@
 //! A [`Cookie`] is the request `Cookie:` cookie — a `name=value` kernel (plus its
 //! wire [`ValueEncoding`]) with no attributes, because a `Cookie:` header carries
 //! only pairs. A [`SetCookie`] is the response `Set-Cookie:` cookie — a [`Cookie`]
-//! kernel plus [`CookieAttributes`] (`HttpOnly`, `Secure`, `SameSite`, `Path`,
-//! `Domain`, `Expires`, `Max-Age`). A `Set-Cookie` line is fully observed, so the
-//! flags are
+//! kernel plus [`CookieAttributes`] (`HttpOnly`, `Secure`, `Partitioned`,
+//! `SameSite`, `Path`, `Domain`, `Expires`, `Max-Age`). A `Set-Cookie` line is
+//! fully observed, so the flags are
 //! plain `bool` — whether an attribute is *known* is answered by which type you
 //! hold, not by an `Option`.
 //!
@@ -110,7 +110,7 @@
 //! value back into a salvaged [`SetCookie`] plus its [`SetCookieIssue`]s
 //! (RFC 6265 §5.2, attributes matched case-insensitively): an unrecognised
 //! attribute is ignored and witnessed — so a newer attribute like
-//! `Partitioned` never costs the cookie, and never vanishes — a duplicate
+//! `Priority` never costs the cookie, and never vanishes — a duplicate
 //! keeps last-wins, a malformed known value is dropped, each with its issue.
 //! The one fatal case, in either grading, is a header without a usable
 //! `name=value` pair. [`SetCookie::parse_strict`] narrows only the grading:

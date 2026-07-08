@@ -108,20 +108,14 @@ fn attribute_names_are_case_insensitive() {
 fn unknown_attribute_is_recovered_and_witnessed_in_both_gradings() {
     // §5.2: an unrecognised attribute is ignored — and witnessed — under
     // either grading; refusing it is the caller's is_clean gate.
-    let parsed = SetCookie::parse("SID=x; Priority=High; Partitioned; Max-Age=60").unwrap();
+    let parsed = SetCookie::parse("SID=x; Priority=High; Max-Age=60").unwrap();
     assert_eq!(parsed.value.attributes().max_age, Some(60));
     assert!(matches!(
         parsed.issues[..],
-        [
-            SetCookieIssue::UnknownAttribute {
-                name: "Priority",
-                ..
-            },
-            SetCookieIssue::UnknownAttribute {
-                name: "Partitioned",
-                ..
-            },
-        ]
+        [SetCookieIssue::UnknownAttribute {
+            name: "Priority",
+            ..
+        }]
     ));
     let strict = SetCookie::parse_strict("SID=x; Priority=High").unwrap();
     assert!(matches!(
@@ -131,11 +125,20 @@ fn unknown_attribute_is_recovered_and_witnessed_in_both_gradings() {
             ..
         }]
     ));
-    assert!(
-        !SetCookie::parse_strict("SID=x; Partitioned")
-            .unwrap()
-            .is_clean()
-    );
+}
+
+#[test]
+fn partitioned_parses_as_a_typed_flag_in_both_gradings() {
+    // CHIPS' `Partitioned` is a modeled presence flag, not an unknown: the
+    // conformant `Secure` pairing parses clean under either grading.
+    for parsed in [
+        SetCookie::parse("SID=x; Partitioned; Secure").unwrap(),
+        SetCookie::parse_strict("SID=x; Partitioned; Secure").unwrap(),
+    ] {
+        assert!(parsed.value.attributes().partitioned);
+        assert!(parsed.value.attributes().secure);
+        assert!(parsed.is_clean(), "issues: {:?}", parsed.issues);
+    }
 }
 
 #[test]
