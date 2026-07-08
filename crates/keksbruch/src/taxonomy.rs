@@ -125,8 +125,8 @@ pub enum Keksbruch {
         first: &'static str,
         second: &'static str,
     },
-    /// A "kitchen-sink" Set-Cookie that sets **all six** attributes at once
-    /// (`; Path=…; Domain=…; Max-Age=…; Secure; HttpOnly; SameSite=…`) (Response). Probes
+    /// A "kitchen-sink" Set-Cookie that sets **all seven** non-date attributes at once
+    /// (`; Path=…; Domain=…; Max-Age=…; Secure; HttpOnly; SameSite=…; Partitioned`) (Response). Probes
     /// attribute *fidelity*: which parsers surface every attribute vs silently drop one —
     /// the matrix renders this as an explicit per-attribute grid.
     AllAttributes,

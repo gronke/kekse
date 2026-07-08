@@ -50,9 +50,10 @@ Expiry, eviction, HttpOnly, and SameSite are out of scope here — they are API 
 
 ## Attribute fidelity
 
-`resp-all-attrs` sets all six non-date attributes; this is which each parser surfaces.
+`resp-all-attrs` sets all seven non-date attributes; this is which each parser surfaces.
+`◌` marks an attribute the driver's reporting channel cannot observe (classic WebDriver and the Netscape jar format carry no `Partitioned` field) — not a drop.
 `✗` = dropped — except the client jars' `Max-Age`, which they fold into an absolute expiry rather than report as such.
-The seventh attribute, `Expires`, is shown per parser in the `date-*` columns of the Set-Cookie table above rather than here.
+The eighth attribute, `Expires`, is shown per parser in the `date-*` columns of the Set-Cookie table above rather than here.
 Parsers that rejected the cookie outright are omitted.
 
 {{ fidelity_table }}

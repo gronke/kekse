@@ -1583,13 +1583,13 @@ pub fn scenarios() -> Vec<Scenario> {
             },
         ),
         // ── attribute fidelity (Response) ───────────────────────────────────
-        // A "kitchen-sink" cookie that sets all six attributes at once. kekse parses
+        // A "kitchen-sink" cookie that sets all seven non-date attributes at once. kekse parses
         // every one; the matrix renders an explicit per-attribute grid (the "Attribute
         // fidelity" section) showing which parsers preserve vs silently drop each.
         s(
             "resp-all-attrs",
-            "a cookie setting all six attributes (Secure, HttpOnly, SameSite, Path, Domain, Max-Age) \
-             — the attribute-fidelity probe",
+            "a cookie setting all seven non-date attributes (Secure, HttpOnly, SameSite, Path, \
+             Domain, Max-Age, Partitioned) — the attribute-fidelity probe",
             Response,
             "SID",
             Keksbruch::AllAttributes,
@@ -1598,7 +1598,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: Some(60),
                 http_only: true,
                 secure: true,
-                partitioned: false,
+                partitioned: true,
                 issues: &[],
             },
         ),
