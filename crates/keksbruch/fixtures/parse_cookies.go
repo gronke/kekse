@@ -69,14 +69,15 @@ func parseResponse(wire string) map[string]any {
 		return map[string]any{"outcome": "SetCookieRejected", "error": err.Error()}
 	}
 	sc := map[string]any{
-		"name":      c.Name,
-		"value":     c.Value,
-		"http_only": c.HttpOnly,
-		"secure":    c.Secure,
-		"same_site": sameSite(c.SameSite),
-		"path":      optString(c.Path),
-		"domain":    optString(c.Domain),
-		"max_age":   nil,
+		"name":        c.Name,
+		"value":       c.Value,
+		"http_only":   c.HttpOnly,
+		"secure":      c.Secure,
+		"partitioned": c.Partitioned,
+		"same_site":   sameSite(c.SameSite),
+		"path":        optString(c.Path),
+		"domain":      optString(c.Domain),
+		"max_age":     nil,
 	}
 	// Go: MaxAge == 0 means "no Max-Age attribute"; non-zero (incl. negative) is set.
 	if c.MaxAge != 0 {

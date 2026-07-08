@@ -646,6 +646,23 @@ fn field_diffs(
                     });
                 }
             }
+            // Partitioned is tri-state on the tool side: only a column whose
+            // driver can observe the flag makes a claim — an unobservable
+            // `None` can neither invent nor omit.
+            if let (Some(tv), Some(kv)) = (t.partitioned, k.partitioned)
+                && tv != kv
+            {
+                diffs.push(FieldDiff {
+                    field: "Partitioned",
+                    kind: if tv {
+                        DiffKind::Invention
+                    } else {
+                        DiffKind::Omission
+                    },
+                    kekse: kv.to_string(),
+                    tool: tv.to_string(),
+                });
+            }
             // SameSite: value is ASCII-case-insensitive (kekse's canonical `as_str`
             // vs a Debug-formatted or raw-echoed token from another column). A tool
             // asserting a SameSite kekse dropped is a real invention (the motivating
@@ -1020,21 +1037,32 @@ fn build_probe_section(probes: &[JarProbe], columns: &[&Column], cons: &[Option<
 }
 
 // ── attribute fidelity ──────────────────────────────────────────────────────────
-// The `resp-all-attrs` scenario sets every Set-Cookie attribute; this surfaces,
+// The `resp-all-attrs` scenario sets every non-date Set-Cookie attribute; this surfaces,
 // explicitly, which parsers preserve vs silently drop each one — the information loss
 // the matrix is meant to document, beyond the per-cell divergence highlight.
 
-/// The scenario whose wire sets all six attributes (see `scenario.rs`).
+/// The scenario whose wire sets all seven attributes (see `scenario.rs`).
 const FIDELITY_SCENARIO: &str = "resp-all-attrs";
-/// Those six attributes, in render order.
-const FIDELITY_ATTRS: [&str; 6] = [
-    "HttpOnly", "Secure", "SameSite", "Path", "Domain", "Max-Age",
+/// Those seven attributes, in render order.
+const FIDELITY_ATTRS: [&str; 7] = [
+    "HttpOnly",
+    "Secure",
+    "SameSite",
+    "Path",
+    "Domain",
+    "Max-Age",
+    "Partitioned",
 ];
 
-/// Per parser, which of the six attributes it surfaced from `resp-all-attrs` (`true` =
-/// kept, `false` = dropped). Only columns that parsed a cookie there are listed — one
-/// that rejected it (e.g. a client jar on a domain mismatch) is omitted, not scored 0.
-fn attribute_fidelity(scenarios: &[Scenario], columns: &[Column]) -> Vec<(String, [bool; 6])> {
+/// Per parser, which of the seven attributes it surfaced from `resp-all-attrs`
+/// (`Some(true)` = kept, `Some(false)` = dropped, `None` = the driver's channel cannot
+/// observe the attribute — today only `Partitioned` is tri-state). Only columns that
+/// parsed a cookie there are listed — one that rejected it (e.g. a client jar on a
+/// domain mismatch) is omitted, not scored 0.
+fn attribute_fidelity(
+    scenarios: &[Scenario],
+    columns: &[Column],
+) -> Vec<(String, [Option<bool>; 7])> {
     let Some(row) = scenarios.iter().position(|s| s.id == FIDELITY_SCENARIO) else {
         return Vec::new();
     };
@@ -1044,12 +1072,13 @@ fn attribute_fidelity(scenarios: &[Scenario], columns: &[Column]) -> Vec<(String
             ParseOutcome::SetCookie { set_cookie: sc, .. } => Some((
                 c.header(),
                 [
-                    sc.http_only,
-                    sc.secure,
-                    sc.same_site.is_some(),
-                    sc.path.is_some(),
-                    sc.domain.is_some(),
-                    sc.max_age.is_some(),
+                    Some(sc.http_only),
+                    Some(sc.secure),
+                    Some(sc.same_site.is_some()),
+                    Some(sc.path.is_some()),
+                    Some(sc.domain.is_some()),
+                    Some(sc.max_age.is_some()),
+                    sc.partitioned,
                 ],
             )),
             _ => None,
@@ -1057,9 +1086,10 @@ fn attribute_fidelity(scenarios: &[Scenario], columns: &[Column]) -> Vec<(String
         .collect()
 }
 
-/// Build the attribute-fidelity grid model (a `parser × attribute` table of ✓/✗; a
-/// dropped attribute is a `Reject` cell, tinted in HTML).
-fn build_fidelity(rows: &[(String, [bool; 6])]) -> Table {
+/// Build the attribute-fidelity grid model (a `parser × attribute` table of ✓/✗/◌; a
+/// dropped attribute is a `Reject` cell, tinted in HTML; `◌` marks an attribute the
+/// driver's protocol has no channel for — not observable, never scored as a drop).
+fn build_fidelity(rows: &[(String, [Option<bool>; 7])]) -> Table {
     let col_headers = FIDELITY_ATTRS
         .iter()
         .map(|a| CellText::Plain(a.to_string()))
@@ -1071,12 +1101,10 @@ fn build_fidelity(rows: &[(String, [bool; 6])]) -> Table {
             is_ref: false,
             cells: present
                 .iter()
-                .map(|&p| {
-                    if p {
-                        Cell::plain("✓".to_string(), CellKind::Plain)
-                    } else {
-                        Cell::plain("✗".to_string(), CellKind::Reject)
-                    }
+                .map(|&p| match p {
+                    Some(true) => Cell::plain("✓".to_string(), CellKind::Plain),
+                    Some(false) => Cell::plain("✗".to_string(), CellKind::Reject),
+                    None => Cell::plain("◌".to_string(), CellKind::Plain),
                 })
                 .collect(),
         })

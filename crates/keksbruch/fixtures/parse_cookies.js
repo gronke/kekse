@@ -94,6 +94,12 @@ function toughResponse(wire) {
         value: c.value,
         http_only: !!c.httpOnly,
         secure: !!c.secure,
+        // tough-cookie keeps unrecognized attributes verbatim in `.extensions`
+        // (["Partitioned"], ["pArTiTiOnEd=false"]) — scan bare-or-valued,
+        // case-insensitively, the way engines match attribute names.
+        partitioned: Array.isArray(c.extensions)
+          ? c.extensions.some((e) => /^partitioned($|=)/i.test(String(e)))
+          : false,
         same_site: c.sameSite || null,
         path: c.path || null,
         domain: c.domain || null,
@@ -144,6 +150,8 @@ function setCookieParserResponse(wire) {
         value: c.value == null ? "" : c.value,
         http_only: !!c.httpOnly,
         secure: !!c.secure,
+        // set-cookie-parser models the flag natively (case-insensitive, presence-only).
+        partitioned: !!c.partitioned,
         same_site: c.sameSite || null,
         path: c.path || null,
         domain: c.domain || null,

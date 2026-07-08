@@ -233,7 +233,7 @@ impl<'a> KeksbruchRecipe<'a> {
             )
             .into_bytes(),
             (Keksbruch::AllAttributes, Direction::Response) => format!(
-                "{}; Path=/p; Domain=example.com; Max-Age=60; Secure; HttpOnly; SameSite=Lax",
+                "{}; Path=/p; Domain=example.com; Max-Age=60; Secure; HttpOnly; SameSite=Lax; Partitioned",
                 self.base.baseline(Direction::Response)
             )
             .into_bytes(),
