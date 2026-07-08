@@ -124,6 +124,91 @@ pub const fn is_cookie_name_bytes(name: &[u8]) -> bool {
     true
 }
 
+/// Whether `name` begins with the RFC 6265bis (draft) §4.1.3 `__Secure-` cookie-name prefix,
+/// matched ASCII-case-insensitively — the way user agents match it, so `__SeCuRe-` cannot dodge
+/// the prefix's requirements.
+///
+/// <https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#section-4.1.3>
+///
+/// This is the syntax half only: whether the leading bytes spell the prefix. The requirement the
+/// prefix imposes (the `Secure` attribute) is `Set-Cookie` policy and lives in a codec, and the
+/// name as a whole still needs [`is_cookie_name`] to be a valid cookie-name.
+///
+/// ```
+/// use rfc_6265::grammar::has_secure_prefix;
+/// assert!(has_secure_prefix("__Secure-SID") && has_secure_prefix("__SECURE-SID"));
+/// assert!(!has_secure_prefix("Secure-SID") && !has_secure_prefix("__Secure"));
+/// ```
+#[must_use]
+#[inline]
+pub const fn has_secure_prefix(name: &str) -> bool {
+    has_secure_prefix_bytes(name.as_bytes())
+}
+
+/// [`has_secure_prefix`] on raw bytes, for callers still on the wire side of UTF-8 validation.
+/// The two can never drift: the `&str` form *is* this predicate over `as_bytes()`.
+///
+/// ```
+/// use rfc_6265::grammar::has_secure_prefix_bytes;
+/// assert!(has_secure_prefix_bytes(b"__secure-SID"));
+/// assert!(!has_secure_prefix_bytes(b"_Secure-SID"));
+/// ```
+#[must_use]
+#[inline]
+pub const fn has_secure_prefix_bytes(name: &[u8]) -> bool {
+    starts_with_ignore_ascii_case(name, b"__secure-")
+}
+
+/// Whether `name` begins with the RFC 6265bis (draft) §4.1.3 `__Host-` cookie-name prefix,
+/// matched ASCII-case-insensitively — the way user agents match it, so `__hOsT-` cannot dodge
+/// the prefix's requirements.
+///
+/// <https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#section-4.1.3>
+///
+/// This is the syntax half only: whether the leading bytes spell the prefix. The requirements
+/// the prefix imposes (`Secure`, no `Domain`, `Path=/`) are `Set-Cookie` policy and live in a
+/// codec, and the name as a whole still needs [`is_cookie_name`] to be a valid cookie-name.
+///
+/// ```
+/// use rfc_6265::grammar::has_host_prefix;
+/// assert!(has_host_prefix("__Host-SID") && has_host_prefix("__HOST-SID"));
+/// assert!(!has_host_prefix("Host-SID") && !has_host_prefix("__Host"));
+/// ```
+#[must_use]
+#[inline]
+pub const fn has_host_prefix(name: &str) -> bool {
+    has_host_prefix_bytes(name.as_bytes())
+}
+
+/// [`has_host_prefix`] on raw bytes, for callers still on the wire side of UTF-8 validation.
+/// The two can never drift: the `&str` form *is* this predicate over `as_bytes()`.
+///
+/// ```
+/// use rfc_6265::grammar::has_host_prefix_bytes;
+/// assert!(has_host_prefix_bytes(b"__host-SID"));
+/// assert!(!has_host_prefix_bytes(b"x__Host-SID"));
+/// ```
+#[must_use]
+#[inline]
+pub const fn has_host_prefix_bytes(name: &[u8]) -> bool {
+    starts_with_ignore_ascii_case(name, b"__host-")
+}
+
+/// ASCII-case-insensitive `starts_with`; `lower` is spelled lowercase by its callers.
+const fn starts_with_ignore_ascii_case(name: &[u8], lower: &[u8]) -> bool {
+    if name.len() < lower.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < lower.len() {
+        if name[i].to_ascii_lowercase() != lower[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +299,96 @@ mod tests {
         // Non-UTF-8 input is expressible only through the bytes form — and refused.
         assert!(!is_cookie_name_bytes(b"\xff"));
         assert!(!is_cookie_name_bytes(b"a\xffb"));
+    }
+
+    #[test]
+    fn prefix_predicates_match_the_std_oracle_over_single_byte_edits() {
+        // Independent oracle: std's `eq_ignore_ascii_case` over the leading bytes. Mutate every
+        // position of a matching name through every byte, so an off-by-one in the walk or a
+        // wrong prefix byte disagrees with the oracle instead of with itself.
+        let secure = *b"__Secure-x";
+        let host = *b"__Host-x";
+        for i in 0..secure.len() {
+            for b in 0u8..=0xff {
+                let mut name = secure;
+                name[i] = b;
+                let oracle = name[..9].eq_ignore_ascii_case(b"__secure-");
+                assert_eq!(has_secure_prefix_bytes(&name), oracle, "{name:?}");
+            }
+        }
+        for i in 0..host.len() {
+            for b in 0u8..=0xff {
+                let mut name = host;
+                name[i] = b;
+                let oracle = name[..7].eq_ignore_ascii_case(b"__host-");
+                assert_eq!(has_host_prefix_bytes(&name), oracle, "{name:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn prefix_match_accepts_every_casing() {
+        // Every casing of the alphabetic prefix bytes matches: 2^6 for `secure`, 2^4 for `host`.
+        for mask in 0u32..1 << 6 {
+            let mut name = *b"__secure-SID";
+            for (bit, i) in (2..8).enumerate() {
+                if mask & (1 << bit) != 0 {
+                    name[i] = name[i].to_ascii_uppercase();
+                }
+            }
+            assert!(has_secure_prefix_bytes(&name), "{name:?}");
+        }
+        for mask in 0u32..1 << 4 {
+            let mut name = *b"__host-SID";
+            for (bit, i) in (2..6).enumerate() {
+                if mask & (1 << bit) != 0 {
+                    name[i] = name[i].to_ascii_uppercase();
+                }
+            }
+            assert!(has_host_prefix_bytes(&name), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn prefix_near_misses_are_refused() {
+        // The bare prefix with nothing after the dash still *has* the prefix — refusing the
+        // name is is_cookie_name-plus-policy territory, not this predicate's.
+        assert!(has_secure_prefix("__Secure-") && has_host_prefix("__Host-"));
+        for miss in [
+            "",
+            "_",
+            "__",
+            "__Secure",
+            "_Secure-",
+            "Secure-a",
+            "x__Secure-a",
+        ] {
+            assert!(!has_secure_prefix(miss), "{miss:?}");
+        }
+        for miss in ["", "__Host", "_Host-", "Host-a", "x__Host-a", "__Hos-a"] {
+            assert!(!has_host_prefix(miss), "{miss:?}");
+        }
+        // The two prefixes never claim each other.
+        assert!(!has_secure_prefix("__Host-SID") && !has_host_prefix("__Secure-SID"));
+    }
+
+    #[test]
+    fn prefix_bytes_agree_with_the_str_forms() {
+        for s in ["__Secure-SID", "__HOST-a", "__secure-", "SID", "", "_x-"] {
+            assert_eq!(
+                has_secure_prefix_bytes(s.as_bytes()),
+                has_secure_prefix(s),
+                "{s:?}"
+            );
+            assert_eq!(
+                has_host_prefix_bytes(s.as_bytes()),
+                has_host_prefix(s),
+                "{s:?}"
+            );
+        }
+        // A prefix match looks at the leading bytes only; what follows may not even be UTF-8
+        // (a full name check is is_cookie_name_bytes' job, which refuses it).
+        assert!(has_host_prefix_bytes(b"__Host-\xff"));
+        assert!(!has_host_prefix_bytes(b"\xff__Host-"));
     }
 }
