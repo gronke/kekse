@@ -139,7 +139,7 @@ pub fn assert_pair_conservation_bytes(wire: &[u8]) {
 ///
 /// - An attribute segment that did not land in the parsed attribute set is
 ///   covered by an issue — `segments − set_attributes ≤ issues` — so a
-///   dropped `Max-Age=banana` or an ignored `Partitioned` can never vanish
+///   dropped `Max-Age=banana` or an ignored `Priority` can never vanish
 ///   without a trace.
 /// - The salvage is a fixpoint: re-rendering it and re-parsing under the same
 ///   grading yields the same cookie with a clean report — whatever the parse
@@ -162,6 +162,7 @@ pub fn assert_response_divergence_witnessed(wire: &str) {
         let a = reported.value.attributes();
         let set_attributes = usize::from(a.http_only)
             + usize::from(a.secure)
+            + usize::from(a.partitioned)
             + usize::from(a.same_site.is_some())
             + usize::from(a.path.is_some())
             + usize::from(a.domain.is_some())
@@ -302,6 +303,10 @@ pub fn assert_set_cookie_report_consistency(wire: &str) {
             let l = lenient.value.attributes();
             assert_eq!(s.http_only, l.http_only, "HttpOnly diverges for {wire:?}");
             assert_eq!(s.secure, l.secure, "Secure diverges for {wire:?}");
+            assert_eq!(
+                s.partitioned, l.partitioned,
+                "Partitioned diverges for {wire:?}"
+            );
             for (name, strict_set, lenient_set) in [
                 ("SameSite", s.same_site.is_some(), l.same_site.is_some()),
                 ("Path", s.path.is_some(), l.path.is_some()),

@@ -127,6 +127,8 @@ pub struct SetCookieView {
     #[serde(default)]
     pub secure: bool,
     #[serde(default)]
+    pub partitioned: bool,
+    #[serde(default)]
     pub same_site: Option<String>,
     #[serde(default)]
     pub path: Option<String>,
@@ -247,6 +249,9 @@ impl SetCookieView {
         }
         if self.secure {
             flags.push("Secure".to_string());
+        }
+        if self.partitioned {
+            flags.push("Partitioned".to_string());
         }
         if let Some(s) = &self.same_site {
             flags.push(format!("SameSite={s}"));
@@ -394,6 +399,7 @@ mod tests {
             value: "abc".into(),
             http_only: false,
             secure: false,
+            partitioned: false,
             same_site: None,
             path: None,
             domain: None,

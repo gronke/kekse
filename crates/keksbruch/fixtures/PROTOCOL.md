@@ -114,7 +114,9 @@ Internally tagged by `"outcome"`. Matrix rendering shown in parentheses.
 | `ForwardedAltered` | `forwarded: string` | proxy forwarded a Cookie, but altered it | `≠ …` |
 | `ForwardedRejected` | — | proxy did not forward the Cookie (rejected/dropped) | `❌` |
 
-`set_cookie` fields: `name`, `value` (strings); `http_only`, `secure` (bool); `same_site`, `path`,
+`set_cookie` fields: `name`, `value` (strings); `http_only`, `secure`, `partitioned` (bool — each
+defaults to false and may be omitted; `partitioned` is CHIPS' flag, for parsers that model it);
+`same_site`, `path`,
 `domain` (string or null); `max_age` (integer or null — kept as `i64` so a negative delta survives);
 `expires` (integer Unix timestamp or null — the parsed `Expires` attribute).
 A parser that folds `Expires` and `Max-Age` into one effective (possibly now-relative) expiry reports

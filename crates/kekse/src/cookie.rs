@@ -171,6 +171,7 @@ mod tests {
         assert_eq!(*sc.attributes(), crate::CookieAttributes::default());
         assert!(!sc.attributes().http_only);
         assert!(!sc.attributes().secure);
+        assert!(!sc.attributes().partitioned);
         assert_eq!(sc.attributes().same_site, None);
         assert_eq!(sc.attributes().path, None);
         assert_eq!(sc.attributes().domain, None);
