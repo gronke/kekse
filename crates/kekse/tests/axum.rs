@@ -5,16 +5,19 @@
 //!
 //! 1. every managed [`SetCookie`] rendering is a valid `HeaderValue`, so
 //!    *setting* a cookie never fails on the HTTP layer (and `Raw` injection is
-//!    caught there, not smuggled);
+//!    caught there — as the typed 500 — not smuggled);
 //! 2. [`parse_pairs`] / [`parse_pairs_strict`] read back what was set, fail
 //!    soft, straight off a live `Cookie` request header — including the browser
-//!    dance of set-cookie-then-send-it-back.
+//!    dance of set-cookie-then-send-it-back, with the cookie set by returning
+//!    the [`SetCookie`] from the handler (the feature's `IntoResponseParts`).
+
+#![cfg(feature = "axum")]
 
 use axum::Router;
 use axum::body::Body;
 use axum::http::header::{COOKIE, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::routing::get;
 use tower::ServiceExt; // oneshot
 
@@ -83,20 +86,34 @@ fn raw_injection_is_caught_by_the_header_layer() {
 
 // ---- (2) the cookie round-trip through a live router ----------------------
 
-/// Mints a session cookie the way an auth consumer does: strict `Percent`.
-async fn set_handler() -> impl IntoResponse {
-    let hv = HeaderValue::from_str(
-        &SetCookie::new("SID", "deadbeefcafe")
-            .with_encoding(ValueEncoding::Percent)
-            .http_only()
-            .secure()
-            .same_site(SameSite::Strict)
-            .path(Path::new("/").unwrap())
-            .max_age(3600)
-            .to_set_cookie(),
+/// Mints a session cookie the way an auth consumer does: strict `Percent`,
+/// returned straight from the handler — the `IntoResponseParts` impl appends
+/// the header.
+async fn set_handler() -> (SetCookie<'static>, &'static str) {
+    let cookie = SetCookie::new("SID", "deadbeefcafe")
+        .with_encoding(ValueEncoding::Percent)
+        .http_only()
+        .secure()
+        .same_site(SameSite::Strict)
+        .path(Path::new("/").unwrap())
+        .max_age(3600);
+    (cookie, "set")
+}
+
+/// Two cookies as tuple elements — each must land as its own header.
+async fn set_two_handler() -> (SetCookie<'static>, SetCookie<'static>, &'static str) {
+    (
+        SetCookie::new("SID", "deadbeef").http_only(),
+        SetCookie::new("theme", "dark"),
+        "both",
     )
-    .unwrap();
-    ([(SET_COOKIE, hv)], "set")
+}
+
+/// A handler bug: a `Raw` value with an injection byte must become the typed
+/// 500, never a smuggled or silently dropped header.
+async fn set_raw_injection_handler() -> (SetCookie<'static>, &'static str) {
+    let bad = SetCookie::new("SID", "x\r\nSet-Cookie: evil=1").with_encoding(ValueEncoding::Raw);
+    (bad, "unreachable body")
 }
 
 /// Reads the SID strictly — a session id is cookie-octets, so a spaced or
@@ -132,6 +149,8 @@ async fn read_pref(headers: HeaderMap) -> String {
 fn app() -> Router {
     Router::new()
         .route("/set", get(set_handler))
+        .route("/set-two", get(set_two_handler))
+        .route("/set-raw", get(set_raw_injection_handler))
         .route("/read", get(read_sid))
         .route("/pref", get(read_pref))
 }
@@ -179,6 +198,29 @@ async fn set_cookie_then_read_it_back_through_axum() {
         .await
         .unwrap();
     assert_eq!(body_string(resp).await, "deadbeefcafe");
+}
+
+#[tokio::test]
+async fn tuple_cookies_arrive_as_separate_headers_in_order() {
+    let resp = app().oneshot(get_request("/set-two", None)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let values: Vec<&str> = resp
+        .headers()
+        .get_all(SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .collect();
+    assert_eq!(values, ["SID=deadbeef; HttpOnly", "theme=dark"]);
+}
+
+#[tokio::test]
+async fn raw_injection_through_a_handler_is_a_typed_500() {
+    let resp = app().oneshot(get_request("/set-raw", None)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    // No header smuggled, and the static body echoes no cookie bytes.
+    assert!(resp.headers().get(SET_COOKIE).is_none());
+    let body = body_string(resp).await;
+    assert!(!body.contains("evil") && !body.contains('\r'), "{body:?}");
 }
 
 #[tokio::test]

@@ -128,7 +128,7 @@
 //! [`SetCookie::constraint_violations`] runs the identical checker, so
 //! emitting a conformant `__Host-` cookie is a one-call gate.
 //!
-//! ## An axum extractor (optional)
+//! ## axum integration (optional)
 //!
 //! With the `axum` feature, `CookieJarBuf` is a `FromRequestParts` extractor:
 //! it owns the request `Cookie:` header and lends the borrowed, reported
@@ -139,6 +139,13 @@
 //! rather refuse a mangled header than serve a partial jar opts out per read:
 //! `cookies.try_jar_strict()?` turns any refused pair into a ready-made
 //! `400 Bad Request` (`BadCookieHeader`).
+//!
+//! The response side is symmetric: a [`SetCookie`] implements
+//! `IntoResponseParts` (and `IntoResponse`), so a handler returns
+//! `(set_cookie, body)` and the `Set-Cookie` header is appended — cookies
+//! accumulate, never overwrite. The one failable case, a
+//! [`Raw`](ValueEncoding::Raw) value carrying a header-illegal byte, is a
+//! typed `500` (`BadSetCookie`) rather than a silently dropped cookie.
 //!
 //! ## Hardening (optional)
 //!
@@ -170,7 +177,8 @@
 //! `Set-Cookie` parse/serialize), `jar` (the request-`Cookie:` reader *and*
 //! writer), and `report` (what a parse refused, as data — [`Reported`] and the
 //! issue types) — all re-exported flat from the crate root. With the `axum`
-//! feature, an `axum` module adds the `CookieJarBuf` extractor.
+//! feature, an `axum` module adds the `CookieJarBuf` extractor and the
+//! `SetCookie` response impls.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -189,7 +197,7 @@ mod wire;
 
 pub use attributes::{CookieAttributes, Domain, InvalidDomain, InvalidPath, Path};
 #[cfg(feature = "axum")]
-pub use axum::{BadCookieHeader, CookieJarBuf};
+pub use axum::{BadCookieHeader, BadSetCookie, CookieJarBuf};
 pub use cookie::Cookie;
 pub use encoding::{ValueEncoding, encode_value};
 pub use jar::{

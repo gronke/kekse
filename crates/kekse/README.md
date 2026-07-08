@@ -7,7 +7,7 @@ A strict, dependency-light cookie codec.
 - **Both directions.** Build `Set-Cookie` via `SetCookie`. Read and write `Cookie` via a `CookieJar` of typed `Cookie`s. Convert either into an `http::HeaderValue`.
 - **Built to RFC 6265.** Plus RFC 7230 tokens, RFC 7231 dates, RFC 6265bis `SameSite` and name prefixes, and CHIPS `Partitioned`.
 - **One interface, two gradings.** Both refuse injection bytes (`;`, CR, LF, NUL, controls, non-ASCII); strict also demands cookie-octets only, and accepts a subset of what lenient accepts.
-- **Fail-soft, never silent.** A junk pair is skipped, not fatal — it can't evict a valid cookie — and every reader returns what it refused, plus an opt-in axum `400`.
+- **Fail-soft, never silent.** A junk pair is skipped, not fatal — it can't evict a valid cookie — and every reader returns what it refused, plus an opt-in axum `400` (and the response side fails loudly with a `500`, never dropping a cookie).
 - **Strongly typed.** `Cookie`, `SetCookie`, `CookieJar`, and typed attributes. Never string maps.
 - **A codec, not a store.** No persistence, eviction, send-matching, signing, or encryption.
 - **Dates handled.** `Max-Age` seconds (a `u64`) or an `Expires` timestamp, via the `time` crate.
@@ -86,6 +86,14 @@ async fn whoami(cookies: CookieJarBuf) -> Result<String, BadCookieHeader> {
 }
 ```
 
+The response side is symmetric: return the `SetCookie` from the handler and the header is appended — cookies accumulate, never overwrite — with the one failable case (a `Raw` value carrying a header-illegal byte) surfacing as a typed `500` instead of a silently dropped cookie:
+
+```rust,ignore
+async fn login() -> (SetCookie<'static>, &'static str) {
+    (SetCookie::new("SID", "deadbeef").http_only().secure(), "logged in")
+}
+```
+
 ## Three types, two headers
 
 | Type | What it is |
@@ -124,7 +132,7 @@ Each prints its output and asserts the invariant it documents, so it doubles as 
 | `encodings` | How each `ValueEncoding` escapes one tricky value for the wire. |
 | `strict_vs_lenient` | The lenient and strict readers side by side on a quoted value. |
 | `fail_soft` | Fail-soft parsing, the issue report for the same header, and the no-panic behaviour on hostile input. |
-| `axum_extractor` | The `CookieJarBuf` axum extractor, including the fail-hard `try_jar_strict` → 400 route (needs `--features axum`). |
+| `axum_extractor` | The axum integration, both directions: a handler returning a `SetCookie`, the extractor reading it back, and the fail-hard `try_jar_strict` → 400 route (needs `--features axum`). |
 
 ```sh
 cargo run -p kekse --example build_set_cookie

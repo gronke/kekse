@@ -13,7 +13,7 @@ A strict, dependency-light cookie **codec** for Rust.
 - **No `unsafe`.**
 - **Fail-soft by design.** Never panics on malformed input, and never echoes an injection byte. Pinned by [`keksbruch`](crates/keksbruch), the differential test harness, across its 30+ parser matrix.
 - **Skips are observable.** Nothing is dropped silently. Every reader returns what it refused, and fail-hard is one call away.
-- **Both directions.** Reads a `Cookie:` request header into a `CookieJar` of typed `Cookie`s, builds and parses `Set-Cookie:` responses through `SetCookie`, and converts either straight into an `http::HeaderValue`.
+- **Both directions.** Reads a `Cookie:` request header into a `CookieJar` of typed `Cookie`s, builds and parses `Set-Cookie:` responses through `SetCookie`, and converts either straight into an `http::HeaderValue` — with the `axum` feature, a handler returns the `SetCookie` and the header is appended for it.
 - **A codec, not a store.** No persistence, eviction, domain/path send-matching, signing, or encryption — just a correct, fail-soft wire codec.
 - **Lightweight.** Just three dependencies (`percent-encoding`, `http`, `time`) and no default features.
 - **Rust 1.88.0+.**

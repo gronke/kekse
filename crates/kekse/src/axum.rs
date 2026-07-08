@@ -1,27 +1,56 @@
-//! axum integration (behind the `axum` feature): extract the request `Cookie:`
-//! header as an owned [`CookieJarBuf`].
+//! axum integration (behind the `axum` feature), both directions: extract the
+//! request `Cookie:` header as an owned [`CookieJarBuf`], and append response
+//! `Set-Cookie` headers by returning a [`SetCookie`] straight from a handler.
 //!
 //! [`CookieJar`] borrows the header it parses, so it cannot be returned by an
 //! extractor (which must own what it hands the handler). [`CookieJarBuf`] is its
 //! owned counterpart — bytes-backed, the way [`PathBuf`] backs [`Path`] — and
 //! lends a borrowed [`CookieJar`] on demand.
 //!
+//! On the response side, [`SetCookie`] implements `IntoResponseParts` (and
+//! `IntoResponse`), so a handler returns `(set_cookie, body)` and the header is
+//! **appended** — cookies accumulate, never overwrite. Several cookies compose
+//! as tuple elements, and `Option<SetCookie>` works through axum's blanket
+//! impl. The one failable case is a [`Raw`](crate::ValueEncoding::Raw) value
+//! carrying a header-illegal byte: that returns a typed [`BadSetCookie`]
+//! (`500`), never a silently dropped cookie.
+//!
+//! ```no_run
+//! use axum::routing::get;
+//! use axum::Router;
+//! use kekse::{Path, SameSite, SetCookie};
+//!
+//! async fn login() -> (SetCookie<'static>, &'static str) {
+//!     let cookie = SetCookie::new("SID", "deadbeef")
+//!         .http_only()
+//!         .secure()
+//!         .same_site(SameSite::Strict)
+//!         .path(Path::new("/").expect("`/` is a valid path"))
+//!         .max_age(3600);
+//!     (cookie, "logged in")
+//! }
+//!
+//! let app: Router = Router::new().route("/login", get(login));
+//! # let _ = app;
+//! ```
+//!
 //! The implementation depends only on `axum-core`, not the whole `axum` crate,
 //! so turning the feature on stays light; it targets the very
-//! `FromRequestParts` trait `axum` re-exports, so it drops straight into a
-//! handler signature.
+//! `FromRequestParts` / `IntoResponseParts` traits `axum` re-exports, so it
+//! drops straight into a handler signature.
 
 use std::convert::Infallible;
 use std::fmt;
 
 use axum_core::extract::FromRequestParts;
-use axum_core::response::{IntoResponse, Response};
+use axum_core::response::{IntoResponse, IntoResponseParts, Response, ResponseParts};
 use http::StatusCode;
-use http::header::COOKIE;
+use http::header::{COOKIE, SET_COOKIE};
 use http::request::Parts;
 
 use crate::jar::CookieJar;
 use crate::report::{PairIssue, Reported};
+use crate::set_cookie::SetCookie;
 
 /// An owned request `Cookie:` header — the owned counterpart to the borrowing
 /// [`CookieJar`], as [`PathBuf`] is to [`Path`]. Use it as an axum extractor;
@@ -175,6 +204,69 @@ impl IntoResponse for BadCookieHeader {
     }
 }
 
+/// The rejection [`SetCookie`]'s `IntoResponseParts` returns: the rendered
+/// cookie is not a valid header value. Only possible under
+/// [`Raw`](crate::ValueEncoding::Raw) with a header-illegal byte (CR, LF, NUL,
+/// or another control) — every managed encoding is always header-safe. As a
+/// response it is `500 Internal Server Error` with a static body: the failure
+/// is the handler's bug, never the client's, and like [`BadCookieHeader`] it
+/// never echoes cookie bytes. The underlying `InvalidHeaderValue` rides as
+/// [`source`](std::error::Error::source) for logs.
+///
+/// The axum-extra convention of silently dropping such a cookie is deliberately
+/// rejected here: a security cookie that fails to set must fail loudly.
+#[derive(Debug)]
+pub struct BadSetCookie {
+    source: http::header::InvalidHeaderValue,
+}
+
+impl fmt::Display for BadSetCookie {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "a Set-Cookie value could not form a header value \
+             (a Raw-encoded value carrying a header-illegal byte)",
+        )
+    }
+}
+
+impl std::error::Error for BadSetCookie {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+impl IntoResponse for BadSetCookie {
+    fn into_response(self) -> Response {
+        (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()).into_response()
+    }
+}
+
+impl IntoResponseParts for SetCookie<'_> {
+    type Error = BadSetCookie;
+
+    /// **Append** the rendered `Set-Cookie` header — never insert, so multiple
+    /// cookies (tuple elements, middleware layers) accumulate on the response.
+    ///
+    /// # Errors
+    ///
+    /// Only a [`Raw`](crate::ValueEncoding::Raw) value carrying a
+    /// header-illegal byte fails, as the typed 500 [`BadSetCookie`]; the
+    /// managed encodings never error here.
+    fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
+        let value = http::HeaderValue::try_from(&self).map_err(|source| BadSetCookie { source })?;
+        res.headers_mut().append(SET_COOKIE, value);
+        Ok(res)
+    }
+}
+
+impl IntoResponse for SetCookie<'_> {
+    /// A lone [`SetCookie`] as the whole response: the header plus an empty
+    /// body — the standard composition over the `IntoResponseParts` impl.
+    fn into_response(self) -> Response {
+        (self, ()).into_response()
+    }
+}
+
 impl<S> FromRequestParts<S> for CookieJarBuf
 where
     S: Send + Sync,
@@ -248,5 +340,53 @@ mod tests {
             Some("deadbeef")
         );
         assert!(buf.jar().value.get("bad").is_none());
+    }
+
+    // ---- the response side -------------------------------------------------
+
+    #[test]
+    fn set_cookie_into_response_appends_the_header() {
+        let response = SetCookie::new("SID", "x").secure().into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let values: Vec<_> = response.headers().get_all(SET_COOKIE).iter().collect();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0], "SID=x; Secure");
+    }
+
+    #[test]
+    fn cookies_accumulate_through_append_never_insert() {
+        // Tuple composition (axum's IntoResponseParts chaining) must yield one
+        // Set-Cookie header per cookie, in order — insert would keep only one.
+        let response = (SetCookie::new("a", "1"), SetCookie::new("b", "2"), "ok").into_response();
+        let values: Vec<String> = response
+            .headers()
+            .get_all(SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        assert_eq!(values, ["a=1", "b=2"]);
+    }
+
+    #[test]
+    fn raw_injection_becomes_the_typed_500_not_a_silent_drop() {
+        let bad = SetCookie::new("SID", "x\r\nSet-Cookie: evil=1")
+            .with_encoding(crate::ValueEncoding::Raw);
+        let response = bad.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(response.headers().get(SET_COOKIE).is_none());
+    }
+
+    #[test]
+    fn bad_set_cookie_display_never_echoes_cookie_bytes() {
+        // The Display is static text; the offending bytes ride only as the
+        // structured Error::source for logs.
+        let source = http::HeaderValue::from_str("a\r\nb").unwrap_err();
+        let error = BadSetCookie { source };
+        assert_eq!(
+            error.to_string(),
+            "a Set-Cookie value could not form a header value \
+             (a Raw-encoded value carrying a header-illegal byte)"
+        );
+        assert!(std::error::Error::source(&error).is_some());
     }
 }
