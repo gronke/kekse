@@ -38,13 +38,15 @@ on:
         description: "dotnet SDK image version (default 8.0)"
         required: false
         type: string
-  # Only regenerate when something the matrix renders from changes — Rust sources and the
-  # Cargo manifests — so a docs- or CI-config-only change skips the expensive cross-language
-  # run. Sidecar image versions are mirrored in sidecar.rs, so a bump touches Rust and still
-  # triggers; workflow_dispatch (above) regenerates on demand for a rare fixture-only change.
+  # Only regenerate when something the matrix renders from changes — Rust sources, the
+  # Cargo manifests, and the sidecar fixtures (drivers shape published cells: the issue
+  # channel, the partitioned field) — so a docs- or CI-config-only change skips the
+  # expensive cross-language run. Sidecar image versions are mirrored in sidecar.rs, so a
+  # bump touches Rust and still triggers; workflow_dispatch (above) regenerates on demand.
   pull_request:
     paths:
       - "crates/**/*.rs"
+      - "crates/keksbruch/fixtures/**"
       - "**/Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/matrix.yml"
@@ -52,6 +54,7 @@ on:
     branches: [main]
     paths:
       - "crates/**/*.rs"
+      - "crates/keksbruch/fixtures/**"
       - "**/Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/matrix.yml"
