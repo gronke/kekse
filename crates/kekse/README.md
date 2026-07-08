@@ -47,7 +47,8 @@ The verbs are optional sugar over `CookieAttributes`, a plain `Default` struct; 
 
 Attributes are emitted in a fixed order: `HttpOnly`, `SameSite`, `Secure`, `Partitioned`, `Path`, `Domain`, `Expires`, `Max-Age`, each only when set.
 
-The RFC 6265bis §4.1.3 name prefixes (`__Host-`/`__Secure-`, matched case-insensitively) and CHIPS' `Partitioned`/`Secure` pairing are modeled as *witnessed* constraints, never enforced: a parse keeps a violating cookie exactly as written and reports a `ConstraintViolation` issue in both gradings, and `set_cookie.constraint_violations()` runs the same checks on a cookie you build.
+The RFC 6265bis §4.1.3 name prefixes (`__Host-`/`__Secure-`) and CHIPS' `Partitioned`/`Secure` pairing are modeled as *witnessed* constraints, never enforced: a parse keeps a violating cookie exactly as written and reports a `ConstraintViolation` issue in both gradings, and `set_cookie.constraint_violations()` runs the same checks on a cookie you build.
+The checks match prefixes case-insensitively, the way user agents *enforce* the rules — the §4.1.3 server contract itself is the canonical, case-sensitive spelling.
 
 To hand the cookie straight to `http`, use `HeaderValue::try_from(set_cookie)` (or `&set_cookie`) instead of `.to_set_cookie()`: the managed encodings are always valid header bytes, so it fails only for a `Raw` value the caller deliberately built with non-header bytes.
 

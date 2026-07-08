@@ -726,8 +726,11 @@ impl std::error::Error for SetCookieIssue<'_> {}
 
 /// A cross-field requirement a `Set-Cookie` can violate: the RFC 6265bis
 /// §4.1.3 cookie-name prefixes and CHIPS' `Partitioned`/`Secure` pairing.
-/// Prefixes are matched ASCII-case-insensitively ([`has_secure_prefix`] /
-/// [`has_host_prefix`]), the way user agents enforce them.
+/// §4.1.3's server contract spells the prefixes case-sensitively (a
+/// conformant server emits exactly `__Secure-` / `__Host-`), while user
+/// agents enforce the rules case-insensitively; the checks here match the
+/// enforcement side ([`has_secure_prefix`] / [`has_host_prefix`]), so a
+/// case-variant spelling cannot dodge them.
 ///
 /// The codec never *enforces* a constraint: the parse keeps the cookie exactly
 /// as written and witnesses the violation as a
