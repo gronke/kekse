@@ -187,9 +187,11 @@ pub use jar::{
     CookieJar, parse_pairs, parse_pairs_bytes, parse_pairs_bytes_strict, parse_pairs_strict,
 };
 pub use report::{PairIssue, Reported};
-pub use rfc_6265::grammar::{is_cookie_name, is_cookie_name_bytes, is_cookie_octet};
+pub use rfc_6265::grammar::{
+    has_host_prefix, has_secure_prefix, is_cookie_name, is_cookie_name_bytes, is_cookie_octet,
+};
 pub use same_site::{ParseSameSiteError, SameSite};
-pub use set_cookie::{KnownAttribute, SetCookie, SetCookieIssue};
+pub use set_cookie::{CookieConstraint, KnownAttribute, SetCookie, SetCookieIssue};
 
 /// The timestamp type used by the `Expires` attribute, re-exported from `rfc_6265` (itself the
 /// `time` crate's `OffsetDateTime`) so callers can name it without depending on `time` directly.

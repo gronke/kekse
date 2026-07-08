@@ -7,6 +7,7 @@ use std::fmt;
 
 use rfc_6265::OffsetDateTime;
 use rfc_6265::date::{ImfFixdate, parse_cookie_date, parse_imf_fixdate};
+use rfc_6265::grammar::{has_host_prefix, has_secure_prefix};
 
 use crate::attributes::{CookieAttributes, Domain, Path};
 use crate::cookie::Cookie;
@@ -69,7 +70,12 @@ impl<'a> SetCookie<'a> {
     /// and never vanishes without a trace. A duplicate keeps
     /// last-wins, a malformed known value is dropped (§5.2.2), a valued flag
     /// still sets — each recovered piece lands in `issues`, and
-    /// [`is_clean`](Reported::is_clean) is the opt-in fail-hard gate.
+    /// [`is_clean`](Reported::is_clean) is the opt-in fail-hard gate. After
+    /// the attribute loop, the cross-field constraints (the RFC 6265bis
+    /// `__Host-`/`__Secure-` name prefixes and CHIPS' `Partitioned`/`Secure`
+    /// pairing) are checked the same way: a violation is a
+    /// [`ConstraintViolation`](SetCookieIssue::ConstraintViolation) issue, the
+    /// cookie kept as written.
     ///
     /// Splits on the first `;` into the `name=value` pair and the attribute list,
     /// then the pair on its first `=`. The name must be a cookie-name token; the
@@ -291,6 +297,9 @@ impl<'a> SetCookie<'a> {
                 }
             }
         }
+        // With every attribute in hand, witness the cross-field constraints —
+        // grading-independent, after all wire-order attribute issues.
+        push_constraint_issues(name, &set_cookie.attributes, report);
         Ok(set_cookie)
     }
 
@@ -402,6 +411,42 @@ impl<'a> SetCookie<'a> {
     /// field: `sc.attributes().secure`, `sc.attributes().max_age`.
     pub fn attributes(&self) -> &CookieAttributes<'a> {
         &self.attributes
+    }
+
+    /// Every cross-field constraint this cookie violates — the RFC 6265bis
+    /// §4.1.3 name-prefix rules and CHIPS' `Partitioned`/`Secure` pairing —
+    /// empty when conformant. The very checker [`parse`](SetCookie::parse)
+    /// runs after its attribute loop, exposed for cookies you build: the
+    /// codec never enforces a [`CookieConstraint`], so this is the
+    /// builder-side gate.
+    ///
+    /// ```
+    /// use kekse::{CookieConstraint, Path, SetCookie, SetCookieIssue};
+    ///
+    /// let ok = SetCookie::new("__Host-SID", "x").secure().path(Path::new("/")?);
+    /// assert!(ok.constraint_violations().is_empty());
+    ///
+    /// let violations = SetCookie::new("__Host-SID", "x").constraint_violations();
+    /// assert!(matches!(
+    ///     violations[..],
+    ///     [
+    ///         SetCookieIssue::ConstraintViolation {
+    ///             constraint: CookieConstraint::HostPrefixWithoutSecure,
+    ///             ..
+    ///         },
+    ///         SetCookieIssue::ConstraintViolation {
+    ///             constraint: CookieConstraint::HostPrefixWithoutRootPath,
+    ///             ..
+    ///         },
+    ///     ]
+    /// ));
+    /// # Ok::<(), kekse::InvalidPath<'static>>(())
+    /// ```
+    #[must_use]
+    pub fn constraint_violations(&self) -> Vec<SetCookieIssue<'static>> {
+        let mut violations = Vec::new();
+        push_constraint_issues(self.cookie.name(), &self.attributes, &mut violations);
+        violations
     }
 
     /// Drop the attributes, recovering the request [`Cookie`] kernel. A
@@ -630,6 +675,18 @@ pub enum SetCookieIssue<'a> {
         /// The discarded value.
         value: &'a str,
     },
+    /// A violated cross-field requirement — an RFC 6265bis §4.1.3 name prefix
+    /// or CHIPS' `Partitioned`/`Secure` pairing. Nothing is dropped or
+    /// altered: name, flags, and attributes stay exactly as parsed; the
+    /// violation is witnessed, identically in both gradings, and it is a
+    /// property of the cookie itself —
+    /// [`constraint_violations`](SetCookie::constraint_violations) reports the
+    /// same thing for a cookie you built.
+    #[non_exhaustive]
+    ConstraintViolation {
+        /// The violated constraint.
+        constraint: CookieConstraint,
+    },
 }
 
 impl fmt::Display for SetCookieIssue<'_> {
@@ -657,11 +714,101 @@ impl fmt::Display for SetCookieIssue<'_> {
                     attribute.name()
                 )
             }
+            Self::ConstraintViolation { constraint } => {
+                write!(f, "{constraint} (cookie kept as written)")
+            }
         }
     }
 }
 
 impl std::error::Error for SetCookieIssue<'_> {}
+
+/// A cross-field requirement a `Set-Cookie` can violate: the RFC 6265bis
+/// §4.1.3 cookie-name prefixes and CHIPS' `Partitioned`/`Secure` pairing.
+/// Prefixes are matched ASCII-case-insensitively ([`has_secure_prefix`] /
+/// [`has_host_prefix`]), the way user agents enforce them.
+///
+/// The codec never *enforces* a constraint: the parse keeps the cookie exactly
+/// as written and witnesses the violation as a
+/// [`SetCookieIssue::ConstraintViolation`] in both gradings, and
+/// [`SetCookie::constraint_violations`] runs the same checks on a cookie you
+/// built. [`is_clean`](crate::Reported::is_clean) — or an explicit check — is
+/// the gate.
+///
+/// <https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#section-4.1.3> ·
+/// <https://wicg.github.io/CHIPS/>
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CookieConstraint {
+    /// A `__Secure-`-prefixed name without the `Secure` attribute.
+    SecurePrefixWithoutSecure,
+    /// A `__Host-`-prefixed name without the `Secure` attribute.
+    HostPrefixWithoutSecure,
+    /// A `__Host-`-prefixed name carrying a `Domain` attribute.
+    HostPrefixWithDomain,
+    /// A `__Host-`-prefixed name whose `Path` is not exactly `/`.
+    HostPrefixWithoutRootPath,
+    /// The `Partitioned` flag without the `Secure` attribute (CHIPS).
+    PartitionedWithoutSecure,
+}
+
+impl fmt::Display for CookieConstraint {
+    /// Static, control-free text — a constraint names no wire bytes, so there
+    /// is nothing to escape.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::SecurePrefixWithoutSecure => {
+                "a `__Secure-`-prefixed cookie requires the `Secure` attribute"
+            }
+            Self::HostPrefixWithoutSecure => {
+                "a `__Host-`-prefixed cookie requires the `Secure` attribute"
+            }
+            Self::HostPrefixWithDomain => {
+                "a `__Host-`-prefixed cookie must not carry a `Domain` attribute"
+            }
+            Self::HostPrefixWithoutRootPath => {
+                "a `__Host-`-prefixed cookie requires `Path=/` exactly"
+            }
+            Self::PartitionedWithoutSecure => {
+                "a `Partitioned` cookie requires the `Secure` attribute (CHIPS)"
+            }
+        })
+    }
+}
+
+/// Append every violated cross-field constraint to `report`, in a fixed order:
+/// the `__Secure-` rule, the three `__Host-` rules (`Secure`, `Domain`,
+/// `Path`), then the CHIPS pairing. Shared verbatim by the parse (after its
+/// attribute loop) and [`SetCookie::constraint_violations`], so reader and
+/// builder can never disagree on what conformant means.
+fn push_constraint_issues<'i>(
+    name: &str,
+    attributes: &CookieAttributes<'_>,
+    report: &mut Vec<SetCookieIssue<'i>>,
+) {
+    let mut note = |constraint: CookieConstraint| {
+        #[cfg(feature = "tracing")]
+        tracing::debug!(%constraint, "cross-field constraint violated; the cookie is kept");
+        report.push(SetCookieIssue::ConstraintViolation { constraint });
+    };
+    if has_secure_prefix(name) && !attributes.secure {
+        note(CookieConstraint::SecurePrefixWithoutSecure);
+    }
+    if has_host_prefix(name) {
+        if !attributes.secure {
+            note(CookieConstraint::HostPrefixWithoutSecure);
+        }
+        if attributes.domain.is_some() {
+            note(CookieConstraint::HostPrefixWithDomain);
+        }
+        if attributes.path.is_none_or(|p| p.as_str() != "/") {
+            note(CookieConstraint::HostPrefixWithoutRootPath);
+        }
+    }
+    if attributes.partitioned && !attributes.secure {
+        note(CookieConstraint::PartitionedWithoutSecure);
+    }
+}
 
 /// Pass a known attribute's parse result through, debug-logging and reporting
 /// the fail-soft drop when it is `None` — the malformed-known-attribute skip the
@@ -1461,6 +1608,9 @@ mod tests {
                 attribute: KnownAttribute::Secure,
                 value: "x\u{0}y",
             },
+            SetCookieIssue::ConstraintViolation {
+                constraint: CookieConstraint::HostPrefixWithoutRootPath,
+            },
         ];
         for issue in issues {
             let rendered = issue.to_string();
@@ -1471,5 +1621,147 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ---- cross-field constraints ------------------------------------------
+
+    /// The constraint suffix of a parse's issues, for comparing against
+    /// `constraint_violations`.
+    fn constraints_of(issues: &[SetCookieIssue<'_>]) -> Vec<CookieConstraint> {
+        issues
+            .iter()
+            .filter_map(|issue| match issue {
+                SetCookieIssue::ConstraintViolation { constraint } => Some(*constraint),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_constraint_is_witnessed_and_nothing_is_dropped() {
+        use CookieConstraint::*;
+        // (wire, expected constraint issues, in the checker's fixed order) —
+        // identical under both gradings, with the cookie kept as written.
+        for (wire, expected) in [
+            ("__Secure-a=b", &[SecurePrefixWithoutSecure][..]),
+            ("__Secure-a=b; Secure", &[]),
+            ("__Host-a=b; Secure; Path=/", &[]),
+            ("__Host-a=b; Path=/", &[HostPrefixWithoutSecure]),
+            (
+                "__Host-a=b; Secure; Path=/; Domain=example.test",
+                &[HostPrefixWithDomain],
+            ),
+            (
+                "__Host-a=b; Secure; Path=/app",
+                &[HostPrefixWithoutRootPath],
+            ),
+            ("__Host-a=b; Secure", &[HostPrefixWithoutRootPath]),
+            (
+                "__Host-a=b",
+                &[HostPrefixWithoutSecure, HostPrefixWithoutRootPath],
+            ),
+            ("a=b; Partitioned", &[PartitionedWithoutSecure]),
+            ("a=b; Partitioned; Secure", &[]),
+            ("a=b; Secure", &[]),
+        ] {
+            for (grading, parsed) in [
+                ("lenient", SetCookie::parse(wire)),
+                ("strict", SetCookie::parse_strict(wire)),
+            ] {
+                let reported = parsed.unwrap_or_else(|_| panic!("{wire:?} must salvage"));
+                assert_eq!(
+                    constraints_of(&reported.issues),
+                    expected,
+                    "{grading} constraint issues for {wire:?}"
+                );
+                assert!(
+                    reported.issues.len() == expected.len(),
+                    "{grading} must witness only constraints for {wire:?}: {:?}",
+                    reported.issues
+                );
+            }
+        }
+        // Nothing is dropped or altered: the violating attributes stay set.
+        let kept = SetCookie::parse("__Host-a=b; Secure; Path=/app; Domain=example.test")
+            .unwrap()
+            .value;
+        assert_eq!(kept.attributes().path.map(|p| p.as_str()), Some("/app"));
+        assert_eq!(
+            kept.attributes().domain.map(|d| d.as_str()),
+            Some("example.test")
+        );
+        let kept = SetCookie::parse("a=b; Partitioned").unwrap().value;
+        assert!(kept.attributes().partitioned);
+    }
+
+    #[test]
+    fn prefix_constraints_match_case_insensitively() {
+        for wire in ["__SECURE-a=b", "__secure-a=b", "__SeCuRe-a=b"] {
+            assert_eq!(
+                constraints_of(&SetCookie::parse(wire).unwrap().issues),
+                [CookieConstraint::SecurePrefixWithoutSecure],
+                "{wire:?}"
+            );
+        }
+        assert_eq!(
+            constraints_of(&SetCookie::parse("__host-a=b; Secure").unwrap().issues),
+            [CookieConstraint::HostPrefixWithoutRootPath],
+            "a case-variant `__host-` still triggers the prefix rules"
+        );
+    }
+
+    #[test]
+    fn constraint_issues_follow_the_wire_order_attribute_issues() {
+        // Attribute issues come out in wire order; the constraint pass appends
+        // after them, so a log reads the wire first and the verdict second.
+        let parsed = SetCookie::parse("__Secure-a=b; Priority=x; Max-Age=banana").unwrap();
+        assert!(matches!(
+            parsed.issues[..],
+            [
+                SetCookieIssue::UnknownAttribute {
+                    name: "Priority",
+                    ..
+                },
+                SetCookieIssue::InvalidAttributeValue {
+                    attribute: KnownAttribute::MaxAge,
+                    ..
+                },
+                SetCookieIssue::ConstraintViolation {
+                    constraint: CookieConstraint::SecurePrefixWithoutSecure,
+                    ..
+                },
+            ]
+        ));
+    }
+
+    #[test]
+    fn constraint_violations_agree_with_the_parse() {
+        // The builder-side checker is the same function the parse runs: for
+        // any built cookie, re-parsing its rendering witnesses exactly the
+        // standing violations.
+        let built = SetCookie::new("__Host-SID", "x").domain(Domain::new("example.test").unwrap());
+        let violations = built.constraint_violations();
+        assert_eq!(
+            constraints_of(&violations),
+            [
+                CookieConstraint::HostPrefixWithoutSecure,
+                CookieConstraint::HostPrefixWithDomain,
+                CookieConstraint::HostPrefixWithoutRootPath,
+            ]
+        );
+        let rendered = built.to_set_cookie();
+        let reparsed = SetCookie::parse(&rendered).unwrap();
+        assert_eq!(reparsed.issues, violations, "for {rendered:?}");
+
+        // A conformant build is silent, and its parse is clean.
+        let ok = SetCookie::new("__Host-SID", "x")
+            .secure()
+            .path(Path::new("/").unwrap());
+        assert!(ok.constraint_violations().is_empty());
+        assert!(
+            SetCookie::parse_strict(&ok.to_set_cookie())
+                .unwrap()
+                .is_clean()
+        );
     }
 }
