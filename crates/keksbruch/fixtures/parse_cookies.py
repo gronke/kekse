@@ -88,15 +88,24 @@ def selfcheck():
 
 def simplecookie_request(wire):
     from http.cookies import SimpleCookie, CookieError
+    jar = SimpleCookie()
     try:
-        jar = SimpleCookie()
         jar.load(wire.decode("latin-1"))
-        return {"outcome": "Cookies",
-                "cookies": [{"name": k, "value": m.value} for k, m in jar.items()]}
     except CookieError as e:
+        # load() applies morsels one by one and raises at the first illegal
+        # key, keeping what it had already accepted — report that salvage on
+        # the issue channel; reject only when nothing landed. (The *silent*
+        # abort on an unknown bare flag discards everything before this point
+        # and raises nothing, so it stays a bare rejection below.)
+        cookies = [{"name": k, "value": m.value} for k, m in jar.items()]
+        if cookies:
+            return {"outcome": "Cookies", "cookies": cookies,
+                    "issues": ["CookieError: " + str(e)]}
         return {"outcome": "Rejected", "error": "CookieError: " + str(e)}
     except Exception as e:
         return {"outcome": "Rejected", "error": type(e).__name__ + ": " + str(e)}
+    return {"outcome": "Cookies",
+            "cookies": [{"name": k, "value": m.value} for k, m in jar.items()]}
 
 
 def _flag(morsel, key):
@@ -109,31 +118,43 @@ def _opt(morsel, key):
     return value if value else None
 
 
+def _simplecookie_view(name, morsel):
+    raw_max_age = str(morsel["max-age"])
+    max_age = int(raw_max_age) if raw_max_age.lstrip("-").isdigit() else None
+    return {
+        "name": name,
+        "value": morsel.value,
+        "http_only": _flag(morsel, "httponly"),
+        "secure": _flag(morsel, "secure"),
+        "same_site": _opt(morsel, "samesite"),
+        "path": _opt(morsel, "path"),
+        "domain": _opt(morsel, "domain"),
+        "max_age": max_age,
+    }
+
+
 def simplecookie_response(wire):
     from http.cookies import SimpleCookie, CookieError
+    jar = SimpleCookie()
+    issues = []
     try:
-        jar = SimpleCookie()
         jar.load(wire.decode("latin-1"))
-        items = list(jar.items())
-        if not items:
-            return {"outcome": "SetCookieRejected", "error": "no cookie parsed"}
-        name, morsel = items[0]
-        raw_max_age = str(morsel["max-age"])
-        max_age = int(raw_max_age) if raw_max_age.lstrip("-").isdigit() else None
-        return {"outcome": "SetCookie", "set_cookie": {
-            "name": name,
-            "value": morsel.value,
-            "http_only": _flag(morsel, "httponly"),
-            "secure": _flag(morsel, "secure"),
-            "same_site": _opt(morsel, "samesite"),
-            "path": _opt(morsel, "path"),
-            "domain": _opt(morsel, "domain"),
-            "max_age": max_age,
-        }}
     except CookieError as e:
-        return {"outcome": "SetCookieRejected", "error": "CookieError: " + str(e)}
+        # Same salvage stance as the request side: keep what load() had
+        # already applied, witness the failure.
+        issues = ["CookieError: " + str(e)]
     except Exception as e:
         return {"outcome": "SetCookieRejected", "error": type(e).__name__ + ": " + str(e)}
+    items = list(jar.items())
+    if not items:
+        if issues:
+            return {"outcome": "SetCookieRejected", "error": issues[0]}
+        return {"outcome": "SetCookieRejected", "error": "no cookie parsed"}
+    name, morsel = items[0]
+    out = {"outcome": "SetCookie", "set_cookie": _simplecookie_view(name, morsel)}
+    if issues:
+        out["issues"] = issues
+    return out
 
 
 def cookiejar_response(wire):
