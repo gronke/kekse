@@ -199,9 +199,13 @@ impl<'a> SetCookie<'a> {
                 Some((a, v)) => (a.trim_matches(is_ws_char), v.trim_matches(is_ws_char)),
                 None => (piece.trim_matches(is_ws_char), ""),
             };
-            if attr.is_empty() {
-                continue; // a stray or trailing `;` — not an attribute
+            if attr.is_empty() && val.is_empty() {
+                continue; // a stray or trailing `;` — structural noise, not an attribute
             }
+            // An empty name *carrying a value* (`; =V`) is not noise: it falls
+            // through to `recognize`, which cannot match it, so the segment is
+            // witnessed as an unknown attribute — the same stance the request
+            // reader takes on a `=v` pair.
             let Some(known) = KnownAttribute::recognize(attr) else {
                 // An unrecognised attribute is ignored (RFC 6265 §5.2) — logged
                 // and reported, so a mistyped flag never vanishes without a
@@ -640,9 +644,10 @@ impl KnownAttribute {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SetCookieIssue<'a> {
     /// An attribute name this version does not model — a genuinely new
-    /// attribute (`Priority`, …), a mistyped one (`HttpOnlyy`), or two
-    /// attributes fused by a forgotten `;`. Ignored (RFC 6265 §5.2) and
-    /// reported, in both gradings.
+    /// attribute (`Priority`, …), a mistyped one (`HttpOnlyy`), two
+    /// attributes fused by a forgotten `;`, or an empty name in front of a
+    /// value (`; =v`). Ignored (RFC 6265 §5.2) and reported, in both
+    /// gradings.
     #[non_exhaustive]
     UnknownAttribute {
         /// The unrecognised, OWS-trimmed attribute name.
@@ -1625,6 +1630,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn empty_attribute_name_with_a_value_is_witnessed() {
+        // `; =V` is not structural noise: the segment carries payload, so the
+        // conservation law demands a witness — an unknown (empty) name. Found
+        // by the generative property suite as an unwitnessed drop.
+        for wire in ["SID=x; =evil", "SID=x; \t= y"] {
+            for (grading, parsed) in [
+                ("lenient", SetCookie::parse(wire)),
+                ("strict", SetCookie::parse_strict(wire)),
+            ] {
+                let reported = parsed.unwrap_or_else(|_| panic!("{wire:?} must salvage"));
+                assert!(
+                    matches!(
+                        reported.issues[..],
+                        [SetCookieIssue::UnknownAttribute { name: "" }]
+                    ),
+                    "{grading} must witness the empty-name attribute in {wire:?}, got {:?}",
+                    reported.issues
+                );
+            }
+        }
+        // A segment with no payload stays structural noise in both gradings.
+        assert!(SetCookie::parse("SID=x; ; \t;").unwrap().is_clean());
+        assert!(SetCookie::parse_strict("SID=x; = ;").unwrap().is_clean());
     }
 
     // ---- cross-field constraints ------------------------------------------
