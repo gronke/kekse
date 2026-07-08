@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Criterion benchmarks for the codec hot paths (`benches/codec.rs`) and a deterministic allocation-count companion (`benches/allocs.rs`), both dev-only.
 - `InvalidPath` / `InvalidDomain`: the typed refusals of `Path::new` / `Domain::new`, naming the failed gate and carrying the refused value, rendered control-byte-free.
 - keksbruch: two universal invariants — conservation (every non-noise request segment yields an `Ok` pair or an issue) and divergence witness (a salvaged `Set-Cookie` covers every dropped attribute segment with an issue and is a render/re-parse fixpoint) — plus exact per-scenario `IssueKind` pins.
+- `rfc_6265`: `has_secure_prefix` / `has_host_prefix` (and bytes twins) — `const` predicates for the RFC 6265bis §4.1.3 cookie-name prefixes, matched ASCII-case-insensitively the way user agents match them.
+- The CHIPS `Partitioned` attribute as a typed presence flag: a `CookieAttributes` field with a nullary builder, a parse arm that witnesses a valued flag, a render slot after `Secure`, and the `partitioned` field in keksbruch's sidecar schema.
+- `CookieConstraint` / `SetCookieIssue::ConstraintViolation` / `SetCookie::constraint_violations`: the cross-field rules (`__Host-`/`__Secure-` prefix requirements, `Partitioned` needs `Secure`) are witnessed in both gradings — the cookie is kept as written, never enforced against — and the same checker gates cookies you build.
+- keksbruch: eleven prefix/CHIPS scenario rows with exact issue pins, `IssueKind::Constraint`, and a `partitioned` pin on `Expect::ResponseValue`.
 
 ### Changed
 
@@ -21,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   Strict grading no longer rejects an unknown or duplicate attribute; like lenient it recovers (ignore per RFC 6265 §5.2, last-wins) and witnesses the deviation, and the gradings differ only in the `Expires` dialect (IMF-fixdate vs cookie-date).
   Enforcement is the `is_clean` gate; `SetCookieIssue::InvalidPair` is removed.
 - **Breaking:** `Path::new` / `Domain::new` return `Result`, and the `path` / `domain` setters take the validated newtypes — a builder chain can no longer swallow an invalid value.
+- **Breaking:** a wire carrying `Partitioned` parses into the typed flag instead of an `UnknownAttribute` witness, and `CookieAttributes` gained the public `partitioned` field (breaking for exhaustive struct literals).
+- keksbruch: the divergence-witness fixpoint law now expects a salvage to re-parse with exactly its own standing constraint violations — properties of the cookie, not of the wire's syntax.
 - The axum `jar()` / `jar_strict()` views return the reported jar; `jar_reported` / `jar_strict_reported` are merged away, and `try_jar` / `try_jar_strict` keep the one-line 400 gate.
 
 - The value decoder gates and escape-scans each value in one pass, so a clean value skips percent-decoding entirely; typical `Cookie:` headers parse 25-30% faster.

@@ -119,6 +119,15 @@
 //! gating on a clean strict parse is the tripwire for cookies you minted
 //! yourself.
 //!
+//! Cross-field constraints — the RFC 6265bis §4.1.3 `__Host-`/`__Secure-`
+//! name prefixes and CHIPS' `Partitioned`/`Secure` pairing — are witnessed
+//! the same way, in both gradings: the cookie is kept exactly as written and
+//! the violation lands as a
+//! [`ConstraintViolation`](SetCookieIssue::ConstraintViolation) issue, with
+//! [`CookieConstraint`] naming the broken rule. For cookies you build,
+//! [`SetCookie::constraint_violations`] runs the identical checker, so
+//! emitting a conformant `__Host-` cookie is a one-call gate.
+//!
 //! ## An axum extractor (optional)
 //!
 //! With the `axum` feature, `CookieJarBuf` is a `FromRequestParts` extractor:
