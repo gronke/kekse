@@ -749,6 +749,11 @@ impl std::error::Error for SetCookieIssue<'_> {}
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CookieConstraint {
+    /// A prefix spelled in a non-canonical case (`__host-`, `__SeCuRe-`):
+    /// user agents still enforce it, but the §4.1.3 server contract is exactly
+    /// `__Secure-` / `__Host-`, and agents that match case-sensitively (curl
+    /// does) silently lose the protection for such a spelling.
+    NonCanonicalPrefixCase,
     /// A `__Secure-`-prefixed name without the `Secure` attribute.
     SecurePrefixWithoutSecure,
     /// A `__Host-`-prefixed name without the `Secure` attribute.
@@ -766,6 +771,10 @@ impl fmt::Display for CookieConstraint {
     /// is nothing to escape.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::NonCanonicalPrefixCase => {
+                "a `__Secure-`/`__Host-` prefix spelled in a non-canonical case (the server \
+                 contract is exactly `__Secure-` / `__Host-`)"
+            }
             Self::SecurePrefixWithoutSecure => {
                 "a `__Secure-`-prefixed cookie requires the `Secure` attribute"
             }
@@ -786,8 +795,8 @@ impl fmt::Display for CookieConstraint {
 }
 
 /// Append every violated cross-field constraint to `report`, in a fixed order:
-/// the `__Secure-` rule, the three `__Host-` rules (`Secure`, `Domain`,
-/// `Path`), then the CHIPS pairing. Shared verbatim by the parse (after its
+/// the prefix casing, the `__Secure-` rule, the three `__Host-` rules
+/// (`Secure`, `Domain`, `Path`), then the CHIPS pairing. Shared verbatim by the parse (after its
 /// attribute loop) and [`SetCookie::constraint_violations`], so reader and
 /// builder can never disagree on what conformant means.
 fn push_constraint_issues<'i>(
@@ -800,10 +809,17 @@ fn push_constraint_issues<'i>(
         tracing::debug!(%constraint, "cross-field constraint violated; the cookie is kept");
         report.push(SetCookieIssue::ConstraintViolation { constraint });
     };
-    if has_secure_prefix(name) && !attributes.secure {
+    let secure_prefix = has_secure_prefix(name);
+    let host_prefix = has_host_prefix(name);
+    if (secure_prefix && !name.starts_with("__Secure-"))
+        || (host_prefix && !name.starts_with("__Host-"))
+    {
+        note(CookieConstraint::NonCanonicalPrefixCase);
+    }
+    if secure_prefix && !attributes.secure {
         note(CookieConstraint::SecurePrefixWithoutSecure);
     }
-    if has_host_prefix(name) {
+    if host_prefix {
         if !attributes.secure {
             note(CookieConstraint::HostPrefixWithoutSecure);
         }
@@ -1679,6 +1695,7 @@ mod tests {
         // identical under both gradings, with the cookie kept as written.
         for (wire, expected) in [
             ("__Secure-a=b", &[SecurePrefixWithoutSecure][..]),
+            ("__secure-a=b; Secure", &[NonCanonicalPrefixCase]),
             ("__Secure-a=b; Secure", &[]),
             ("__Host-a=b; Secure; Path=/", &[]),
             ("__Host-a=b; Path=/", &[HostPrefixWithoutSecure]),
@@ -1694,6 +1711,14 @@ mod tests {
             (
                 "__Host-a=b",
                 &[HostPrefixWithoutSecure, HostPrefixWithoutRootPath],
+            ),
+            (
+                "__hOsT-a=b",
+                &[
+                    NonCanonicalPrefixCase,
+                    HostPrefixWithoutSecure,
+                    HostPrefixWithoutRootPath,
+                ],
             ),
             ("a=b; Partitioned", &[PartitionedWithoutSecure]),
             ("a=b; Partitioned; Secure", &[]),
@@ -1734,14 +1759,37 @@ mod tests {
         for wire in ["__SECURE-a=b", "__secure-a=b", "__SeCuRe-a=b"] {
             assert_eq!(
                 constraints_of(&SetCookie::parse(wire).unwrap().issues),
-                [CookieConstraint::SecurePrefixWithoutSecure],
+                [
+                    CookieConstraint::NonCanonicalPrefixCase,
+                    CookieConstraint::SecurePrefixWithoutSecure,
+                ],
                 "{wire:?}"
             );
         }
         assert_eq!(
             constraints_of(&SetCookie::parse("__host-a=b; Secure").unwrap().issues),
-            [CookieConstraint::HostPrefixWithoutRootPath],
+            [
+                CookieConstraint::NonCanonicalPrefixCase,
+                CookieConstraint::HostPrefixWithoutRootPath,
+            ],
             "a case-variant `__host-` still triggers the prefix rules"
+        );
+        // A conformant cookie under a case-variant spelling is witnessed for
+        // the casing alone — the two concerns are independent.
+        assert_eq!(
+            constraints_of(
+                &SetCookie::parse("__host-a=b; Secure; Path=/")
+                    .unwrap()
+                    .issues
+            ),
+            [CookieConstraint::NonCanonicalPrefixCase],
+        );
+        // The canonical spellings never trigger the casing witness.
+        assert!(
+            SetCookie::parse("__Secure-a=b; Secure").unwrap().is_clean()
+                && SetCookie::parse("__Host-a=b; Secure; Path=/")
+                    .unwrap()
+                    .is_clean()
         );
     }
 

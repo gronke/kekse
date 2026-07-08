@@ -348,10 +348,15 @@ pub fn assert_baseline_parses_clean(baseline: &str, direction: Direction) {
             );
         }
         Direction::Response => match SetCookie::parse(baseline) {
-            Ok(reported) => assert!(
-                reported.is_clean(),
-                "kekse-rendered Set-Cookie baseline reported issues: {baseline:?} -> {:?}",
-                reported.issues
+            // Like the fixpoint law: kekse may knowingly render a cookie with
+            // standing constraint violations (a case-variant prefix name is
+            // the caller's choice), so the baseline reads back with exactly
+            // those and nothing else — writer and reader never drift.
+            Ok(reported) => assert_eq!(
+                reported.issues,
+                reported.value.constraint_violations(),
+                "kekse-rendered Set-Cookie baseline reported issues beyond its own standing \
+                 constraint violations: {baseline:?}"
             ),
             Err(fatal) => {
                 panic!("kekse-rendered Set-Cookie baseline is fatal: {baseline:?} -> {fatal}")

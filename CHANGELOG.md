@@ -13,8 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - keksbruch: two universal invariants — conservation (every non-noise request segment yields an `Ok` pair or an issue) and divergence witness (a salvaged `Set-Cookie` covers every dropped attribute segment with an issue and is a render/re-parse fixpoint) — plus exact per-scenario `IssueKind` pins.
 - `rfc_6265`: `has_secure_prefix` / `has_host_prefix` (and bytes twins) — `const` predicates for the RFC 6265bis §4.1.3 cookie-name prefixes, matched ASCII-case-insensitively the way user agents enforce them (the §4.1.3 server contract spells them case-sensitively).
 - The CHIPS `Partitioned` attribute as a typed presence flag: a `CookieAttributes` field with a nullary builder, a parse arm that witnesses a valued flag, a render slot after `Secure`, and the `partitioned` field in keksbruch's sidecar schema.
-- `CookieConstraint` / `SetCookieIssue::ConstraintViolation` / `SetCookie::constraint_violations`: the cross-field rules (`__Host-`/`__Secure-` prefix requirements, `Partitioned` needs `Secure`) are witnessed in both gradings — the cookie is kept as written, never enforced against — and the same checker gates cookies you build.
-- keksbruch: eleven prefix/CHIPS scenario rows with exact issue pins, `IssueKind::Constraint`, and a `partitioned` pin on `Expect::ResponseValue`.
+- `CookieConstraint` / `SetCookieIssue::ConstraintViolation` / `SetCookie::constraint_violations`: the cross-field rules (`__Host-`/`__Secure-` prefix requirements, non-canonical prefix casing, `Partitioned` needs `Secure`) are witnessed in both gradings — the cookie is kept as written, never enforced against — and the same checker gates cookies you build.
+- keksbruch: two dozen prefix/CHIPS scenario rows with exact issue pins — conformant and violating shapes, valued and case-variant flags, name-position probes — plus `IssueKind::Constraint`, a `partitioned` pin on `Expect::ResponseValue`, and a tri-state `partitioned` field in the sidecar schema (kept/dropped/not-observable).
 
 ### Changed
 

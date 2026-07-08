@@ -47,6 +47,7 @@ fn issue_kinds(issues: &[SetCookieIssue<'_>]) -> Vec<IssueKind> {
             }
             SetCookieIssue::ConstraintViolation { constraint, .. } => {
                 IssueKind::Constraint(match constraint {
+                    CookieConstraint::NonCanonicalPrefixCase => "NonCanonicalPrefixCase",
                     CookieConstraint::SecurePrefixWithoutSecure => "SecurePrefixWithoutSecure",
                     CookieConstraint::HostPrefixWithoutSecure => "HostPrefixWithoutSecure",
                     CookieConstraint::HostPrefixWithDomain => "HostPrefixWithDomain",
