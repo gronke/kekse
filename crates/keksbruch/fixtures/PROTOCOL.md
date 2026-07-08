@@ -114,8 +114,11 @@ Internally tagged by `"outcome"`. Matrix rendering shown in parentheses.
 | `ForwardedAltered` | `forwarded: string` | proxy forwarded a Cookie, but altered it | `≠ …` |
 | `ForwardedRejected` | — | proxy did not forward the Cookie (rejected/dropped) | `❌` |
 
-`set_cookie` fields: `name`, `value` (strings); `http_only`, `secure`, `partitioned` (bool — each
-defaults to false and may be omitted; `partitioned` is CHIPS' flag, for parsers that model it);
+`set_cookie` fields: `name`, `value` (strings); `http_only`, `secure` (bool, default false, may be
+omitted); `partitioned` (CHIPS' flag, **tri-state**: `true`/`false` from a driver whose library and
+protocol can observe the attribute — kept vs dropped — and omitted/`null` from one whose channel has
+no field for it, e.g. classic WebDriver or the Netscape jar format; the harness renders the omitted
+form as "not observable" and never scores it as a drop);
 `same_site`, `path`,
 `domain` (string or null); `max_age` (integer or null — kept as `i64` so a negative delta survives);
 `expires` (integer Unix timestamp or null — the parsed `Expires` attribute).

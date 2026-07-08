@@ -126,8 +126,13 @@ pub struct SetCookieView {
     pub http_only: bool,
     #[serde(default)]
     pub secure: bool,
+    /// CHIPS' `Partitioned` flag, tri-state: `Some(true)`/`Some(false)` from a
+    /// driver whose library and protocol can see the attribute (kept vs
+    /// dropped), `None` from one whose reporting channel has no field for it
+    /// (classic WebDriver, the Netscape jar format) — "not observable", never
+    /// to be scored as a drop.
     #[serde(default)]
-    pub partitioned: bool,
+    pub partitioned: Option<bool>,
     #[serde(default)]
     pub same_site: Option<String>,
     #[serde(default)]
@@ -250,7 +255,7 @@ impl SetCookieView {
         if self.secure {
             flags.push("Secure".to_string());
         }
-        if self.partitioned {
+        if self.partitioned == Some(true) {
             flags.push("Partitioned".to_string());
         }
         if let Some(s) = &self.same_site {
@@ -399,7 +404,7 @@ mod tests {
             value: "abc".into(),
             http_only: false,
             secure: false,
-            partitioned: false,
+            partitioned: None,
             same_site: None,
             path: None,
             domain: None,
