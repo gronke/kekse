@@ -19,6 +19,9 @@ pub enum IssueKind {
     InvalidValue(&'static str),
     /// The named presence-only flag carried a value; the value was discarded.
     FlagWithValue(&'static str),
+    /// The named cross-field constraint (`kekse::CookieConstraint` variant) was
+    /// violated; the cookie was kept as written.
+    Constraint(&'static str),
 }
 
 /// What kekse is expected to do with one `Keksbruch`. Coarse on purpose — it pins
@@ -55,6 +58,7 @@ pub enum Expect {
         max_age: Option<u64>,
         http_only: bool,
         secure: bool,
+        partitioned: bool,
         /// The exact witnessed deviations, identical in both gradings.
         issues: &'static [IssueKind],
     },
@@ -91,6 +95,9 @@ pub enum Expect {
     ResponsePath {
         value: &'static str,
         path: Option<&'static str>,
+        /// The exact witnessed deviations, identical in both gradings — e.g. a
+        /// `__Host-` prefix row keeps its nonconformant path *and* witnesses it.
+        issues: &'static [IssueKind],
     },
     /// Response: both modes keep a cookie with `value` and this parsed `SameSite`.
     /// kekse's `SameSite` is a closed typed enum parsed ASCII-case-insensitively;
@@ -142,6 +149,42 @@ fn s(
         recipe: KeksbruchRecipe::new(LogicalCookie::new(name, value), keksbruch, direction),
         expect,
     }
+}
+
+/// Assemble a response scenario whose base cookie carries `attributes`. The
+/// prefix rows need this: `assert_baseline_parses_clean` renders the base
+/// through kekse, so a `__Host-`/`__Secure-`-named base must carry the
+/// conformant attributes (`Secure`, `Path=/`) for its baseline to be clean —
+/// which doubles as the pin that kekse can *emit* conformant prefixed cookies.
+fn s_attrs(
+    id: &'static str,
+    description: &'static str,
+    name: &'static str,
+    attributes: kekse::CookieAttributes<'static>,
+    keksbruch: Keksbruch,
+    expect: Expect,
+) -> Scenario {
+    let mut base = LogicalCookie::new(name, "abc");
+    base.attributes = attributes;
+    Scenario {
+        id,
+        description,
+        direction: Direction::Response,
+        recipe: KeksbruchRecipe::new(base, keksbruch, Direction::Response),
+        expect,
+    }
+}
+
+/// The conformant `__Secure-` base attribute set.
+fn secure_attrs() -> kekse::CookieAttributes<'static> {
+    kekse::CookieAttributes::default().secure()
+}
+
+/// The conformant `__Host-` base attribute set: `Secure` and `Path=/`.
+fn host_attrs() -> kekse::CookieAttributes<'static> {
+    kekse::CookieAttributes::default()
+        .secure()
+        .path(kekse::Path::new("/").expect("`/` is a valid path"))
 }
 
 /// The curated corpus, covering every category in the taxonomy. Static and
@@ -368,6 +411,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                partitioned: false,
                 issues: &[IssueKind::InvalidValue("Max-Age")],
             },
         ),
@@ -382,6 +426,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                partitioned: false,
                 issues: &[IssueKind::InvalidValue("SameSite")],
             },
         ),
@@ -396,6 +441,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: true,
+                partitioned: false,
                 issues: &[IssueKind::FlagWithValue("Secure")],
             },
         ),
@@ -408,6 +454,191 @@ pub fn scenarios() -> Vec<Scenario> {
             Expect::ResponseKeptWithIssues {
                 value: "abc",
                 issues: &[IssueKind::Duplicate("Path")],
+            },
+        ),
+        // ── name prefixes + CHIPS (Response) ────────────────────────────────
+        // The RFC 6265bis §4.1.3 `__Host-`/`__Secure-` prefixes and CHIPS'
+        // Partitioned/Secure pairing. kekse witnesses a violation and keeps the
+        // cookie as written, identically in both gradings; engines refuse such a
+        // cookie outright, which the browser columns show per engine.
+        s(
+            "resp-partitioned-secure",
+            "Partitioned with its required Secure pairing parses clean",
+            Response,
+            "SID",
+            Keksbruch::PartitionedFlag {
+                with_secure: true,
+                duplicated: false,
+            },
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: true,
+                partitioned: true,
+                issues: &[],
+            },
+        ),
+        s(
+            "resp-partitioned-bare",
+            "Partitioned without Secure violates CHIPS — witnessed, the flag kept",
+            Response,
+            "SID",
+            Keksbruch::PartitionedFlag {
+                with_secure: false,
+                duplicated: false,
+            },
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: false,
+                partitioned: true,
+                issues: &[IssueKind::Constraint("PartitionedWithoutSecure")],
+            },
+        ),
+        s(
+            "resp-partitioned-valued",
+            "Partitioned=1 sets the flag; the bogus value and the missing Secure are witnessed",
+            Response,
+            "SID",
+            Keksbruch::ValuedFlag("Partitioned"),
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: false,
+                partitioned: true,
+                issues: &[
+                    IssueKind::FlagWithValue("Partitioned"),
+                    IssueKind::Constraint("PartitionedWithoutSecure"),
+                ],
+            },
+        ),
+        s(
+            "resp-partitioned-dup",
+            "a duplicated Partitioned keeps the flag once and witnesses the repeat",
+            Response,
+            "SID",
+            Keksbruch::PartitionedFlag {
+                with_secure: true,
+                duplicated: true,
+            },
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: true,
+                partitioned: true,
+                issues: &[IssueKind::Duplicate("Partitioned")],
+            },
+        ),
+        s_attrs(
+            "prefix-secure-ok",
+            "__Secure- with the Secure attribute is conformant — a clean parse",
+            "__Secure-SID",
+            secure_attrs(),
+            Keksbruch::PrefixedName { attrs: "; Secure" },
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: true,
+                partitioned: false,
+                issues: &[],
+            },
+        ),
+        s_attrs(
+            "prefix-secure-missing",
+            "__Secure- without the Secure attribute — witnessed, cookie kept",
+            "__Secure-SID",
+            secure_attrs(),
+            Keksbruch::PrefixedName { attrs: "" },
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: false,
+                partitioned: false,
+                issues: &[IssueKind::Constraint("SecurePrefixWithoutSecure")],
+            },
+        ),
+        s_attrs(
+            "prefix-host-ok",
+            "__Host- with Secure and Path=/ (and no Domain) is conformant — a clean parse",
+            "__Host-SID",
+            host_attrs(),
+            Keksbruch::PrefixedName {
+                attrs: "; Secure; Path=/",
+            },
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: true,
+                partitioned: false,
+                issues: &[],
+            },
+        ),
+        s_attrs(
+            "prefix-host-missing-secure",
+            "__Host- without the Secure attribute — witnessed, cookie kept",
+            "__Host-SID",
+            host_attrs(),
+            Keksbruch::PrefixedName { attrs: "; Path=/" },
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: false,
+                partitioned: false,
+                issues: &[IssueKind::Constraint("HostPrefixWithoutSecure")],
+            },
+        ),
+        s_attrs(
+            "prefix-host-domain",
+            "__Host- must not carry a Domain — the attribute is kept and the violation witnessed",
+            "__Host-SID",
+            host_attrs(),
+            Keksbruch::PrefixedName {
+                attrs: "; Secure; Path=/; Domain=example.com",
+            },
+            Expect::ResponseKeptWithIssuesDomain {
+                value: "abc",
+                domain: Some("example.com"),
+                issues: &[IssueKind::Constraint("HostPrefixWithDomain")],
+            },
+        ),
+        s_attrs(
+            "prefix-host-path",
+            "__Host- requires Path=/ exactly — the nonconformant path is kept and witnessed",
+            "__Host-SID",
+            host_attrs(),
+            Keksbruch::PrefixedName {
+                attrs: "; Secure; Path=/app",
+            },
+            Expect::ResponsePath {
+                value: "abc",
+                path: Some("/app"),
+                issues: &[IssueKind::Constraint("HostPrefixWithoutRootPath")],
+            },
+        ),
+        s_attrs(
+            "prefix-host-case",
+            "a case-variant __host- still triggers the prefix rules, as user agents match them",
+            "__host-SID",
+            host_attrs(),
+            Keksbruch::PrefixedName { attrs: "" },
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: false,
+                partitioned: false,
+                issues: &[
+                    IssueKind::Constraint("HostPrefixWithoutSecure"),
+                    IssueKind::Constraint("HostPrefixWithoutRootPath"),
+                ],
             },
         ),
         // ── SameSite values (Response) ──────────────────────────────────────
@@ -1084,6 +1315,7 @@ pub fn scenarios() -> Vec<Scenario> {
             Expect::ResponsePath {
                 value: "abc",
                 path: Some("file:///etc/passwd"),
+                issues: &[],
             },
         ),
         s(
@@ -1095,6 +1327,7 @@ pub fn scenarios() -> Vec<Scenario> {
             Expect::ResponsePath {
                 value: "abc",
                 path: Some(""),
+                issues: &[],
             },
         ),
         s(
@@ -1107,6 +1340,7 @@ pub fn scenarios() -> Vec<Scenario> {
             Expect::ResponsePath {
                 value: "abc",
                 path: Some("."),
+                issues: &[],
             },
         ),
         s(
@@ -1122,6 +1356,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                partitioned: false,
                 issues: &[],
             },
         ),
@@ -1141,6 +1376,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: Some(60),
                 http_only: true,
                 secure: true,
+                partitioned: false,
                 issues: &[],
             },
         ),
@@ -1169,6 +1405,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                partitioned: false,
                 issues: &[],
             },
         ),
@@ -1183,6 +1420,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                partitioned: false,
                 issues: &[],
             },
         ),
@@ -1326,6 +1564,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                partitioned: false,
                 issues: &[IssueKind::InvalidValue("Path")],
             },
         ),
@@ -1457,6 +1696,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                partitioned: false,
                 issues: &[],
             },
         ),
@@ -1471,6 +1711,7 @@ pub fn scenarios() -> Vec<Scenario> {
                 max_age: None,
                 http_only: false,
                 secure: false,
+                partitioned: false,
                 issues: &[],
             },
         ),

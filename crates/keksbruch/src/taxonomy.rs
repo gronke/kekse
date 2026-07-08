@@ -130,6 +130,17 @@ pub enum Keksbruch {
     /// attribute *fidelity*: which parsers surface every attribute vs silently drop one —
     /// the matrix renders this as an explicit per-attribute grid.
     AllAttributes,
+    /// The CHIPS `Partitioned` flag appended to the baseline: `; Partitioned`,
+    /// repeated when `duplicated`, with the conformant `; Secure` pairing
+    /// appended when `with_secure` (Response). Probes which parsers model the
+    /// flag and who witnesses (or enforces) the missing `Secure`.
+    PartitionedFlag { with_secure: bool, duplicated: bool },
+    /// A `__Host-`/`__Secure-`-prefixed (or case-variant) cookie name with a
+    /// verbatim attribute tail: `name=value<attrs>` (Response). The tail is
+    /// authored directly — deliberately *not* the base cookie's attributes —
+    /// so the wire can violate the prefix's RFC 6265bis §4.1.3 requirements
+    /// while the base stays conformant and its kekse baseline clean.
+    PrefixedName { attrs: &'static str },
 
     // ── extra coverage: NUL positions, HTAB, multibyte UTF-8 ─────────────────
     /// A NUL byte in the cookie *name*: `n\0x=v`.

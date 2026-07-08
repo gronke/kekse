@@ -242,6 +242,29 @@ impl<'a> KeksbruchRecipe<'a> {
                 self.base.baseline(Direction::Response)
             )
             .into_bytes(),
+            (
+                Keksbruch::PartitionedFlag {
+                    with_secure,
+                    duplicated,
+                },
+                Direction::Response,
+            ) => {
+                let mut w = format!("{}; Partitioned", self.base.baseline(Direction::Response));
+                if *duplicated {
+                    w.push_str("; Partitioned");
+                }
+                if *with_secure {
+                    w.push_str("; Secure");
+                }
+                w.into_bytes()
+            }
+            // The pair renders through kekse, the attribute tail verbatim — so the
+            // wire may omit exactly what the base's conformant baseline carries.
+            (Keksbruch::PrefixedName { attrs }, Direction::Response) => {
+                let kernel =
+                    Cookie::new(n, self.base.value.clone()).with_encoding(self.base.encoding);
+                format!("{}{attrs}", kernel.to_request_pair()).into_bytes()
+            }
             (Keksbruch::NulInAttrName, Direction::Response) => {
                 let mut w = format!("{}; Pa", self.base.baseline(Direction::Response)).into_bytes();
                 w.push(0);
@@ -270,6 +293,8 @@ impl<'a> KeksbruchRecipe<'a> {
                 | Keksbruch::PathValue(_)
                 | Keksbruch::OverlongPath(_)
                 | Keksbruch::AllAttributes
+                | Keksbruch::PartitionedFlag { .. }
+                | Keksbruch::PrefixedName { .. }
                 | Keksbruch::DuplicateDomain { .. }
                 | Keksbruch::NulInAttrName
                 | Keksbruch::NulInAttrValue

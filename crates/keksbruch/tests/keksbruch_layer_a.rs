@@ -11,7 +11,9 @@ use keksbruch::{
     assert_strict_subset_of_lenient, assert_strict_subset_of_lenient_bytes, drive, drive_bytes,
     jar_probes, payloads, probe_retrieval, scenarios,
 };
-use kekse::{SetCookie, SetCookieIssue, is_cookie_name, parse_pairs, parse_pairs_strict};
+use kekse::{
+    CookieConstraint, SetCookie, SetCookieIssue, is_cookie_name, parse_pairs, parse_pairs_strict,
+};
 
 fn pairs(wire: &str, strict: bool) -> Vec<(String, String)> {
     if strict {
@@ -42,6 +44,16 @@ fn issue_kinds(issues: &[SetCookieIssue<'_>]) -> Vec<IssueKind> {
             }
             SetCookieIssue::FlagWithValue { attribute, .. } => {
                 IssueKind::FlagWithValue(attribute.name())
+            }
+            SetCookieIssue::ConstraintViolation { constraint, .. } => {
+                IssueKind::Constraint(match constraint {
+                    CookieConstraint::SecurePrefixWithoutSecure => "SecurePrefixWithoutSecure",
+                    CookieConstraint::HostPrefixWithoutSecure => "HostPrefixWithoutSecure",
+                    CookieConstraint::HostPrefixWithDomain => "HostPrefixWithDomain",
+                    CookieConstraint::HostPrefixWithoutRootPath => "HostPrefixWithoutRootPath",
+                    CookieConstraint::PartitionedWithoutSecure => "PartitionedWithoutSecure",
+                    other => panic!("unmodeled constraint: {other:?}"),
+                })
             }
             other => panic!("unmodeled issue variant: {other:?}"),
         })
@@ -198,6 +210,7 @@ fn each_scenario_matches_its_pinned_expectation() {
                 max_age,
                 http_only,
                 secure,
+                partitioned,
                 issues,
             } => {
                 for (mode, parsed) in [
@@ -215,6 +228,11 @@ fn each_scenario_matches_its_pinned_expectation() {
                         "{id} {mode} http_only"
                     );
                     assert_eq!(sc.attributes().secure, *secure, "{id} {mode} secure");
+                    assert_eq!(
+                        sc.attributes().partitioned,
+                        *partitioned,
+                        "{id} {mode} partitioned"
+                    );
                     assert_eq!(
                         issue_kinds(&reported.issues).as_slice(),
                         *issues,
@@ -332,7 +350,11 @@ fn each_scenario_matches_its_pinned_expectation() {
                     );
                 }
             }
-            Expect::ResponsePath { value, path } => {
+            Expect::ResponsePath {
+                value,
+                path,
+                issues,
+            } => {
                 // A path-av is just av-octets, so kekse stores it verbatim in both modes,
                 // independent of the hardened feature (Path has no psl/idna policy).
                 for (mode, parsed) in [
@@ -347,14 +369,9 @@ fn each_scenario_matches_its_pinned_expectation() {
                         *path,
                         "{id} {mode} path"
                     );
-                    let want_issues: &[IssueKind] = if path.is_some() {
-                        &[]
-                    } else {
-                        &[IssueKind::InvalidValue("Path")]
-                    };
                     assert_eq!(
                         issue_kinds(&reported.issues).as_slice(),
-                        want_issues,
+                        *issues,
                         "{id} {mode} witnessed deviations"
                     );
                 }
