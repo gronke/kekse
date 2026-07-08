@@ -6,7 +6,9 @@
 //!
 //! Case counts are bounded (256 per property, short wires) so the whole file
 //! stays in the sub-second range and rides the normal `cargo test` CI legs;
-//! `PROPTEST_CASES=100000 cargo test -p keksbruch` deepens a local run.
+//! `PROPTEST_CASES=100000 cargo test -p keksbruch` deepens a local or
+//! pre-release run (the `; =V` conservation hole was exactly a low-probability
+//! tail this sweep is for).
 //! Failure persistence is off (an integration test has no `lib.rs` anchor, and
 //! the sealed CI mounts the repo read-only anyway): a failure *prints* its
 //! minimal input and seed — copy those into a regular #[test] to replay.
@@ -81,7 +83,12 @@ fn spliced_wire_strategy() -> impl Strategy<Value = Vec<u8>> {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 256,
+        // The explicit literal would silently override the documented
+        // `PROPTEST_CASES` deepening, so honor the env var by hand.
+        cases: std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|cases| cases.parse().ok())
+            .unwrap_or(256),
         failure_persistence: None,
         ..ProptestConfig::default()
     })]
