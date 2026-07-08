@@ -17,7 +17,7 @@
 #[test]
 #[ignore = "differential matrix: needs the `differential` feature + python/node; run with --ignored"]
 fn render_parser_divergence_matrix() {
-    let markdown = keksbruch::differential::run_matrix();
+    let (markdown, calibration) = keksbruch::differential::run_matrix();
     // The template wired up: the title and every section heading rendered, and the
     // legend's typo fix landed (`unavailable`, once `unavailabfetle`).
     for anchor in [
@@ -26,6 +26,7 @@ fn render_parser_divergence_matrix() {
         "## Request `Cookie:` parsers",
         "## Jar probes",
         "## Attribute fidelity",
+        "## Calibration",
         "## Tested scenarios",
         "## Remarks",
         "## Tested against",
@@ -42,5 +43,11 @@ fn render_parser_divergence_matrix() {
     assert!(
         !markdown.contains("{{"),
         "an unsubstituted template marker leaked into the output"
+    );
+    // The mission gate: kekse's dials and observed reality agree, and every
+    // deliberate deviation is documented. A violation fails the matrix run.
+    assert!(
+        calibration.is_conforming(),
+        "calibration violated:\n{calibration:#?}"
     );
 }
