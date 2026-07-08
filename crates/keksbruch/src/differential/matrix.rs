@@ -550,7 +550,7 @@ fn effective_tool_path<'a>(header: &str, wire: &[u8], raw: Option<&'a str>) -> O
 /// stored `Set-Cookie` carries a path; every other outcome renders as [`ParseOutcome::cell`].
 fn display_cell(outcome: &ParseOutcome, header: &str, wire: &[u8]) -> String {
     match outcome {
-        ParseOutcome::SetCookie { set_cookie } => {
+        ParseOutcome::SetCookie { set_cookie, .. } => {
             set_cookie.cell(resolve_jar_path(header, wire, set_cookie.path.as_deref()))
         }
         other => other.cell(),
@@ -597,7 +597,7 @@ fn field_diffs(
     tool_header: &str,
     wire: &[u8],
 ) -> Vec<FieldDiff> {
-    let ParseOutcome::SetCookie { set_cookie: t } = tool else {
+    let ParseOutcome::SetCookie { set_cookie: t, .. } = tool else {
         return Vec::new(); // only a stored cookie is a claim to check
     };
     match kekse {
@@ -608,7 +608,7 @@ fn field_diffs(
             kekse: "rejected".to_string(),
             tool: "stored".to_string(),
         }],
-        ParseOutcome::SetCookie { set_cookie: k } => {
+        ParseOutcome::SetCookie { set_cookie: k, .. } => {
             let mut diffs = Vec::new();
             // name/value are always present on both — any difference is a contradiction.
             if t.name != k.name {
@@ -717,11 +717,17 @@ fn marked_cell(
     // `display_cell` resolves a jar's substituted default-path to `Path⇒default` (or hides
     // it) so the harness value (`/r` / `/`) never reaches the cell.
     let cell = display_cell(outcome, header, wire);
-    let text = if flagged {
+    let mut text = if flagged {
         format!("{cell} ☢️")
     } else {
         cell
     };
+    // The accepted-with-issues marker is display-only, appended after the ☢️
+    // pass — it must never reach `cell()`/`consensus_key()`, or identical
+    // outcomes would stop grouping merely for having been witnessed.
+    if !outcome.issues().is_empty() {
+        text.push_str(" ⚠");
+    }
     (text, diffs)
 }
 
@@ -904,13 +910,17 @@ fn build_section(
                     let base = (!subject).then_some(baseline).flatten().map(|b| &b[r]);
                     let wire = scenarios[r].recipe.render();
                     let (text, diffs) = marked_cell(outcome, base, &label, &wire);
-                    // A flagged cell carries the ☢️ field-by-field comparison in its
-                    // tooltip; otherwise a ❌/☠️ cell carries its error/crash detail
-                    // (a stored cookie has no diagnostics, so the two never collide).
-                    let detail = if diffs.iter().any(|d| d.kind.flags()) {
-                        Some(mismatch_tooltip(&label, &diffs))
-                    } else {
-                        outcome.diagnostics()
+                    // A flagged cell carries the ☢️ field-by-field comparison, and
+                    // an outcome's own diagnostics (a rejection reason, a crash
+                    // trace, or the accepted-with-issues list) ride along — since
+                    // the issue channel, a stored cookie can carry both.
+                    let mismatch = diffs
+                        .iter()
+                        .any(|d| d.kind.flags())
+                        .then(|| mismatch_tooltip(&label, &diffs));
+                    let detail = match (mismatch, outcome.diagnostics()) {
+                        (Some(m), Some(d)) => Some(format!("{m}\n\n{d}")),
+                        (m, d) => m.or(d),
                     };
                     Cell::code(text, cell_kind(outcome, cons[r].as_ref()))
                         .with_detail(tooltip_id(column, scenarios[r].id), detail)
@@ -1031,7 +1041,7 @@ fn attribute_fidelity(scenarios: &[Scenario], columns: &[Column]) -> Vec<(String
     columns
         .iter()
         .filter_map(|c| match &c.cells[row] {
-            ParseOutcome::SetCookie { set_cookie: sc } => Some((
+            ParseOutcome::SetCookie { set_cookie: sc, .. } => Some((
                 c.header(),
                 [
                     sc.http_only,
@@ -1693,6 +1703,7 @@ mod tests {
                 max_age: None,
                 expires: None,
             },
+            issues: Vec::new(),
         }
     }
 
@@ -1711,7 +1722,28 @@ mod tests {
                 max_age: None,
                 expires: None,
             },
+            issues: Vec::new(),
         }
+    }
+
+    #[test]
+    fn issue_marker_is_display_only_and_never_reaches_consensus() {
+        // Identical stored cookies, one witnessed: same consensus key, no
+        // divergence between them — the ⚠ lives in marked_cell alone.
+        let clean = stored("abc", None);
+        let dirty = match stored("abc", None) {
+            ParseOutcome::SetCookie { set_cookie, .. } => ParseOutcome::SetCookie {
+                set_cookie,
+                issues: vec!["duplicate `Path` attribute".into()],
+            },
+            _ => unreachable!(),
+        };
+        assert_eq!(clean.consensus_key(), dirty.consensus_key());
+        let consensus = Some(clean.consensus_key());
+        assert!(!diverges(&dirty, consensus.as_ref()));
+        let (clean_text, _) = marked_cell(&clean, None, "x/y", b"SID=abc");
+        let (dirty_text, _) = marked_cell(&dirty, None, "x/y", b"SID=abc");
+        assert_eq!(format!("{clean_text} ⚠"), dirty_text);
     }
 
     #[test]

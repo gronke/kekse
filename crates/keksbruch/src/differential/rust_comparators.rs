@@ -52,17 +52,13 @@ impl RustComparator for KekseLenient {
         ("rust", "kekse (lenient)")
     }
     fn parse_request(&self, wire: &str) -> ParseOutcome {
-        ParseOutcome::Cookies {
-            cookies: kekse::parse_pairs(wire)
-                .filter_map(Result::ok)
-                .map(|(n, v)| CookieView::new(n, v))
-                .collect(),
-        }
+        kekse_pairs_outcome(kekse::parse_pairs(wire))
     }
     fn parse_response(&self, wire: &str) -> ParseOutcome {
         match kekse::SetCookie::parse(wire) {
             Ok(reported) => ParseOutcome::SetCookie {
                 set_cookie: kekse_view(&reported.value),
+                issues: rendered_issues(&reported.issues),
             },
             Err(fatal) => ParseOutcome::SetCookieRejected {
                 error: fatal.to_string(),
@@ -76,18 +72,15 @@ impl RustComparator for KekseStrict {
         ("rust", "kekse (strict)")
     }
     fn parse_request(&self, wire: &str) -> ParseOutcome {
-        ParseOutcome::Cookies {
-            cookies: kekse::parse_pairs_strict(wire)
-                .filter_map(Result::ok)
-                .map(|(n, v)| CookieView::new(n, v))
-                .collect(),
-        }
+        kekse_pairs_outcome(kekse::parse_pairs_strict(wire))
     }
     fn parse_response(&self, wire: &str) -> ParseOutcome {
-        // kekse's opt-in strict grading rejects on an unknown attribute.
+        // Strict is a grading, not a different parser: the salvage plus its
+        // (strictly graded) issue list, with only an unusable pair fatal.
         match kekse::SetCookie::parse_strict(wire) {
             Ok(reported) => ParseOutcome::SetCookie {
                 set_cookie: kekse_view(&reported.value),
+                issues: rendered_issues(&reported.issues),
             },
             Err(fatal) => ParseOutcome::SetCookieRejected {
                 error: fatal.to_string(),
@@ -111,10 +104,17 @@ impl RustComparator for KekseFailHard {
                     .filter_map(Result::ok)
                     .map(|(n, v)| CookieView::new(n, v))
                     .collect(),
+                issues: Vec::new(),
             }
         } else {
+            // The rejection names every refused pair — the gate's evidence,
+            // not just its count.
             ParseOutcome::Rejected {
-                error: format!("{} refused pair(s)", reported.issues.len()),
+                error: format!(
+                    "{} refused pair(s): {}",
+                    reported.issues.len(),
+                    rendered_issues(&reported.issues).join("; ")
+                ),
             }
         }
     }
@@ -124,15 +124,41 @@ impl RustComparator for KekseFailHard {
         match kekse::SetCookie::parse_strict(wire) {
             Ok(reported) if reported.is_clean() => ParseOutcome::SetCookie {
                 set_cookie: kekse_view(&reported.value),
+                issues: Vec::new(),
             },
             Ok(reported) => ParseOutcome::SetCookieRejected {
-                error: format!("{} issue(s)", reported.issues.len()),
+                error: format!(
+                    "{} issue(s): {}",
+                    reported.issues.len(),
+                    rendered_issues(&reported.issues).join("; ")
+                ),
             },
             Err(e) => ParseOutcome::SetCookieRejected {
                 error: e.to_string(),
             },
         }
     }
+}
+
+/// Render a typed issue list to the protocol's free-form strings.
+fn rendered_issues<I: std::fmt::Display>(issues: &[I]) -> Vec<String> {
+    issues.iter().map(ToString::to_string).collect()
+}
+
+/// Collect a kekse pair stream into the outcome: `Ok` pairs as cookies, every
+/// refusal as a rendered issue — the stream partition, on the wire protocol.
+fn kekse_pairs_outcome<'a>(
+    stream: impl Iterator<Item = Result<(&'a str, std::borrow::Cow<'a, str>), kekse::PairIssue<'a>>>,
+) -> ParseOutcome {
+    let mut cookies = Vec::new();
+    let mut issues = Vec::new();
+    for item in stream {
+        match item {
+            Ok((n, v)) => cookies.push(CookieView::new(n, v)),
+            Err(issue) => issues.push(issue.to_string()),
+        }
+    }
+    ParseOutcome::Cookies { cookies, issues }
 }
 
 fn kekse_view(sc: &kekse::SetCookie) -> SetCookieView {
@@ -158,20 +184,27 @@ impl RustComparator for CookieCrate {
     fn parse_request(&self, wire: &str) -> ParseOutcome {
         // `_encoded` percent-decodes, matching kekse's default decode, so the
         // value column is comparable. Each `;`-segment is its own Result; keep the
-        // Ok pairs (the cookie crate's effective fail-soft) and drop the rest.
-        let cookies = cookie::Cookie::split_parse_encoded(wire.to_string())
-            .filter_map(Result::ok)
-            .map(|c| {
-                let (name, value) = c.name_value();
-                CookieView::new(name, value)
-            })
-            .collect();
-        ParseOutcome::Cookies { cookies }
+        // Ok pairs (the cookie crate's effective fail-soft) and surface each
+        // refusal on the issue channel instead of dropping it.
+        let mut cookies = Vec::new();
+        let mut issues = Vec::new();
+        for parsed in cookie::Cookie::split_parse_encoded(wire.to_string()) {
+            match parsed {
+                Ok(c) => {
+                    let (name, value) = c.name_value();
+                    cookies.push(CookieView::new(name, value));
+                }
+                Err(e) => issues.push(e.to_string()),
+            }
+        }
+        ParseOutcome::Cookies { cookies, issues }
     }
     fn parse_response(&self, wire: &str) -> ParseOutcome {
         match cookie::Cookie::parse_encoded(wire.to_string()) {
             Ok(c) => ParseOutcome::SetCookie {
                 set_cookie: cookie_view(&c),
+                // The cookie crate reports no recovered issues on an accept.
+                issues: Vec::new(),
             },
             Err(e) => ParseOutcome::SetCookieRejected {
                 error: e.to_string(),
@@ -233,6 +266,8 @@ impl RustComparator for CookieStore {
             Ok(_) => match store.iter_any().next() {
                 Some(c) => ParseOutcome::SetCookie {
                     set_cookie: cookie_store_view(c),
+                    // cookie_store reports no recovered issues on an accept.
+                    issues: Vec::new(),
                 },
                 None => ParseOutcome::SetCookieRejected {
                     error: "stored no cookie".to_string(),
@@ -275,6 +310,8 @@ impl RustComparator for Biscotti {
         match biscotti::RequestCookies::parse_header(wire, &processor) {
             Ok(jar) => ParseOutcome::Cookies {
                 cookies: biscotti_cookies(&jar, wire),
+                // biscotti is fail-hard: an accept had nothing to recover from.
+                issues: Vec::new(),
             },
             // biscotti is fail-hard: one malformed segment aborts the whole header.
             Err(e) => ParseOutcome::Rejected {
@@ -352,6 +389,8 @@ impl JarComparator for Rfc6265Reference {
                 .into_iter()
                 .map(|(n, v)| CookieView::new(n, v))
                 .collect(),
+            // A jar probe reports retrieved state, not parse diagnostics.
+            issues: Vec::new(),
         }
     }
 }
@@ -373,6 +412,7 @@ impl JarComparator for CookieStore {
         // exactly like a stored cookie the request then fails to match.
         let _ = store.parse(set_cookie, &origin);
         ParseOutcome::Cookies {
+            issues: Vec::new(),
             cookies: store
                 .get_request_values(&request)
                 .map(|(n, v)| CookieView::new(n, v))
@@ -407,7 +447,10 @@ impl RustComparator for AxumExtra {
             .map(|c| CookieView::new(c.name(), c.value()))
             .collect();
         cookies.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.value.cmp(&b.value)));
-        ParseOutcome::Cookies { cookies }
+        ParseOutcome::Cookies {
+            cookies,
+            issues: Vec::new(),
+        }
     }
     fn parse_response(&self, _wire: &str) -> ParseOutcome {
         // axum-extra builds Set-Cookie responses; it does not parse them.
