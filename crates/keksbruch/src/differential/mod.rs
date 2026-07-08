@@ -3,6 +3,7 @@
 //! cookie parsers across languages and tabulate where they diverge — to see
 //! whether kekse is *standard* (RFC) and *expectation* (real-world) compliant.
 
+pub mod calibration;
 pub mod matrix;
 pub mod result;
 pub mod rust_comparators;
@@ -19,12 +20,13 @@ use rust_comparators::{jar_comparators, rust_comparators};
 
 /// Run the whole matrix: every scenario through the in-process Rust comparators
 /// and the language sidecars, every jar probe through the jar-capable ones;
-/// render it to Markdown, CSV, a self-contained HTML report, and a
-/// machine-readable JSON document; print the Markdown; and write
-/// `COOKIE_MATRIX.{md,csv,html,json}` next to the crate (the HTML report is the
-/// GitHub Pages view; the JSON is the source of truth for later stats/probing).
-/// Returns the Markdown.
-pub fn run_matrix() -> String {
+/// grade the calibration laws over the columns; render everything to Markdown,
+/// CSV, a self-contained HTML report, and a machine-readable JSON document;
+/// print the Markdown; and write `COOKIE_MATRIX.{md,csv,html,json}` next to the
+/// crate (the HTML report is the GitHub Pages view; the JSON is the source of
+/// truth for later stats/probing). Returns the Markdown and the calibration
+/// verdict — the caller decides whether a violation fails the run.
+pub fn run_matrix() -> (String, calibration::Calibration) {
     let scenarios = scenarios();
     let probes = jar_probes();
     let mut columns = in_process_columns(&scenarios, &probes);
@@ -38,7 +40,8 @@ pub fn run_matrix() -> String {
     let mut versions = vec![rust_versions()];
     versions.extend(sidecar_versions);
 
-    let markdown = matrix::render(&scenarios, &probes, &columns, &versions);
+    let calibration = calibration::calibrate(&scenarios, &columns);
+    let markdown = matrix::render(&scenarios, &probes, &columns, &versions, &calibration);
     println!("{markdown}");
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     if let Err(e) = std::fs::write(dir.join("COOKIE_MATRIX.md"), &markdown) {
@@ -51,18 +54,18 @@ pub fn run_matrix() -> String {
     }
     // The self-contained HTML report — the well-readable, publishable view (the
     // matrix's GitHub Pages page). Not printed; the Markdown is the stdout view.
-    let html = matrix::render_html(&scenarios, &probes, &columns, &versions);
+    let html = matrix::render_html(&scenarios, &probes, &columns, &versions, &calibration);
     if let Err(e) = std::fs::write(dir.join("COOKIE_MATRIX.html"), &html) {
         eprintln!("could not write COOKIE_MATRIX.html: {e}");
     }
     // The machine-readable JSON — scenario → target → full ParseOutcome, plus
     // per-scenario metadata (direction, wire, RFC verdict, consensus). The source
     // of truth for later statistics and proxy-probing.
-    let json = matrix::render_json(&scenarios, &probes, &columns, &versions);
+    let json = matrix::render_json(&scenarios, &probes, &columns, &versions, &calibration);
     if let Err(e) = std::fs::write(dir.join("COOKIE_MATRIX.json"), &json) {
         eprintln!("could not write COOKIE_MATRIX.json: {e}");
     }
-    markdown
+    (markdown, calibration)
 }
 
 /// The in-process columns: every Rust wire comparator run over the scenarios, then

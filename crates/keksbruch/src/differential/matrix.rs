@@ -72,14 +72,14 @@ pub struct Column {
 }
 
 impl Column {
-    fn header(&self) -> String {
+    pub(crate) fn header(&self) -> String {
         format!("{}/{}", self.lang, self.dep)
     }
 
     /// The *subjects* under test — kekse, and the rfc_6265 reference on the jar
     /// probes — excluded from the consensus vote so each is judged against the
     /// rest of the field.
-    fn is_subject(&self) -> bool {
+    pub(crate) fn is_subject(&self) -> bool {
         self.dep.starts_with("kekse") || self.dep.starts_with("rfc_6265")
     }
 }
@@ -1313,6 +1313,7 @@ pub fn render(
     probes: &[JarProbe],
     columns: &[Column],
     versions: &[String],
+    calibration: &super::calibration::Calibration,
 ) -> String {
     // The consensus per test, computed once over every column (n/a, SKIP and crashes
     // already abstain), so each section's filtered columns vote identically.
@@ -1359,6 +1360,7 @@ pub fn render(
     );
     ctx.insert("jar_scenarios", &md_probe_index(probes));
     ctx.insert("versions", &md_versions(versions));
+    ctx.insert("calibration", &super::calibration::to_markdown(calibration));
 
     Tera::one_off(TEMPLATE, &ctx, false).expect("matrix Markdown template renders")
 }
@@ -1371,6 +1373,7 @@ pub fn render_html(
     probes: &[JarProbe],
     columns: &[Column],
     versions: &[String],
+    calibration: &super::calibration::Calibration,
 ) -> String {
     let cons: Vec<Option<String>> = (0..scenarios.len())
         .map(|row| consensus(row, columns))
@@ -1420,6 +1423,7 @@ pub fn render_html(
     );
     ctx.insert("jar_scenarios", &html_probe_index(probes).into_string());
     ctx.insert("versions", &html_versions(versions).into_string());
+    ctx.insert("calibration", &super::calibration::to_html(calibration));
     let body = Tera::one_off(&converted, &ctx, false).expect("matrix HTML template renders");
 
     // 3. Wrap in the self-contained scaffold (doctype/head/CSS/body) — kept in Rust;
@@ -1578,6 +1582,7 @@ pub fn render_json(
     probes: &[JarProbe],
     columns: &[Column],
     versions: &[String],
+    calibration: &super::calibration::Calibration,
 ) -> String {
     let mut out = BTreeMap::new();
     for (row, s) in scenarios.iter().enumerate() {
@@ -1638,6 +1643,7 @@ pub fn render_json(
     }
     let report = JsonReport {
         meta: JsonMeta { versions },
+        calibration,
         scenarios: out,
     };
     let mut json = serde_json::to_string_pretty(&report).expect("matrix JSON serializes");
@@ -1645,10 +1651,12 @@ pub fn render_json(
     json
 }
 
-/// The top-level JSON document: run metadata plus the scenario map.
+/// The top-level JSON document: run metadata, the calibration verdict, and the
+/// scenario map.
 #[derive(Serialize)]
 struct JsonReport<'a> {
     meta: JsonMeta<'a>,
+    calibration: &'a super::calibration::Calibration,
     scenarios: BTreeMap<&'a str, JsonScenario<'a>>,
 }
 
@@ -1992,7 +2000,8 @@ mod tests {
         let columns = crate::differential::in_process_columns(&scenarios, &probes);
         let versions = vec!["Rust: test".to_string()];
 
-        let json = render_json(&scenarios, &probes, &columns, &versions);
+        let calibration = crate::differential::calibration::calibrate(&scenarios, &columns);
+        let json = render_json(&scenarios, &probes, &columns, &versions, &calibration);
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
         // Run metadata is present.
@@ -2030,7 +2039,8 @@ mod tests {
         let probes = jar_probes();
         let columns = crate::differential::in_process_columns(&scenarios, &probes);
         let versions = vec!["Rust: test".to_string()];
-        let html = render_html(&scenarios, &probes, &columns, &versions);
+        let calibration = crate::differential::calibration::calibrate(&scenarios, &columns);
+        let html = render_html(&scenarios, &probes, &columns, &versions, &calibration);
 
         // kekse keeps the 1025-byte `path-overlong` Path verbatim; its answer cell now
         // collapses the run instead of stretching the whole row.
@@ -2051,7 +2061,14 @@ mod tests {
         let scenarios = scenarios();
         let probes = jar_probes();
         let columns = crate::differential::in_process_columns(&scenarios, &probes);
-        let html = render_html(&scenarios, &probes, &columns, &["Rust: test".to_string()]);
+        let calibration = crate::differential::calibration::calibrate(&scenarios, &columns);
+        let html = render_html(
+            &scenarios,
+            &probes,
+            &columns,
+            &["Rust: test".to_string()],
+            &calibration,
+        );
         // Opt into both schemes, then reskin through a prefers-color-scheme block that
         // only overrides the CSS variables — no rule body is duplicated.
         assert!(

@@ -58,6 +58,14 @@ Parsers that rejected the cookie outright are omitted.
 
 {{ fidelity_table }}
 
+## Calibration
+
+kekse's two dials graded against the answering parse columns, per response row: a wire strict parses **clean** must be majority-accepted (law A — strict-clean means universally sendable), and a majority-accepted wire must be lenient-accepted (law B — lenient is calibrated to reality) unless it is a listed deliberate deviation with its reason.
+Store-backed columns (client jars, browsers, `cookie_store`) report storage policy, not parse verdicts, so they do not vote; subjects never vote.
+A violation of either law fails the matrix run.
+
+{{ calibration }}
+
 ## Tested scenarios
 
 One line per test — the id each matrix column is headed by, and what its wire probes.
