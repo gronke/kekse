@@ -10,11 +10,25 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "outcome")]
 pub enum ParseOutcome {
     /// A request header parsed into these `(name, value)` cookies, in order.
-    Cookies { cookies: Vec<CookieView> },
+    /// `issues` is the accepted-with-issues channel: what the parser recovered
+    /// from along the way, as free-form human-facing lines (kekse's typed
+    /// issues rendered; another tool's diagnostics). Optional — empty for a
+    /// clean parse and for tools that cannot report any — and glyph-neutral:
+    /// it never changes the cell outcome or the consensus vote.
+    Cookies {
+        cookies: Vec<CookieView>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        issues: Vec<String>,
+    },
     /// A request parser rejected the whole header (fail-hard — biscotti's mode).
     Rejected { error: String },
-    /// A `Set-Cookie` parsed into one cookie.
-    SetCookie { set_cookie: SetCookieView },
+    /// A `Set-Cookie` parsed into one cookie, with the same optional
+    /// accepted-with-issues channel as [`Cookies`](ParseOutcome::Cookies).
+    SetCookie {
+        set_cookie: SetCookieView,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        issues: Vec<String>,
+    },
     /// A `Set-Cookie` parser rejected the input.
     SetCookieRejected { error: String },
     /// A *forwarding* target (nginx proxy) passed the request Cookie header on
@@ -153,11 +167,11 @@ impl ParseOutcome {
     /// A compact, single-cell rendering for the matrix.
     pub fn cell(&self) -> String {
         match self {
-            ParseOutcome::Cookies { cookies } => render_cookies(cookies),
+            ParseOutcome::Cookies { cookies, .. } => render_cookies(cookies),
             ParseOutcome::Rejected { .. } => "❌".to_string(),
             // Context-free rendering (consensus key, jar-probe cells): the raw stored path.
             // The response table resolves a jar's substituted default-path via `display_cell`.
-            ParseOutcome::SetCookie { set_cookie } => set_cookie.cell(PathRender::Verbatim),
+            ParseOutcome::SetCookie { set_cookie, .. } => set_cookie.cell(PathRender::Verbatim),
             ParseOutcome::SetCookieRejected { .. } => "❌".to_string(),
             ParseOutcome::ForwardedVerbatim => "≡".to_string(),
             ParseOutcome::ForwardedAltered { forwarded } => format!("≠ {}", short(forwarded)),
@@ -179,8 +193,23 @@ impl ParseOutcome {
         self.cell()
     }
 
+    /// The recovered issues an *accepted* outcome carried
+    /// ([`Cookies`](ParseOutcome::Cookies) / [`SetCookie`](ParseOutcome::SetCookie)),
+    /// empty otherwise. A rejection's reason stays its single `error`
+    /// (see [`detail`](ParseOutcome::detail)); this channel is what fail-soft
+    /// recovered from while still accepting.
+    #[must_use]
+    pub fn issues(&self) -> &[String] {
+        match self {
+            ParseOutcome::Cookies { issues, .. } | ParseOutcome::SetCookie { issues, .. } => issues,
+            _ => &[],
+        }
+    }
+
     /// The diagnostic text a cell carries for an HTML hover tooltip: the rejection
-    /// `error`, the crash `reason`, or the panic `message`. `None` for any outcome that
+    /// `error`, the crash `reason`, or the panic `message` — error text only; the
+    /// accepted-with-issues list renders through
+    /// [`diagnostics`](ParseOutcome::diagnostics). `None` for any outcome that
     /// has no error text (a successful parse, `n/a`, `SKIP`, or a forwarding verdict) —
     /// so a tooltip is attached exactly when there is something to explain.
     #[must_use]
@@ -198,12 +227,24 @@ impl ParseOutcome {
     /// The full multi-line diagnostic for the HTML tooltip's `<pre>`: a rejection
     /// `error` or panic `message` as-is, and for a [`Crashed`](ParseOutcome::Crashed)
     /// sidecar the `reason` plus its captured `stdout`/`stderr` under labelled
-    /// dividers. `None` when there is nothing to explain (a clean parse, `n/a`,
+    /// dividers; for an accepted outcome carrying recovered `issues`, the list as
+    /// bullet lines. `None` when there is nothing to explain (a clean parse, `n/a`,
     /// `SKIP`, a forwarding verdict). Control bytes are made visible, but newlines
     /// and tabs are kept so a stack trace renders line-for-line.
     #[must_use]
     pub fn diagnostics(&self) -> Option<String> {
         match self {
+            ParseOutcome::Cookies { issues, .. } | ParseOutcome::SetCookie { issues, .. }
+                if !issues.is_empty() =>
+            {
+                Some(
+                    issues
+                        .iter()
+                        .map(|issue| format!("• {}", sanitize_multiline(issue)))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                )
+            }
             ParseOutcome::Rejected { error } | ParseOutcome::SetCookieRejected { error } => {
                 Some(sanitize_multiline(error))
             }
@@ -471,5 +512,42 @@ mod tests {
         );
         assert_eq!(ParseOutcome::NotApplicable.diagnostics(), None);
         assert_eq!(ParseOutcome::Skipped.diagnostics(), None);
+    }
+
+    #[test]
+    fn issue_channel_is_optional_and_glyph_neutral() {
+        // A sidecar predating the channel deserializes with an empty list…
+        let old_wire = r#"{"outcome":"SetCookie","set_cookie":{"name":"SID","value":"x"}}"#;
+        let outcome: ParseOutcome = serde_json::from_str(old_wire).unwrap();
+        assert!(outcome.issues().is_empty());
+        // …and a clean outcome serializes without the key, byte-identical to
+        // the pre-channel wire — the protocol only grows for dirty accepts.
+        assert!(!serde_json::to_string(&outcome).unwrap().contains("issues"));
+
+        // The cell and the consensus key ignore the channel entirely.
+        let dirty = ParseOutcome::SetCookie {
+            set_cookie: set_cookie(None),
+            issues: vec!["value `1` on the presence-only `Secure` flag".into()],
+        };
+        let clean = ParseOutcome::SetCookie {
+            set_cookie: set_cookie(None),
+            issues: Vec::new(),
+        };
+        assert_eq!(dirty.cell(), clean.cell());
+        assert_eq!(dirty.consensus_key(), clean.consensus_key());
+    }
+
+    #[test]
+    fn accepted_with_issues_renders_a_bullet_list() {
+        let dirty = ParseOutcome::Cookies {
+            cookies: vec![CookieView::new("SID", "x")],
+            issues: vec!["cookie pair `junk` has no `=`".into(), "second".into()],
+        };
+        assert_eq!(
+            dirty.diagnostics().as_deref(),
+            Some("• cookie pair `junk` has no `=`\n• second")
+        );
+        // detail() stays error-text-only: an accepted outcome has none.
+        assert_eq!(dirty.detail(), None);
     }
 }
