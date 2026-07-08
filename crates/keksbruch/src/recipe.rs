@@ -260,7 +260,7 @@ impl<'a> KeksbruchRecipe<'a> {
             }
             // The pair renders through kekse, the attribute tail verbatim — so the
             // wire may omit exactly what the base's conformant baseline carries.
-            (Keksbruch::PrefixedName { attrs }, Direction::Response) => {
+            (Keksbruch::AttrTail { attrs }, Direction::Response) => {
                 let kernel =
                     Cookie::new(n, self.base.value.clone()).with_encoding(self.base.encoding);
                 format!("{}{attrs}", kernel.to_request_pair()).into_bytes()
@@ -294,7 +294,7 @@ impl<'a> KeksbruchRecipe<'a> {
                 | Keksbruch::OverlongPath(_)
                 | Keksbruch::AllAttributes
                 | Keksbruch::PartitionedFlag { .. }
-                | Keksbruch::PrefixedName { .. }
+                | Keksbruch::AttrTail { .. }
                 | Keksbruch::DuplicateDomain { .. }
                 | Keksbruch::NulInAttrName
                 | Keksbruch::NulInAttrValue

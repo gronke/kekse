@@ -151,20 +151,22 @@ fn s(
     }
 }
 
-/// Assemble a response scenario whose base cookie carries `attributes`. The
-/// prefix rows need this: `assert_baseline_parses_clean` renders the base
-/// through kekse, so a `__Host-`/`__Secure-`-named base must carry the
-/// conformant attributes (`Secure`, `Path=/`) for its baseline to be clean —
-/// which doubles as the pin that kekse can *emit* conformant prefixed cookies.
+/// Assemble a response scenario whose base cookie carries `value` and
+/// `attributes`. The prefix rows need this: `assert_baseline_parses_clean`
+/// renders the base through kekse, so a `__Host-`/`__Secure-`-named base must
+/// carry the conformant attributes (`Secure`, `Path=/`) for its baseline to be
+/// clean — which doubles as the pin that kekse can *emit* conformant prefixed
+/// cookies. The name-position rows use the explicit `value` instead.
 fn s_attrs(
     id: &'static str,
     description: &'static str,
     name: &'static str,
+    value: &'static str,
     attributes: kekse::CookieAttributes<'static>,
     keksbruch: Keksbruch,
     expect: Expect,
 ) -> Scenario {
-    let mut base = LogicalCookie::new(name, "abc");
+    let mut base = LogicalCookie::new(name, value);
     base.attributes = attributes;
     Scenario {
         id,
@@ -537,8 +539,9 @@ pub fn scenarios() -> Vec<Scenario> {
             "prefix-secure-ok",
             "__Secure- with the Secure attribute is conformant — a clean parse",
             "__Secure-SID",
+            "abc",
             secure_attrs(),
-            Keksbruch::PrefixedName { attrs: "; Secure" },
+            Keksbruch::AttrTail { attrs: "; Secure" },
             Expect::ResponseValue {
                 value: "abc",
                 max_age: None,
@@ -552,8 +555,9 @@ pub fn scenarios() -> Vec<Scenario> {
             "prefix-secure-missing",
             "__Secure- without the Secure attribute — witnessed, cookie kept",
             "__Secure-SID",
+            "abc",
             secure_attrs(),
-            Keksbruch::PrefixedName { attrs: "" },
+            Keksbruch::AttrTail { attrs: "" },
             Expect::ResponseValue {
                 value: "abc",
                 max_age: None,
@@ -567,8 +571,9 @@ pub fn scenarios() -> Vec<Scenario> {
             "prefix-host-ok",
             "__Host- with Secure and Path=/ (and no Domain) is conformant — a clean parse",
             "__Host-SID",
+            "abc",
             host_attrs(),
-            Keksbruch::PrefixedName {
+            Keksbruch::AttrTail {
                 attrs: "; Secure; Path=/",
             },
             Expect::ResponseValue {
@@ -584,8 +589,9 @@ pub fn scenarios() -> Vec<Scenario> {
             "prefix-host-missing-secure",
             "__Host- without the Secure attribute — witnessed, cookie kept",
             "__Host-SID",
+            "abc",
             host_attrs(),
-            Keksbruch::PrefixedName { attrs: "; Path=/" },
+            Keksbruch::AttrTail { attrs: "; Path=/" },
             Expect::ResponseValue {
                 value: "abc",
                 max_age: None,
@@ -599,8 +605,9 @@ pub fn scenarios() -> Vec<Scenario> {
             "prefix-host-domain",
             "__Host- must not carry a Domain — the attribute is kept and the violation witnessed",
             "__Host-SID",
+            "abc",
             host_attrs(),
-            Keksbruch::PrefixedName {
+            Keksbruch::AttrTail {
                 attrs: "; Secure; Path=/; Domain=example.com",
             },
             Expect::ResponseKeptWithIssuesDomain {
@@ -613,8 +620,9 @@ pub fn scenarios() -> Vec<Scenario> {
             "prefix-host-path",
             "__Host- requires Path=/ exactly — the nonconformant path is kept and witnessed",
             "__Host-SID",
+            "abc",
             host_attrs(),
-            Keksbruch::PrefixedName {
+            Keksbruch::AttrTail {
                 attrs: "; Secure; Path=/app",
             },
             Expect::ResponsePath {
@@ -627,8 +635,9 @@ pub fn scenarios() -> Vec<Scenario> {
             "prefix-host-case",
             "a case-variant __host- still triggers the prefix rules, as user agents match them",
             "__host-SID",
+            "abc",
             host_attrs(),
-            Keksbruch::PrefixedName { attrs: "" },
+            Keksbruch::AttrTail { attrs: "" },
             Expect::ResponseValue {
                 value: "abc",
                 max_age: None,
@@ -640,6 +649,147 @@ pub fn scenarios() -> Vec<Scenario> {
                     IssueKind::Constraint("HostPrefixWithoutRootPath"),
                 ],
             },
+        ),
+        // The CHIPS combination shapes. `ResponseValue` cannot pin SameSite or
+        // Domain directly, but a clean issue list does it indirectly: had the
+        // attribute been dropped, the conservation law demands a witness.
+        s(
+            "resp-partitioned-samesite-none",
+            "the embedded-widget shape (SameSite=None; Secure; Partitioned) — engines apply the \
+             None-requires-Secure and CHIPS policies together",
+            Response,
+            "SID",
+            Keksbruch::AttrTail {
+                attrs: "; SameSite=None; Secure; Partitioned",
+            },
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: true,
+                partitioned: true,
+                issues: &[],
+            },
+        ),
+        s_attrs(
+            "prefix-host-partitioned",
+            "CHIPS' recommended pairing: a __Host--prefixed, secure, partitioned cookie is fully \
+             conformant",
+            "__Host-SID",
+            "abc",
+            host_attrs(),
+            Keksbruch::AttrTail {
+                attrs: "; Secure; Path=/; Partitioned",
+            },
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: true,
+                partitioned: true,
+                issues: &[],
+            },
+        ),
+        s(
+            "resp-partitioned-domain",
+            "Domain alongside Partitioned: current CHIPS allows it, early engine policy required \
+             host-only — a version split for the matrix to show",
+            Response,
+            "SID",
+            Keksbruch::AttrTail {
+                attrs: "; Secure; Domain=example.com; Partitioned",
+            },
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: true,
+                partitioned: true,
+                issues: &[],
+            },
+        ),
+        // The flag is presence-only, so even a `false`-looking value sets it —
+        // witnessed — and who *interprets* the value instead is exactly what
+        // the other columns reveal.
+        s(
+            "resp-partitioned-false",
+            "Partitioned=false still sets the presence-only flag; a value-interpreting parser \
+             would clear it instead",
+            Response,
+            "SID",
+            Keksbruch::AttrTail {
+                attrs: "; Secure; Partitioned=false",
+            },
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: true,
+                partitioned: true,
+                issues: &[IssueKind::FlagWithValue("Partitioned")],
+            },
+        ),
+        s(
+            "resp-partitioned-true",
+            "Partitioned=true sets the flag like the bare form, with the discarded value witnessed",
+            Response,
+            "SID",
+            Keksbruch::AttrTail {
+                attrs: "; Secure; Partitioned=true",
+            },
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: true,
+                partitioned: true,
+                issues: &[IssueKind::FlagWithValue("Partitioned")],
+            },
+        ),
+        s(
+            "resp-partitioned-case",
+            "attribute names match case-insensitively (RFC 6265 §5.2), so pArTiTiOnEd is the flag",
+            Response,
+            "SID",
+            Keksbruch::AttrTail {
+                attrs: "; Secure; pArTiTiOnEd",
+            },
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: true,
+                partitioned: true,
+                issues: &[],
+            },
+        ),
+        // Position decides meaning: the leading segment of a Set-Cookie is the
+        // name=value pair (§5.2), so `Partitioned=false` alone is a cookie
+        // *named* Partitioned — no flag anywhere on the line.
+        s_attrs(
+            "resp-partitioned-name",
+            "a cookie literally named Partitioned: the leading segment is the pair, never a flag",
+            "Partitioned",
+            "false",
+            kekse::CookieAttributes::default(),
+            Keksbruch::AttrTail { attrs: "" },
+            Expect::ResponseValue {
+                value: "false",
+                max_age: None,
+                http_only: false,
+                secure: false,
+                partitioned: false,
+                issues: &[],
+            },
+        ),
+        s(
+            "req-partitioned-name",
+            "a request pair named Partitioned: Cookie: headers carry no attributes, so it is a \
+             plain pair in both gradings",
+            Request,
+            "Partitioned",
+            Keksbruch::ValuePayload("false"),
+            Expect::BothPairs(vec![("Partitioned", "false"), ("m", "ok")]),
         ),
         // ── SameSite values (Response) ──────────────────────────────────────
         // The three well-defined tokens (RFC 6265bis samesite-av), case-folding,
