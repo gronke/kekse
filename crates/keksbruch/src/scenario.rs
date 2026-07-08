@@ -645,9 +645,29 @@ pub fn scenarios() -> Vec<Scenario> {
                 secure: false,
                 partitioned: false,
                 issues: &[
+                    IssueKind::Constraint("NonCanonicalPrefixCase"),
                     IssueKind::Constraint("HostPrefixWithoutSecure"),
                     IssueKind::Constraint("HostPrefixWithoutRootPath"),
                 ],
+            },
+        ),
+        s_attrs(
+            "prefix-host-case-conformant",
+            "a case-variant __host- meeting every requirement is witnessed for the casing alone \
+             — curl-class agents match prefixes case-sensitively and lose the protection here",
+            "__host-SID",
+            "abc",
+            host_attrs(),
+            Keksbruch::AttrTail {
+                attrs: "; Secure; Path=/",
+            },
+            Expect::ResponseValue {
+                value: "abc",
+                max_age: None,
+                http_only: false,
+                secure: true,
+                partitioned: false,
+                issues: &[IssueKind::Constraint("NonCanonicalPrefixCase")],
             },
         ),
         // The CHIPS combination shapes. `ResponseValue` cannot pin SameSite or
