@@ -265,6 +265,11 @@ impl<'a> KeksbruchRecipe<'a> {
                     Cookie::new(n, self.base.value.clone()).with_encoding(self.base.encoding);
                 format!("{}{attrs}", kernel.to_request_pair()).into_bytes()
             }
+            (Keksbruch::LeadingToken(token), Direction::Response) => {
+                let kernel =
+                    Cookie::new(n, self.base.value.clone()).with_encoding(self.base.encoding);
+                format!("{token}; {}", kernel.to_request_pair()).into_bytes()
+            }
             (Keksbruch::NulInAttrName, Direction::Response) => {
                 let mut w = format!("{}; Pa", self.base.baseline(Direction::Response)).into_bytes();
                 w.push(0);
@@ -295,6 +300,7 @@ impl<'a> KeksbruchRecipe<'a> {
                 | Keksbruch::AllAttributes
                 | Keksbruch::PartitionedFlag { .. }
                 | Keksbruch::AttrTail { .. }
+                | Keksbruch::LeadingToken(_)
                 | Keksbruch::DuplicateDomain { .. }
                 | Keksbruch::NulInAttrName
                 | Keksbruch::NulInAttrValue

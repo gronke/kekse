@@ -143,6 +143,12 @@ pub enum Keksbruch {
     /// pairings). An empty tail probes the bare pair itself, e.g. a cookie
     /// literally named `Partitioned`.
     AttrTail { attrs: &'static str },
+    /// A known attribute token in the *pair position*: `<token>; name=value`
+    /// (Response). RFC 6265 §5.2 makes the leading segment the pair, and this
+    /// one has no `=`, so a conformant parser finds no usable pair — while a
+    /// parser that pattern-matches attribute names anywhere may skip the token
+    /// and adopt the later pair instead.
+    LeadingToken(&'static str),
 
     // ── extra coverage: NUL positions, HTAB, multibyte UTF-8 ─────────────────
     /// A NUL byte in the cookie *name*: `n\0x=v`.

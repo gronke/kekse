@@ -403,6 +403,20 @@ pub fn scenarios() -> Vec<Scenario> {
             },
         ),
         s(
+            "attr-unknown-bare",
+            "a BARE unknown flag: kekse witnesses it like the valued form, but python's \
+             SimpleCookie loses the whole cookie on exactly this shape",
+            Response,
+            "SID",
+            Keksbruch::AttrTail {
+                attrs: "; Priority",
+            },
+            Expect::ResponseKeptWithIssues {
+                value: "abc",
+                issues: &[IssueKind::Unknown],
+            },
+        ),
+        s(
             "attr-bad-maxage",
             "a non-numeric Max-Age is dropped; the cookie is kept",
             Response,
@@ -801,6 +815,44 @@ pub fn scenarios() -> Vec<Scenario> {
                 partitioned: false,
                 issues: &[],
             },
+        ),
+        // Mechanism-interaction probes: two parser mechanisms sharing state —
+        // decode-vs-split, quote-vs-split, position-vs-recognition. Each pins
+        // kekse's ordering; parsers with the opposite ordering diverge here.
+        s_attrs(
+            "resp-encoded-semicolon-attr",
+            "an encoded `;` stays value: a decode-then-split parser would hallucinate a \
+             Partitioned attribute out of the cookie's own value",
+            "SID",
+            "abc; Partitioned",
+            kekse::CookieAttributes::default(),
+            Keksbruch::AttrTail { attrs: "; Secure" },
+            Expect::ResponseValue {
+                value: "abc; Partitioned",
+                max_age: None,
+                http_only: false,
+                secure: true,
+                partitioned: false,
+                issues: &[],
+            },
+        ),
+        s(
+            "resp-quoted-attr-text",
+            "§5.2 splits before any unquoting, so the quotes cannot swallow the attribute: the \
+             leading value becomes a bare `\"abc`, which kekse's octet rule refuses outright",
+            Response,
+            "SID",
+            Keksbruch::ValuePayload("\"abc; Partitioned\"; Secure"),
+            Expect::ResponseNone,
+        ),
+        s(
+            "resp-partitioned-leading",
+            "an attribute token in pair position: the leading segment has no `=`, so there is no \
+             usable pair — a parser that recognises attribute names anywhere may skip to SID",
+            Response,
+            "SID",
+            Keksbruch::LeadingToken("Partitioned"),
+            Expect::ResponseNone,
         ),
         s(
             "req-partitioned-name",

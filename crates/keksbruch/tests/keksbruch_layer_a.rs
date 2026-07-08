@@ -102,20 +102,35 @@ fn every_keksbruch_survives_the_universal_invariants() {
                 // unwitnessed.
                 assert_set_cookie_report_consistency(&wire);
                 assert_response_divergence_witnessed(&wire);
-                // Response: parsing never panics. The cookie value is decoded and
-                // octet-validated, so it is always injection-free. Attribute values
-                // (Path/Domain) are stored raw, so the wire boundary is the
-                // HeaderValue conversion — if it succeeds the bytes carry no
-                // injection; a raw byte that would inject is rejected there.
+                // Response: parsing never panics. The decoded *logical* value may
+                // carry any UTF-8 — the managed encodings are lossless, so `%3B` /
+                // `%0A` legitimately decode to `;` / LF — but a RAW injection byte
+                // on the wire is refused (the ctl rows pin that as fatal), and the
+                // injection promise holds where it matters: kekse's own
+                // re-rendering escapes everything again. A bare `;` could not
+                // survive it either — it would split into an extra segment and
+                // fail the fixpoint law.
                 let _ = SetCookie::parse_strict(&wire);
                 if let Ok(reported) = SetCookie::parse(&wire) {
                     let sc = reported.into_value();
+                    // Mirror the request law's raw-admission tripwire: a wire
+                    // without `%` cannot decode a control into the value, so
+                    // finding one there means the reader admitted it raw.
+                    if !wire.contains('%') {
+                        assert!(
+                            !sc.value()
+                                .bytes()
+                                .any(|b| b == b';' || (b.is_ascii_control() && b != b'\t')),
+                            "raw injection byte admitted into a Set-Cookie value from {wire:?}: \
+                             {:?}",
+                            sc.value()
+                        );
+                    }
+                    let rendered = sc.to_set_cookie();
                     assert!(
-                        !sc.value()
-                            .bytes()
-                            .any(|b| matches!(b, b';' | b'\r' | b'\n' | 0)),
-                        "Set-Cookie value carried an injection byte: {:?}",
-                        sc.value()
+                        !rendered.bytes().any(|b| matches!(b, b'\r' | b'\n' | 0)),
+                        "re-rendered Set-Cookie carried a raw injection byte for {wire:?}: \
+                         {rendered:?}"
                     );
                     if let Ok(header_value) = http::HeaderValue::try_from(&sc) {
                         assert!(

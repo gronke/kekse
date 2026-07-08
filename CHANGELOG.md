@@ -26,7 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   Enforcement is the `is_clean` gate; `SetCookieIssue::InvalidPair` is removed.
 - **Breaking:** `Path::new` / `Domain::new` return `Result`, and the `path` / `domain` setters take the validated newtypes — a builder chain can no longer swallow an invalid value.
 - **Breaking:** a wire carrying `Partitioned` parses into the typed flag instead of an `UnknownAttribute` witness, and `CookieAttributes` gained the public `partitioned` field (breaking for exhaustive struct literals).
-- keksbruch: the divergence-witness fixpoint law now expects a salvage to re-parse with exactly its own standing constraint violations — properties of the cookie, not of the wire's syntax.
+- keksbruch: the divergence-witness fixpoint and baseline laws now expect a render to read back with exactly its standing constraint violations, and the response no-injection law is restated on the wire side — a percent-escape may decode a delimiter into the logical value (the encodings are lossless), but it can never re-reach a header unescaped.
 - The axum `jar()` / `jar_strict()` views return the reported jar; `jar_reported` / `jar_strict_reported` are merged away, and `try_jar` / `try_jar_strict` keep the one-line 400 gate.
 
 - The value decoder gates and escape-scans each value in one pass, so a clean value skips percent-decoding entirely; typical `Cookie:` headers parse 25-30% faster.
