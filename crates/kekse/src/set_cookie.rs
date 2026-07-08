@@ -193,7 +193,7 @@ impl<'a> SetCookie<'a> {
         // Bits of recognised attributes already seen, so a repeat (e.g. two `Domain=`)
         // is recognised and reported. Last-wins among the occurrences that parse,
         // consistent across every attribute and both gradings.
-        let mut seen: u8 = 0;
+        let mut seen: u16 = 0;
         for piece in segments {
             let (attr, val) = match piece.split_once('=') {
                 Some((a, v)) => (a.trim_matches(is_ws_char), v.trim_matches(is_ws_char)),
@@ -617,10 +617,11 @@ impl KnownAttribute {
             .find(|known| attr.eq_ignore_ascii_case(known.name()))
     }
 
-    /// This attribute's bit in the strict-mode duplicate mask, derived from the
-    /// discriminant (8 variants fit a `u8`) — collision-free by construction.
-    const fn bit(self) -> u8 {
-        1 << (self as u8)
+    /// This attribute's bit in the duplicate mask, derived from the
+    /// discriminant — collision-free by construction, and `u16` leaves
+    /// headroom far past the current eight variants.
+    const fn bit(self) -> u16 {
+        1 << (self as u16)
     }
 }
 
@@ -938,7 +939,7 @@ mod tests {
 
     #[test]
     fn known_attribute_bits_are_distinct_and_recognition_is_case_insensitive() {
-        let mut mask = 0u8;
+        let mut mask = 0u16;
         for known in KnownAttribute::ALL {
             // Every bit is fresh — the mask can address each attribute independently.
             assert_eq!(mask & known.bit(), 0, "{known:?} bit collides");
