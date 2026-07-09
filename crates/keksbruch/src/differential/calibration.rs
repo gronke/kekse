@@ -32,6 +32,7 @@ const LENIENT_DEVIATIONS: &[(&str, &str)] = &[
     // ── injection bytes in values: the crate's core security refusal ──
     ("resp-crlf", INJECTION_REASON),
     ("resp-ctl-nul", INJECTION_REASON),
+    ("resp-ctl-other", INJECTION_REASON),
     ("resp-del-byte", INJECTION_REASON),
     // ── non-token names: kekse's name grammar, stricter than §5.2 on purpose ──
     ("resp-non-ascii-name", TOKEN_REASON),
