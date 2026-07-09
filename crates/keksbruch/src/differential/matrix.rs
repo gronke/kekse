@@ -743,7 +743,7 @@ fn marked_cell(
     // pass — it must never reach `cell()`/`consensus_key()`, or identical
     // outcomes would stop grouping merely for having been witnessed.
     if !outcome.issues().is_empty() {
-        text.push_str(" ⚠");
+        text.push_str(" ⚠️");
     }
     (text, diffs)
 }
@@ -1765,7 +1765,7 @@ mod tests {
     #[test]
     fn issue_marker_is_display_only_and_never_reaches_consensus() {
         // Identical stored cookies, one witnessed: same consensus key, no
-        // divergence between them — the ⚠ lives in marked_cell alone.
+        // divergence between them — the ⚠️ lives in marked_cell alone.
         let clean = stored("abc", None);
         let dirty = match stored("abc", None) {
             ParseOutcome::SetCookie { set_cookie, .. } => ParseOutcome::SetCookie {
@@ -1779,7 +1779,7 @@ mod tests {
         assert!(!diverges(&dirty, consensus.as_ref()));
         let (clean_text, _) = marked_cell(&clean, None, "x/y", b"SID=abc");
         let (dirty_text, _) = marked_cell(&dirty, None, "x/y", b"SID=abc");
-        assert_eq!(format!("{clean_text} ⚠"), dirty_text);
+        assert_eq!(format!("{clean_text} ⚠️"), dirty_text);
     }
 
     #[test]

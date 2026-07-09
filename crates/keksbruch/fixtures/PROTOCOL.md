@@ -117,7 +117,7 @@ Internally tagged by `"outcome"`. Matrix rendering shown in parentheses.
 The accepted outcomes (`Cookies`, `SetCookie`) take an optional `issues` array of free-form strings —
 what the parser *recovered from* while still accepting (a refused pair, a dropped attribute, a
 constraint violation). Human-facing and glyph-neutral like `error`: the harness shows the list in the
-cell tooltip and appends a display-only `⚠`, but the cell outcome and the consensus vote never depend
+cell tooltip and appends a display-only `⚠️`, but the cell outcome and the consensus vote never depend
 on it. A sidecar that cannot report issues simply omits the key (the harness defaults it to empty),
 so every pre-channel sidecar stays valid.
 
