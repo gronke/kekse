@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - kekse: a `; =V` segment — an empty attribute name carrying a value — is witnessed as an unknown attribute instead of vanishing as structural noise (found by the generative property suite's conservation law).
 - keksbruch: `PROPTEST_CASES` deepening actually works; the config literal had silently overridden the documented env var.
+- keksbruch: the browser sidecar's per-record cleanup missed CHIPS-partitioned cookies (classic WebDriver's delete is partition-blind), so a stale `SID=abc` shadowed later browser cells — most visibly "accepting" wires the engines reject; every record now verifies the jar is empty and relaunches the engine on any survivor.
 
 ### Changed
 

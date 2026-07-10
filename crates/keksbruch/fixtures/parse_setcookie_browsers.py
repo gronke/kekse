@@ -38,6 +38,12 @@ current document's cookies): the stored-cookie readback and the post-record
 cleanup both visit every engaged absolute Path in addition to the page that
 set the cookie — otherwise a `Path=/b` cookie reads back as a phantom
 rejection, and a jar probe's path-scoped cookie leaks into later records.
+
+The cookie commands are also blind to CHIPS partitions — a `Partitioned`
+cookie survives Delete All Cookies while Get All Cookies keeps reporting it —
+so each record ends by verifying the jar really is empty, and relaunches the
+engine on any survivor (or after a refused navigation, whose error page makes
+the jar unobservable): every record provably starts with a clean jar.
 """
 import sys
 import os
@@ -505,6 +511,21 @@ def set_cookie_view(cookies, engaged):
     }
 
 
+def verify_clean(engine):
+    # The W3C cookie commands are blind to CHIPS partitions: a `Partitioned`
+    # cookie survives Delete All Cookies in every engine here while Get All
+    # Cookies keeps returning it, so left alone it haunts every later record
+    # on the host as a phantom cell. Any survivor (or an unanswerable driver)
+    # taints the engine — a relaunch with a fresh profile — so each record
+    # provably starts with an empty jar. Partition-aware CDP deletion is the
+    # browser-lab follow-up; relaunching is engine-agnostic.
+    try:
+        if engine.cookies():
+            engine.taint = True
+    except WdError:
+        engine.taint = True
+
+
 def response_record(engine, wire):
     engaged = attribute_tokens(wire)
     path = "/r/%d" % next(COUNTER)
@@ -539,6 +560,13 @@ def response_record(engine, wire):
             if nav_err is None and page is None:
                 raise  # readback on the setting page must work — engine fault
             engine.taint = True  # never leak state into the next record
+    if nav_err is not None:
+        # The driver may be looking at the engine's internal error page, which
+        # hides the host's cookies (see UNARMED) — the cleanup above ran blind,
+        # so never trust the jar it leaves behind.
+        engine.taint = True
+    else:
+        verify_clean(engine)
     view = set_cookie_view(stored, engaged)
     if view is None:
         return {"outcome": "SetCookieRejected", "error": nav_err or "no cookie accepted"}
@@ -588,6 +616,7 @@ def jar_record(engine, wire, origin_url, request_url):
             engine.delete_cookies()
         except WdError:
             engine.taint = True
+    verify_clean(engine)
     return {"outcome": "Cookies", "cookies": attached}
 
 
