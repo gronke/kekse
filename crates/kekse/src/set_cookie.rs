@@ -1639,7 +1639,7 @@ mod tests {
         ];
         for issue in issues {
             let rendered = issue.to_string();
-            for byte in [b'\r', b'\n', b'\0'] {
+            for byte in *b"\r\n\0" {
                 assert!(
                     !rendered.bytes().any(|b| b == byte),
                     "{rendered:?} echoes {byte:#04x}"
