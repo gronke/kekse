@@ -51,18 +51,24 @@ jobs:
         uses: ./.rust-ci/.github/actions/build-image
 
       # rfc_6265 is the workspace leaf (no internal deps), so its dry-run + sealed
-      # verify-build stand on their own — a hard gate.
+      # verify-build stand on their own — a hard gate. It versions independently of
+      # the workspace (the v* tag names the kekse release), so its expected version is
+      # pinned here; bump it when rfc_6265 ships. On a kekse-only release an unchanged
+      # rfc_6265 is already published, so this step's not-already-published probe fails
+      # by design — make the step advisory for that tag.
       - name: Dry-run rfc_6265
         uses: ./.rust-ci/.github/actions/publish-dry-run
         with:
           package: rfc_6265
+          expected-version: "0.1.1"
 
-      # kekse path-depends on rfc_6265 pinned at the workspace version (0.2 as of this
-      # writing — see crates/kekse/Cargo.toml). Until that rfc_6265 version is actually
-      # on crates.io, kekse's `cargo package` verify-build can't resolve the dependency,
-      # so this step is advisory for now (classic workspace publish-order).
-      # Promote it to a hard gate (drop continue-on-error) after rfc_6265's first publish.
-      - name: Dry-run kekse (advisory until rfc_6265 is published)
+      # kekse pins rfc_6265 by exact minimum version. In a release that ships both
+      # crates the pinned rfc_6265 is not on crates.io at tag time, so kekse's
+      # `cargo package` verify-build can't resolve the dependency and this step stays
+      # advisory (classic workspace publish-order); `cargo publish --workspace` on the
+      # release machine verifies both against each other, and re-running this gate via
+      # workflow_dispatch after rfc_6265 is live shows kekse verifying for real.
+      - name: Dry-run kekse (advisory — a co-shipped rfc_6265 is not on crates.io yet)
         continue-on-error: true
         uses: ./.rust-ci/.github/actions/publish-dry-run
         with:

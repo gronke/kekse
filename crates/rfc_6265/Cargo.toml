@@ -1,7 +1,9 @@
 [package]
 name = "rfc_6265"
 description = "Reusable, thoroughly tested primitives from RFC 6265 (HTTP State Management): grammar byte-classes, cookie-date parsing, and domain/path matching."
-version.workspace = true
+# Versioned independently of the workspace (which tracks kekse): the primitives
+# crate moves only when its own API does.
+version = "0.1.1"
 authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
