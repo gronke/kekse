@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-10
+
+kekse 0.2.0 ships together with rfc_6265 0.1.1.
+The primitives crate's changes are additive, and from this release it versions independently of the workspace — it moves only when its own API does.
+
 ### Added
 
 - `rfc_6265`: `date::ImfFixdate`, a lazy `Display` of the canonical IMF-fixdate that renders onto a stack buffer; `format_imf_fixdate` delegates to it.
@@ -57,5 +62,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - keksbruch (unpublished): the differential QA harness pinning kekse across 80+ scenarios and a 30+ parser cross-language matrix.
 - No `unsafe`; three dependencies (`percent-encoding`, `http`, `time`); Rust 1.88+.
 
-[Unreleased]: https://github.com/gronke/kekse/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/gronke/kekse/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/gronke/kekse/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/gronke/kekse/releases/tag/v0.1.0
