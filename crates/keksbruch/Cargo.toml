@@ -67,6 +67,9 @@ differential = [
     "dep:tera",
     "dep:pulldown-cmark",
     "dep:maud",
+    # The subject's own client store, driven through the jar probes as a judged
+    # (never voting) column beside the rfc_6265 reference.
+    "kekse/store",
 ]
 # Build the system under test (kekse) with its Domain-hardening suite, so Layer A asserts the
 # enforced behaviour (public-suffix / malformed-IDN `Domain`s refused) rather than the pure codec.

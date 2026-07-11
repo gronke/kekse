@@ -42,6 +42,7 @@ pub fn rust_comparators() -> Vec<Box<dyn RustComparator>> {
 pub struct KekseLenient;
 pub struct KekseStrict;
 pub struct KekseFailHard;
+pub struct KekseStore;
 pub struct CookieCrate;
 pub struct CookieStore;
 pub struct Biscotti;
@@ -371,7 +372,11 @@ pub trait JarComparator {
 
 /// The in-process jar comparators, in matrix-column order.
 pub fn jar_comparators() -> Vec<Box<dyn JarComparator>> {
-    vec![Box::new(Rfc6265Reference), Box::new(CookieStore)]
+    vec![
+        Box::new(Rfc6265Reference),
+        Box::new(KekseStore),
+        Box::new(CookieStore),
+    ]
 }
 
 /// The RFC 6265 §5.3/§5.4 algorithm executed directly from rfc_6265's primitives
@@ -391,6 +396,36 @@ impl JarComparator for Rfc6265Reference {
                 .collect(),
             // A jar probe reports retrieved state, not parse diagnostics.
             issues: Vec::new(),
+        }
+    }
+}
+
+impl JarComparator for KekseStore {
+    fn id(&self) -> (&'static str, &'static str) {
+        // A `kekse`-prefixed dep, so `is_subject` keeps it off the vote.
+        ("rust", "kekse (store)")
+    }
+    fn probe(&self, set_cookie: &str, origin_url: &str, request_url: &str) -> ParseOutcome {
+        let (Ok(origin), Ok(request)) = (url::Url::parse(origin_url), url::Url::parse(request_url))
+        else {
+            return ParseOutcome::Rejected {
+                error: "bad probe url".to_string(),
+            };
+        };
+        // The probes carry no Expires/Max-Age, so any fixed instant serves as
+        // `now` — the store takes time as data, never from a clock.
+        let now =
+            kekse::OffsetDateTime::from_unix_timestamp(1_752_000_000).expect("in-range instant");
+        let mut store = kekse::CookieStore::new();
+        // A storage refusal (domain mismatch, an unmet 6265bis gate) is "not
+        // sent" — ∅ — exactly like a stored cookie the request fails to match.
+        let _ = store.insert(&origin, set_cookie, now);
+        ParseOutcome::Cookies {
+            issues: Vec::new(),
+            cookies: store
+                .matches(&request, now)
+                .map(|c| CookieView::new(c.name(), c.value()))
+                .collect(),
         }
     }
 }

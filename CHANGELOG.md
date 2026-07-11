@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   Ingest applies the RFC 6265bis storage gates user agents apply — a `Secure` cookie only from a secure origin, the `__Host-`/`__Secure-` prefix requirements, CHIPS' `Partitioned`/`Secure` pairing — while a case-variant prefix whose requirements are met stores verbatim, exactly as the parser matrix shows engines doing.
   The parse's witness channel drives the wire shapes the typed attributes cannot carry: a negative `Max-Age` is honored as the delete-now idiom, and under `psl` a refused `Domain` follows §5.3 step 5 exactly — rejected for a foreign host, host-only when the origin is the public suffix itself.
   Every outcome is a typed `Insertion` (stored, replaced, deleted, or rejected with a `RejectionReason`), capacity follows §6.1 (3000 cookies, 50 per effective domain, expired evicted first), and every time-sensitive call takes `now` as data.
+- keksbruch: the jar-probe table gains a `kekse (store)` column — the subject's own `CookieStore` driven through the same §5.3/§5.4 probes as the rfc_6265 reference, judged beside it and never voting.
 
 ## [0.2.0] - 2026-07-10
 
