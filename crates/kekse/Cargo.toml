@@ -39,6 +39,8 @@ axum-core = { workspace = true, optional = true }
 # arrive lowercased and IDNA-encoded and the secure bit is the URL's own.
 # Pulled only by the `store` feature.
 url = { workspace = true, optional = true }
+# `PersistedStore` (de)serialization for the store, behind the `serde` feature.
+serde = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -52,6 +54,9 @@ axum = ["dep:axum-core"]
 # itself is rfc_6265's table-free domain/path primitives; composes with
 # `psl`/`hardened` for the exact §5.3 step 5 supercookie rejection at ingest.
 store = ["rfc_6265/domain", "rfc_6265/path", "dep:url"]
+# serde persistence of the store's stored representation only (`PersistedStore`) —
+# never the codec's wire types.
+serde = ["dep:serde", "store"]
 # Reject public-suffix `Domain`s (supercookie defense) via rfc_6265's Public Suffix List.
 # Like `idna`, also gates `Domain` on LDH host-name syntax first (see `Domain::new`).
 psl = ["rfc_6265/psl"]
@@ -76,6 +81,8 @@ criterion.workspace = true
 # Property invariants for the store's send-matching (tests/store.rs): every
 # returned cookie independently satisfies domain, path, secure, and expiry.
 proptest.workspace = true
+# The `serde` feature's export/import round-trip test serializes through a real format.
+serde_json.workspace = true
 
 # The `CookieJarBuf` extractor lives behind the `axum` feature, so its example only
 # builds with that feature on (the other examples are feature-free and auto-discovered).

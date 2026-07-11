@@ -125,6 +125,7 @@ assert_eq!(store.cookie_header(&insecure, now).unwrap(), "theme=dark");
 ```
 
 The store is a plain value — wrap it in the lock of your choice (`RwLock<CookieStore>`) to share it.
+The companion `serde` feature adds `PersistedStore` — export/import of the stored representation (never the codec's wire types) through any serde format.
 
 ## Three types, two headers
 

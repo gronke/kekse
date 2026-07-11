@@ -977,6 +977,8 @@ dependencies = [
  "percent-encoding",
  "proptest",
  "rfc_6265",
+ "serde",
+ "serde_json",
  "time",
  "tokio",
  "tower",
