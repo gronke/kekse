@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-11
+
+kekse 0.2.0 ships together with rfc_6265 0.1.1.
+The primitives crate's changes are additive, and from this release it versions independently of the workspace — it moves only when its own API does.
+
 ### Added
 
 - kekse: an opt-in `store` feature with `CookieStore` — RFC 6265 §5.3 storage and §5.4 send-matching (longest path first, then creation order) over the codec's parsed cookies, rendered back out through `CookieJar`.
@@ -14,14 +19,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   Every outcome is a typed `Insertion` (stored, replaced, deleted, or rejected with a `RejectionReason`), capacity follows §6.1 (3000 cookies, 50 per effective domain, expired evicted first), and every time-sensitive call takes `now` as data.
 - keksbruch: the jar-probe table gains a `kekse (store)` column — the subject's own `CookieStore` driven through the same §5.3/§5.4 probes as the rfc_6265 reference, judged beside it and never voting.
 - kekse: the store's `serde` companion feature — `PersistedStore` export/import of the stored representation (creation order carried by list order, expired cookies dropped and the caps applied at import), never the codec's wire types.
-
-## [0.2.0] - 2026-07-10
-
-kekse 0.2.0 ships together with rfc_6265 0.1.1.
-The primitives crate's changes are additive, and from this release it versions independently of the workspace — it moves only when its own API does.
-
-### Added
-
 - `rfc_6265`: `date::ImfFixdate`, a lazy `Display` of the canonical IMF-fixdate that renders onto a stack buffer; `format_imf_fixdate` delegates to it.
 - Criterion benchmarks for the codec hot paths (`benches/codec.rs`) and a deterministic allocation-count companion (`benches/allocs.rs`), both dev-only.
 - `InvalidPath` / `InvalidDomain`: the typed refusals of `Path::new` / `Domain::new`, naming the failed gate and carrying the refused value, rendered control-byte-free.
