@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- kekse: an opt-in `store` feature with `CookieStore` — RFC 6265 §5.3 storage and §5.4 send-matching (longest path first, then creation order) over the codec's parsed cookies, rendered back out through `CookieJar`.
+  Origins and requests are `url::Url`s — the feature's one added dependency — so hosts arrive lowercased and IDNA-encoded, and the secure bit is the URL's own: a TLS scheme, or a loopback destination, the trustworthy-origin convention.
+  Ingest applies the RFC 6265bis storage gates user agents apply — a `Secure` cookie only from a secure origin, the `__Host-`/`__Secure-` prefix requirements, CHIPS' `Partitioned`/`Secure` pairing — while a case-variant prefix whose requirements are met stores verbatim, exactly as the parser matrix shows engines doing.
+  The parse's witness channel drives the wire shapes the typed attributes cannot carry: a negative `Max-Age` is honored as the delete-now idiom, and under `psl` a refused `Domain` follows §5.3 step 5 exactly — rejected for a foreign host, host-only when the origin is the public suffix itself.
+  Every outcome is a typed `Insertion` (stored, replaced, deleted, or rejected with a `RejectionReason`), capacity follows §6.1 (3000 cookies, 50 per effective domain, expired evicted first), and every time-sensitive call takes `now` as data.
+
 ## [0.2.0] - 2026-07-10
 
 kekse 0.2.0 ships together with rfc_6265 0.1.1.

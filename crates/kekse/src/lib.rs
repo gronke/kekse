@@ -4,11 +4,12 @@
 //! `Cookie:` header through a [`CookieJar`] of [`Cookie`]s (over the lower-level
 //! [`parse_pairs`] iterators), builds and parses response `Set-Cookie:` values through the
 //! [`SetCookie`] type, and converts one straight into an `http` `HeaderValue` —
-//! all on the RFC 6265 §4.1.1 grammar. It carries no cookie *store* (no
-//! persistence, eviction, or domain/path send-matching) and no signing or
-//! encryption, but it does parse and render dates: a lifetime is `Max-Age`
-//! seconds (`u64`) or an `Expires` timestamp (an `OffsetDateTime`). It is
-//! designed not to panic on untrusted input.
+//! all on the RFC 6265 §4.1.1 grammar. The codec itself carries no cookie
+//! *store* — the opt-in `store` feature adds one (`CookieStore`: RFC 6265 §5.3
+//! storage, §5.4 send-matching) — and no signing or encryption, but it does
+//! parse and render dates: a lifetime is `Max-Age` seconds (`u64`) or an
+//! `Expires` timestamp (an `OffsetDateTime`). It is designed not to panic on
+//! untrusted input.
 //!
 //! ## Three types, two headers
 //!
@@ -147,6 +148,25 @@
 //! [`Raw`](ValueEncoding::Raw) value carrying a header-illegal byte, is a
 //! typed `500` (`BadSetCookie`) rather than a silently dropped cookie.
 //!
+//! ## Client-side store (optional)
+//!
+//! With the `store` feature, a `CookieStore` holds cookies across origins over
+//! time — RFC 6265 §5.3 storage and §5.4 send-matching over the same parsed
+//! [`SetCookie`]s, plus the RFC 6265bis storage gates user agents apply (a
+//! `Secure` cookie only over a secure origin, the `__Host-`/`__Secure-` prefix
+//! requirements, CHIPS' `Partitioned`/`Secure` pairing). Origins and requests
+//! are `url::Url`s — the URL an HTTP stack already holds — so hosts arrive
+//! lowercased and IDNA-encoded, and the secure bit is the URL's own: a TLS
+//! scheme (`https`/`wss`), or a loopback destination (`localhost`,
+//! `*.localhost`, loopback IPs), the trustworthy-origin convention. Ingest a
+//! `Set-Cookie` line — or a whole response — with `insert` /
+//! `insert_response`, and build the next request's `Cookie:` header with
+//! `cookie_header`; retrieval renders through the same [`CookieJar`],
+//! canonically percent-encoded. Time is data (every time-sensitive call takes
+//! `now: OffsetDateTime`), every refusal is a typed `Insertion::Rejected`, and
+//! the feature's one added dependency is the `url` crate — the matching
+//! itself is `rfc_6265`'s table-free domain/path primitives.
+//!
 //! ## Hardening (optional)
 //!
 //! By default kekse is a pure codec that stores whatever `Domain` the wire carries. The opt-in
@@ -158,7 +178,10 @@
 //! tables (the Public Suffix List / IDNA, via `rfc_6265`), so they are not in the default,
 //! dependency-light build. A `Domain` these gates refuse is dropped from the salvage and
 //! witnessed as an [`InvalidAttributeValue`](SetCookieIssue::InvalidAttributeValue) issue, and
-//! [`Domain::new`] returns the same refusal as a typed [`InvalidDomain`].
+//! [`Domain::new`] returns the same refusal as a typed [`InvalidDomain`]. `store` + `psl`
+//! composes into the exact RFC 6265 §5.3 step 5 rule: at ingest, a refused `Domain` naming a
+//! foreign host rejects the whole cookie, and one naming the origin itself (a site *on* a public
+//! suffix) degrades to host-only.
 //!
 //! ## A single source of truth for the grammar
 //!
@@ -178,7 +201,8 @@
 //! writer), and `report` (what a parse refused, as data — [`Reported`] and the
 //! issue types) — all re-exported flat from the crate root. With the `axum`
 //! feature, an `axum` module adds the `CookieJarBuf` extractor and the
-//! `SetCookie` response impls.
+//! `SetCookie` response impls; with the `store` feature, a `store` module adds
+//! the stateful `CookieStore`.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -193,6 +217,8 @@ mod jar;
 mod report;
 mod same_site;
 mod set_cookie;
+#[cfg(feature = "store")]
+mod store;
 mod wire;
 
 pub use attributes::{CookieAttributes, Domain, InvalidDomain, InvalidPath, Path};
@@ -209,6 +235,8 @@ pub use rfc_6265::grammar::{
 };
 pub use same_site::{ParseSameSiteError, SameSite};
 pub use set_cookie::{CookieConstraint, KnownAttribute, SetCookie, SetCookieIssue};
+#[cfg(feature = "store")]
+pub use store::{CookieStore, Insertion, RejectionReason, StoreConfig, StoredRef};
 
 /// The timestamp type used by the `Expires` attribute, re-exported from `rfc_6265` (itself the
 /// `time` crate's `OffsetDateTime`) so callers can name it without depending on `time` directly.

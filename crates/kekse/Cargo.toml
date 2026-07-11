@@ -35,6 +35,10 @@ tracing = { workspace = true, optional = true }
 # Only `axum-core` — not the whole `axum` — so the feature stays light; it is the
 # same `FromRequestParts` trait `axum` re-exports.
 axum-core = { workspace = true, optional = true }
+# The store's request context: origins and requests are `url::Url`s, so hosts
+# arrive lowercased and IDNA-encoded and the secure bit is the URL's own.
+# Pulled only by the `store` feature.
+url = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -42,6 +46,12 @@ default = []
 tracing = ["dep:tracing"]
 # axum `FromRequestParts` extractor (`CookieJarBuf`) for the request `Cookie:` header.
 axum = ["dep:axum-core"]
+# Stateful client-side cookie store (`CookieStore`): RFC 6265 §5.3 storage and §5.4
+# send-matching over the codec, with the RFC 6265bis storage gates. Origins and
+# requests are `url::Url`s — the feature's one added crate — while the matching
+# itself is rfc_6265's table-free domain/path primitives; composes with
+# `psl`/`hardened` for the exact §5.3 step 5 supercookie rejection at ingest.
+store = ["rfc_6265/domain", "rfc_6265/path", "dep:url"]
 # Reject public-suffix `Domain`s (supercookie defense) via rfc_6265's Public Suffix List.
 # Like `idna`, also gates `Domain` on LDH host-name syntax first (see `Domain::new`).
 psl = ["rfc_6265/psl"]
@@ -63,6 +73,9 @@ tokio = { workspace = true }
 time.workspace = true
 # Micro-benchmarks for the codec hot paths (benches/codec.rs).
 criterion.workspace = true
+# Property invariants for the store's send-matching (tests/store.rs): every
+# returned cookie independently satisfies domain, path, secure, and expiry.
+proptest.workspace = true
 
 # The `CookieJarBuf` extractor lives behind the `axum` feature, so its example only
 # builds with that feature on (the other examples are feature-free and auto-discovered).

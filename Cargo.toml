@@ -39,10 +39,10 @@ axum-core = "0.5"
 axum = { version = "0.8", features = ["macros"] }
 tower = "0.5"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-# Dev-only, keksbruch: the generative layer feeding random/mutated wire through
-# the universal invariants. A dev-dependency of the UNPUBLISHED harness crate, so
-# kekse's dependency-light guarantee is untouched, and the MSRV CI leg (which
-# builds only `-p kekse`) never compiles it.
+# Dev-only: keksbruch's generative layer feeding random/mutated wire through the
+# universal invariants, and kekse's store send-matching invariants (tests/store.rs).
+# Dev-dependencies never reach kekse's consumers, so the dependency-light guarantee
+# is untouched, and the MSRV CI leg (a `-p kekse` build) never compiles it.
 proptest = "1"
 # Dev-only, kekse: criterion micro-benchmarks for the codec hot paths
 # (crates/kekse/benches). Default features off: no plotters/rayon trees for
