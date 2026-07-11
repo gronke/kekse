@@ -9,7 +9,7 @@ A strict, dependency-light cookie codec.
 - **One interface, two gradings.** Both refuse injection bytes (`;`, CR, LF, NUL, controls, non-ASCII); strict also demands cookie-octets only, and accepts a subset of what lenient accepts.
 - **Fail-soft, never silent.** A junk pair is skipped, not fatal — it can't evict a valid cookie — and every reader returns what it refused, plus an opt-in axum `400` (and the response side fails loudly with a `500`, never dropping a cookie).
 - **Strongly typed.** `Cookie`, `SetCookie`, `CookieJar`, and typed attributes. Never string maps.
-- **A codec, not a store.** No persistence, eviction, send-matching, signing, or encryption.
+- **A codec first — the store is opt-in.** The default build has no persistence, eviction, or send-matching (and never signing or encryption); the `store` feature adds a typed client-side `CookieStore` whose one added dependency is the `url` crate.
 - **Dates handled.** `Max-Age` seconds (a `u64`) or an `Expires` timestamp, via the `time` crate.
 - **Light and safe.** Three dependencies — `percent-encoding`, `http`, `time`. No default features, no `unsafe`. Rust 1.88+.
 
@@ -94,6 +94,38 @@ async fn login() -> (SetCookie<'static>, &'static str) {
 }
 ```
 
+## Storing cookies (optional)
+
+The codec is stateless by design; the opt-in `store` feature adds the state.
+`CookieStore` does RFC 6265 §5.3 storage and §5.4 send-matching over the same parsed cookies, with the RFC 6265bis storage gates user agents apply: a `Secure` cookie only from a secure origin, the `__Host-`/`__Secure-` prefix requirements, and CHIPS' `Partitioned`/`Secure` pairing (a case-variant prefix whose requirements are met stores verbatim, as engines do).
+Time is data — every time-sensitive call takes `now` — and every outcome is a typed `Insertion` (stored / replaced / deleted / rejected with a reason), never a silent drop.
+The negative-`Max-Age` delete idiom is honored from the parse's witness channel, and with `psl` on, ingest follows §5.3 step 5 exactly: a public-suffix `Domain` naming a foreign host rejects the cookie, one naming the origin itself degrades to host-only.
+Origins and requests are `url::Url`s — the URL your HTTP stack already holds — so hosts arrive lowercased and IDNA-encoded, and the secure bit is the URL's own: a TLS scheme (`https`/`wss`), or a loopback destination (`localhost`, `*.localhost`, loopback IPs), the trustworthy-origin convention user agents apply.
+The `url` crate is the feature's one added dependency; the matching itself is `rfc_6265`'s table-free domain/path primitives.
+
+```rust
+use kekse::{CookieStore, OffsetDateTime};
+
+let now = OffsetDateTime::from_unix_timestamp(1_752_000_000)?;
+let origin = url::Url::parse("https://shop.example.test/login")?;
+
+let mut store = CookieStore::new();
+store.insert_all(
+    &origin,
+    ["SID=deadbeef; Secure; HttpOnly; Path=/", "theme=dark; Max-Age=31536000"],
+    now,
+);
+
+// The next request to that origin carries both (§5.4.2 order)…
+let request = url::Url::parse("https://shop.example.test/cart")?;
+assert_eq!(store.cookie_header(&request, now).unwrap(), "SID=deadbeef; theme=dark");
+// …a plain-HTTP request only the non-Secure one.
+let insecure = url::Url::parse("http://shop.example.test/cart")?;
+assert_eq!(store.cookie_header(&insecure, now).unwrap(), "theme=dark");
+```
+
+The store is a plain value — wrap it in the lock of your choice (`RwLock<CookieStore>`) to share it.
+
 ## Three types, two headers
 
 | Type | What it is |
@@ -101,6 +133,7 @@ async fn login() -> (SetCookie<'static>, &'static str) {
 | `Cookie` | one `name=value` from a request `Cookie:` header — no attributes; the shared core |
 | `SetCookie` | a response `Set-Cookie:` — a `Cookie` plus typed `CookieAttributes` (`HttpOnly`, `Secure`, `Partitioned`, `SameSite`, `Path`, `Domain`, `Expires`, `Max-Age`) |
 | `CookieJar` | an ordered, writable view over a `Cookie:` header — parsed and rebuildable, not a store |
+| `CookieStore` (feature `store`) | the stateful client store above both directions — §5.3 ingest of `Set-Cookie` lines, §5.4 send-matching rendered back out through a `CookieJar` |
 
 A request `Cookie` completes into a `SetCookie` with `into_set_cookie()` (default attributes) or `with_attributes(..)`, and drops back with `into_cookie()`. The attribute verbs also build a standalone `CookieAttributes`, so one hardened policy can be reused across cookies.
 

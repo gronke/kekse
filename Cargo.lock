@@ -975,11 +975,13 @@ dependencies = [
  "criterion",
  "http",
  "percent-encoding",
+ "proptest",
  "rfc_6265",
  "time",
  "tokio",
  "tower",
  "tracing",
+ "url",
 ]
 
 [[package]]
