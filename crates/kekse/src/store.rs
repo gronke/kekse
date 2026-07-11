@@ -729,6 +729,102 @@ impl CookieStore {
     }
 }
 
+/// One cookie of the persisted representation (`serde` feature) — the store's
+/// matching state as plain data, never the codec's wire types.
+#[cfg(feature = "serde")]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PersistedCookie {
+    /// The cookie-name.
+    pub name: String,
+    /// The decoded logical value.
+    pub value: String,
+    /// The effective domain, canonicalized (the setting host when
+    /// `host_only`).
+    pub domain: String,
+    /// Whether the cookie matches only its exact setting host.
+    pub host_only: bool,
+    /// The cookie path.
+    pub path: String,
+    /// The `Secure` flag.
+    pub secure: bool,
+    /// The `HttpOnly` flag.
+    pub http_only: bool,
+    /// The `Partitioned` flag (CHIPS).
+    pub partitioned: bool,
+    /// The `SameSite` attribute as its canonical token (`Strict` / `Lax` /
+    /// `None`), if set.
+    pub same_site: Option<String>,
+    /// Expiry in unix seconds; `None` is a session cookie.
+    pub expires_at: Option<i64>,
+}
+
+/// A [`CookieStore`]'s persisted representation (`serde` feature): the stored
+/// cookies in creation order, ready for any serde format. Produced by
+/// [`CookieStore::export`], consumed by [`CookieStore::import`].
+#[cfg(feature = "serde")]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PersistedStore {
+    /// The stored cookies, in creation order.
+    pub cookies: Vec<PersistedCookie>,
+}
+
+#[cfg(feature = "serde")]
+impl CookieStore {
+    /// Export the stored representation for persistence: every cookie —
+    /// session cookies and the expired-but-unpurged included — in creation
+    /// order, as plain data.
+    #[must_use]
+    pub fn export(&self) -> PersistedStore {
+        PersistedStore {
+            cookies: self
+                .cookies
+                .iter()
+                .map(|c| PersistedCookie {
+                    name: c.name.clone(),
+                    value: c.value.clone(),
+                    domain: c.domain.clone(),
+                    host_only: c.host_only,
+                    path: c.path.clone(),
+                    secure: c.secure,
+                    http_only: c.http_only,
+                    partitioned: c.partitioned,
+                    same_site: c.same_site.map(|s| s.to_string()),
+                    expires_at: c.expires_at,
+                })
+                .collect(),
+        }
+    }
+
+    /// Rebuild a store from its persisted representation, under `config`:
+    /// list order becomes creation order, cookies already expired at `now`
+    /// are dropped, and the capacity caps apply immediately. Import trusts
+    /// its input — the persisted form is the caller's own export — and an
+    /// unrecognized `same_site` token degrades to unset.
+    #[must_use]
+    pub fn import(persisted: PersistedStore, config: StoreConfig, now: OffsetDateTime) -> Self {
+        let mut store = Self::with_config(config);
+        for (created, c) in persisted.cookies.into_iter().enumerate() {
+            store.cookies.push(StoredCookie {
+                name: c.name,
+                value: c.value,
+                domain: c.domain,
+                host_only: c.host_only,
+                path: c.path,
+                secure: c.secure,
+                http_only: c.http_only,
+                partitioned: c.partitioned,
+                same_site: c.same_site.as_deref().and_then(|s| s.parse().ok()),
+                expires_at: c.expires_at,
+                created: created as u64,
+            });
+        }
+        store.next_created = store.cookies.len() as u64;
+        store.purge_expired(now);
+        store.enforce_caps(now.unix_timestamp());
+        store
+    }
+}
+
 /// The last refused `Domain` value the parse witnessed —
 /// [`InvalidAttributeValue`](SetCookieIssue::InvalidAttributeValue) on
 /// [`Domain`](KnownAttribute::Domain). Last, because RFC 6265 §5.3 reads the
@@ -1406,5 +1502,90 @@ mod tests {
         assert_eq!(store.get("pref").next().unwrap().value(), "dark mode");
         // …and leaves canonically percent-encoded.
         assert_eq!(header(&store, &origin, now()), "pref=dark%20mode");
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use time::macros::datetime;
+
+    use super::*;
+
+    fn now() -> OffsetDateTime {
+        datetime!(2026-07-11 12:00 UTC)
+    }
+
+    fn u(s: &str) -> url::Url {
+        url::Url::parse(s).expect("test url")
+    }
+
+    #[test]
+    fn export_import_round_trips_through_json() {
+        let origin = u("https://shop.example.test/");
+        let mut store = CookieStore::new();
+        store.insert_all(
+            &origin,
+            [
+                "SID=deadbeef; Secure; HttpOnly; SameSite=Strict; Path=/",
+                "part=1; Partitioned; Secure",
+                "theme=dark; Max-Age=3600",
+                "wide=1; Domain=example.test",
+            ],
+            now(),
+        );
+
+        let json = serde_json::to_string(&store.export()).unwrap();
+        let revived = CookieStore::import(
+            serde_json::from_str(&json).unwrap(),
+            StoreConfig::default(),
+            now(),
+        );
+
+        // Identical matching behavior and §5.4.2 order…
+        let request = u("https://shop.example.test/x");
+        assert_eq!(
+            revived.cookie_header(&request, now()),
+            store.cookie_header(&request, now())
+        );
+        // …the flags and expiry survive as data…
+        let sid = revived.get("SID").next().unwrap();
+        assert!(sid.http_only() && sid.secure());
+        assert_eq!(sid.same_site(), Some(SameSite::Strict));
+        assert!(revived.get("part").next().unwrap().partitioned());
+        assert_eq!(
+            revived.get("theme").next().unwrap().expires(),
+            store.get("theme").next().unwrap().expires()
+        );
+        // …and a second export is the same representation — a fixpoint.
+        assert_eq!(revived.export(), store.export());
+    }
+
+    #[test]
+    fn import_applies_now_and_the_caps() {
+        let origin = u("https://example.test/");
+        let mut store = CookieStore::new();
+        store.insert_all(&origin, ["a=1", "b=2; Max-Age=60", "c=3", "d=4"], now());
+        let persisted = store.export();
+
+        // An hour later b has expired out at import; the cap of 2 then keeps
+        // the newest of what survives.
+        let later = now() + time::Duration::hours(1);
+        let revived = CookieStore::import(
+            persisted,
+            StoreConfig {
+                max_cookies: 2,
+                max_cookies_per_domain: 2,
+            },
+            later,
+        );
+        let names: Vec<_> = revived.iter().map(|c| c.name().to_owned()).collect();
+        assert_eq!(names, ["c", "d"]);
+
+        // An unrecognized same_site token degrades to unset, never an error.
+        let mut odd = store.export();
+        odd.cookies.truncate(1);
+        odd.cookies[0].same_site = Some("Sideways".to_owned());
+        let revived = CookieStore::import(odd, StoreConfig::default(), now());
+        assert_eq!(revived.iter().next().unwrap().same_site(), None);
     }
 }

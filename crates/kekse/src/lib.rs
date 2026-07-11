@@ -165,7 +165,9 @@
 //! canonically percent-encoded. Time is data (every time-sensitive call takes
 //! `now: OffsetDateTime`), every refusal is a typed `Insertion::Rejected`, and
 //! the feature's one added dependency is the `url` crate — the matching
-//! itself is `rfc_6265`'s table-free domain/path primitives.
+//! itself is `rfc_6265`'s table-free domain/path primitives. The companion
+//! `serde` feature adds `PersistedStore` — export/import of the stored
+//! representation, never the codec's wire types.
 //!
 //! ## Hardening (optional)
 //!
@@ -237,6 +239,8 @@ pub use same_site::{ParseSameSiteError, SameSite};
 pub use set_cookie::{CookieConstraint, KnownAttribute, SetCookie, SetCookieIssue};
 #[cfg(feature = "store")]
 pub use store::{CookieStore, Insertion, RejectionReason, StoreConfig, StoredRef};
+#[cfg(feature = "serde")]
+pub use store::{PersistedCookie, PersistedStore};
 
 /// The timestamp type used by the `Expires` attribute, re-exported from `rfc_6265` (itself the
 /// `time` crate's `OffsetDateTime`) so callers can name it without depending on `time` directly.

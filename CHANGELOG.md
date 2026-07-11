@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   The parse's witness channel drives the wire shapes the typed attributes cannot carry: a negative `Max-Age` is honored as the delete-now idiom, and under `psl` a refused `Domain` follows §5.3 step 5 exactly — rejected for a foreign host, host-only when the origin is the public suffix itself.
   Every outcome is a typed `Insertion` (stored, replaced, deleted, or rejected with a `RejectionReason`), capacity follows §6.1 (3000 cookies, 50 per effective domain, expired evicted first), and every time-sensitive call takes `now` as data.
 - keksbruch: the jar-probe table gains a `kekse (store)` column — the subject's own `CookieStore` driven through the same §5.3/§5.4 probes as the rfc_6265 reference, judged beside it and never voting.
+- kekse: the store's `serde` companion feature — `PersistedStore` export/import of the stored representation (creation order carried by list order, expired cookies dropped and the caps applied at import), never the codec's wire types.
 
 ## [0.2.0] - 2026-07-10
 
