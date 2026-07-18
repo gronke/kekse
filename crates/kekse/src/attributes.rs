@@ -45,10 +45,42 @@ impl<'a> Path<'a> {
     }
 }
 
+impl<'a> Path<'a> {
+    /// The root path `/`, ready-made so a call site needs neither [`Path::new`]
+    /// nor a fallible conversion for the ubiquitous cookie `Path`. Typed
+    /// `Path<'a>` so it resolves at whatever lifetime the call site wants.
+    ///
+    /// ```
+    /// use kekse::Path;
+    ///
+    /// assert_eq!(Path::ROOT.as_str(), "/");
+    /// ```
+    pub const ROOT: Path<'a> = Path("/");
+}
+
 impl AsRef<str> for Path<'_> {
     /// Borrow the validated path as `&str`.
     fn as_ref(&self) -> &str {
         self.0
+    }
+}
+
+impl<'a> TryFrom<&'a str> for Path<'a> {
+    type Error = InvalidPath<'a>;
+
+    /// Validate `value` into a [`Path`] via [`Path::new`], so `"/app".try_into()`
+    /// works wherever a `Path` is wanted.
+    ///
+    /// ```
+    /// use kekse::Path;
+    ///
+    /// let path: Path = "/app".try_into()?;
+    /// assert_eq!(path.as_str(), "/app");
+    /// assert!(Path::try_from("/a;b").is_err());
+    /// # Ok::<(), kekse::InvalidPath<'static>>(())
+    /// ```
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        Self::new(value)
     }
 }
 
@@ -391,6 +423,19 @@ mod tests {
         );
         // A clean value round-trips.
         assert_eq!(Path::new("/ok").map(|p| p.as_str()), Ok("/ok"));
+    }
+
+    #[test]
+    fn root_const_is_the_slash_path() {
+        assert_eq!(Path::ROOT.as_str(), "/");
+    }
+
+    #[test]
+    fn path_try_from_str_validates() {
+        assert_eq!(Path::try_from("/app").map(|p| p.as_str()), Ok("/app"));
+        assert!(Path::try_from("/a;b").is_err());
+        let via_into: Path = "/ok".try_into().unwrap();
+        assert_eq!(via_into.as_str(), "/ok");
     }
 
     #[test]

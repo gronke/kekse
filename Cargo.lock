@@ -945,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "keksbruch"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum-extra",
  "base64",
@@ -968,7 +968,7 @@ dependencies = [
 
 [[package]]
 name = "kekse"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "axum-core",

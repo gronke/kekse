@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `Path::ROOT`: the `/` root path as a ready-made `Path`, so a call site needs neither `Path::new` nor a fallible conversion for the ubiquitous cookie path.
+- `impl TryFrom<&str> for Path`: validate a string into a `Path` via `Path::new`, so `"/app".try_into()` works wherever a `Path` is wanted.
+
 ## [0.2.0] - 2026-07-11
 
 kekse 0.2.0 ships together with rfc_6265 0.1.1.
