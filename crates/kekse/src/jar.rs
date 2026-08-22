@@ -7,6 +7,15 @@
 //! Lenient and strict run one pipeline and differ only in grading — strict
 //! accepts a subset of what lenient accepts, never something else — so the
 //! severity of an issue is always the caller's choice, never the parser's.
+//!
+//! Every reader here takes ONE header value (or an already reassembled
+//! buffer): a pair never spans field lines, but under HTTP/2 and HTTP/3 a
+//! request may carry SEVERAL `Cookie:` field lines (one per cookie), and the
+//! RFC 9113 §8.2.3 / RFC 9114 §4.2.1 recombination is the caller's duty
+//! before parsing. `CookieJarBuf::from_headers` (behind the `axum` feature)
+//! owns that join. Reach for it whenever the input is a whole `HeaderMap`,
+//! or reading only the first field line will silently lose every cookie in a
+//! later one.
 
 use std::borrow::Cow;
 

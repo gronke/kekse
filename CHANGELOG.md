@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- `CookieJarBuf::from_headers`: reassemble every request `Cookie:` field line from a `http::HeaderMap`, joined per RFC 9113 §8.2.3 / RFC 9114 §4.2.1.
 - `Path::ROOT`: the `/` root path as a ready-made `Path`, so a call site needs neither `Path::new` nor a fallible conversion for the ubiquitous cookie path.
 - `impl TryFrom<&str> for Path`: validate a string into a `Path` via `Path::new`, so `"/app".try_into()` works wherever a `Path` is wanted.
 
