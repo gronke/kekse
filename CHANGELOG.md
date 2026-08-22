@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- keksbruch: field-line scenarios. The request corpus now covers h2/h3 multi-line `Cookie:` headers (a cookie in a later field line, an empty line, a trailing-`;` line, an obs-text line, and the corrupting RFC 9110 comma fold), a Layer A oracle asserts `CookieJarBuf::from_headers` reproduces the hand-rendered RFC 9113 §8.2.3 join, and a divergence pin records that axum-extra drops a whole obs-text field line where kekse loses only the pair.
 - `CookieJarBuf::from_headers`: reassemble every request `Cookie:` field line from a `http::HeaderMap`, joined per RFC 9113 §8.2.3 / RFC 9114 §4.2.1.
 - `Path::ROOT`: the `/` root path as a ready-made `Path`, so a call site needs neither `Path::new` nor a fallible conversion for the ubiquitous cookie path.
 - `impl TryFrom<&str> for Path`: validate a string into a `Path` via `Path::new`, so `"/app".try_into()` works wherever a `Path` is wanted.

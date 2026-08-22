@@ -57,6 +57,18 @@ pub enum Keksbruch {
     /// An extra `=` in the value (split is on the first `=` only): `n=a=b`.
     ExtraEquals,
 
+    // ── h2/h3 field lines ─────────────────────────────────────────────────────
+    /// Several request `Cookie:` field lines reassembled with `"; "` — the
+    /// recombination RFC 9113 §8.2.3 (HTTP/2) and RFC 9114 §4.2.1 (HTTP/3)
+    /// require of recipients; a client may send one line per cookie. The
+    /// recipe renders the join a compliant recipient produces; lines are raw
+    /// bytes so one line can carry obs-text or a trailing `;`.
+    FieldLines(&'static [&'static [u8]]),
+    /// The same lines folded with `", "` — the generic header combination of
+    /// RFC 9110 §5.2, which `Cookie:` is exempt from; exactly what a naive
+    /// intermediary produces.
+    CommaFoldedLines(&'static [&'static [u8]]),
+
     // ── duplicate names ────────────────────────────────────────────────────────
     /// The same name repeated: `k=1; k=2; k=3`.
     DuplicateName,

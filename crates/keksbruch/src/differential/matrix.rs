@@ -89,6 +89,12 @@ impl Column {
 fn rfc_verdict(id: &str) -> Option<&'static str> {
     match id {
         "delim-semicolon" => Some("`;` splits → 2 pairs"),
+        "lines-second-visible"
+        | "lines-single"
+        | "lines-empty-line"
+        | "lines-trailing-semicolon"
+        | "lines-obs-text-line" => Some("field lines join with `; ` (RFC 9113 §8.2.3)"),
+        "lines-comma-folded" => Some("Cookie is exempt from the RFC 9110 §5.2 comma fold"),
         "empty-value" => Some("empty value is valid"),
         "dup-name" => Some("all duplicates kept"),
         "no-equals" | "empty-name" => Some("skip bad pair, keep rest"),

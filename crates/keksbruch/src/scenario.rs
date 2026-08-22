@@ -314,6 +314,57 @@ pub fn scenarios() -> Vec<Scenario> {
             Keksbruch::ExtraEquals,
             Expect::BothPairs(vec![("n", "a=b")]),
         ),
+        // ── h2/h3 field lines (RFC 9113 §8.2.3 / RFC 9114 §4.2.1) ───────────
+        s(
+            "lines-second-visible",
+            "a cookie in the second field line is as visible as in the first",
+            Request,
+            "other",
+            Keksbruch::FieldLines(&[b"other=x", b"SID=deadbeef"]),
+            Expect::BothPairs(vec![("other", "x"), ("SID", "deadbeef")]),
+        ),
+        s(
+            "lines-single",
+            "one field line joins to itself; the degenerate case is the identity",
+            Request,
+            "n",
+            Keksbruch::FieldLines(&[b"n=v"]),
+            Expect::BothPairs(vec![("n", "v")]),
+        ),
+        s(
+            "lines-empty-line",
+            "an empty field line becomes an empty ;-segment and is skipped",
+            Request,
+            "a",
+            Keksbruch::FieldLines(&[b"a=1", b"", b"b=2"]),
+            Expect::BothPairs(vec![("a", "1"), ("b", "2")]),
+        ),
+        s(
+            "lines-trailing-semicolon",
+            "a line ending in ; cannot smuggle across the joint; the empty segment dies",
+            Request,
+            "n",
+            Keksbruch::FieldLines(&[b"n=a;", b"SID=x"]),
+            Expect::BothPairs(vec![("n", "a"), ("SID", "x")]),
+        ),
+        s(
+            "lines-obs-text-line",
+            "an obs-text byte in one line costs only its pair, pinned below the \
+             UTF-8 boundary by the byte-level invariants and the from_headers oracle",
+            Request,
+            "bad",
+            Keksbruch::FieldLines(&[b"bad=caf\xE9; good=1", b"SID=deadbeef"]),
+            Expect::Unrepresentable,
+        ),
+        s(
+            "lines-comma-folded",
+            "the generic RFC 9110 comma fold destroys every pair (the raw comma is \
+             a non-octet in both gradings); Cookie is exempt and must join with ;",
+            Request,
+            "a",
+            Keksbruch::CommaFoldedLines(&[b"a=1", b"SID=x"]),
+            Expect::BothPairs(vec![]),
+        ),
         // ── duplicates ──────────────────────────────────────────────────────
         s(
             "dup-name",

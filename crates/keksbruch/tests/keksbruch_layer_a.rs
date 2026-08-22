@@ -4,7 +4,7 @@
 
 use keksbruch::IssueKind;
 use keksbruch::{
-    Direction, Expect, assert_baseline_parses_clean, assert_no_injection_echo,
+    Direction, Expect, Keksbruch, assert_baseline_parses_clean, assert_no_injection_echo,
     assert_no_injection_echo_bytes, assert_pair_conservation, assert_pair_conservation_bytes,
     assert_report_consistency, assert_report_consistency_bytes,
     assert_response_divergence_witnessed, assert_set_cookie_report_consistency,
@@ -445,4 +445,38 @@ fn each_jar_probe_matches_its_pinned_expectation() {
         let got = probe_retrieval(probe.set_cookie, probe.origin_url, probe.request_url);
         assert_eq!(got, want, "{} attached pairs", probe.id);
     }
+}
+
+/// The field-line rows must reassemble to exactly what kekse's own
+/// `CookieJarBuf::from_headers` produces from the same lines: the harness's
+/// oracle that the shipped join IS the hand-rendered RFC 9113 §8.2.3 join.
+/// (`CommaFoldedLines` is deliberately absent: the comma fold is the
+/// corruption a naive intermediary produces, not a join kekse performs.)
+#[test]
+fn from_headers_matches_the_rendered_recombination() {
+    let mut seen = 0;
+    for scenario in scenarios() {
+        let Keksbruch::FieldLines(lines) = &scenario.recipe.keksbruch else {
+            continue;
+        };
+        let mut headers = http::HeaderMap::new();
+        for line in *lines {
+            headers.append(
+                http::header::COOKIE,
+                http::HeaderValue::from_bytes(line).expect("field lines are valid header values"),
+            );
+        }
+        let joined = kekse::CookieJarBuf::from_headers(&headers);
+        assert_eq!(
+            joined.as_bytes(),
+            scenario.recipe.render().as_slice(),
+            "{}: from_headers and the recipe must produce the same reassembly",
+            scenario.id
+        );
+        seen += 1;
+    }
+    assert!(
+        seen >= 4,
+        "the field-line corpus went missing ({seen} rows)"
+    );
 }
