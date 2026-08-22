@@ -105,6 +105,38 @@ impl CookieJarBuf {
         Self { raw: raw.into() }
     }
 
+    /// Reassemble every request `Cookie:` field line from a [`http::HeaderMap`]
+    /// into one owned buffer, joined with `"; "`, as the recombination RFC 9113
+    /// §8.2.3 (HTTP/2) and RFC 9114 §4.2.1 (HTTP/3) require of recipients.
+    /// Clients may split the header into one field line per cookie (Chromium
+    /// does whenever a host's jar holds more than one), and a reader that looks
+    /// at only the first line silently loses every cookie in a later one.
+    /// A session id carried there reads as absent while the client demonstrably
+    /// sent it. Take this constructor whenever the input is a `HeaderMap`
+    /// (middleware, an auth layer) rather than request [`Parts`]; the extractor
+    /// is sugar over it.
+    ///
+    /// The bytes are taken verbatim without `to_str()` gate, so a field line
+    /// carrying obs-text loses only the pair that carries it, at parse time,
+    /// not every pair that shared its line.
+    pub fn from_headers(headers: &http::HeaderMap) -> Self {
+        let values = headers.get_all(COOKIE);
+        let (count, bytes) = values
+            .iter()
+            .fold((0usize, 0usize), |(count, bytes), value| {
+                (count + 1, bytes + value.as_bytes().len())
+            });
+        // Exact size: every value plus one "; " joint between adjacent ones.
+        let mut raw = Vec::with_capacity(bytes + 2 * count.saturating_sub(1));
+        for value in values {
+            if !raw.is_empty() {
+                raw.extend_from_slice(b"; ");
+            }
+            raw.extend_from_slice(value.as_bytes());
+        }
+        Self { raw }
+    }
+
     /// The **lenient** view: the [`CookieJar`] plus every refused pair as a
     /// [`PairIssue`] (tolerates the quoted and whitespace-bearing forms).
     /// Parses on demand, borrowing the owned header.
@@ -274,26 +306,9 @@ where
     type Rejection = Infallible;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Infallible> {
-        // A compliant request sends a single `Cookie:` header; join any repeats
-        // with `; ` so a split header still reads as one pair list. The bytes are
-        // taken verbatim — no `to_str()` gate — so a header value carrying
-        // obs-text loses only the pair that carries it, at parse time, not every
-        // pair it arrived with. Extraction stays infallible.
-        let values = parts.headers.get_all(COOKIE);
-        let (count, bytes) = values
-            .iter()
-            .fold((0usize, 0usize), |(count, bytes), value| {
-                (count + 1, bytes + value.as_bytes().len())
-            });
-        // Exact size: every value plus one "; " joint between adjacent ones.
-        let mut raw = Vec::with_capacity(bytes + 2 * count.saturating_sub(1));
-        for value in values {
-            if !raw.is_empty() {
-                raw.extend_from_slice(b"; ");
-            }
-            raw.extend_from_slice(value.as_bytes());
-        }
-        Ok(Self { raw })
+        // The constructor owns the h2/h3 field-line recombination; extraction
+        // stays infallible.
+        Ok(Self::from_headers(&parts.headers))
     }
 }
 
@@ -340,6 +355,46 @@ mod tests {
             Some("deadbeef")
         );
         assert!(buf.jar().value.get("bad").is_none());
+    }
+
+    #[test]
+    fn from_headers_spans_every_cookie_field_line() {
+        // h2/h3 clients may send one field line per cookie; a session id in a
+        // later line must be as visible as one in the first.
+        let mut headers = http::HeaderMap::new();
+        headers.append(COOKIE, http::HeaderValue::from_static("other=x"));
+        headers.append(COOKIE, http::HeaderValue::from_static("SID=deadbeef"));
+        let buf = CookieJarBuf::from_headers(&headers);
+        assert_eq!(buf.as_bytes(), b"other=x; SID=deadbeef");
+        assert_eq!(
+            buf.jar_strict().value.get("SID").map(|c| c.value()),
+            Some("deadbeef")
+        );
+    }
+
+    #[test]
+    fn from_headers_obs_text_line_costs_only_its_pair() {
+        // A field line carrying obs-text must not hide cookies in the next
+        // line - the byte-level join has no to_str() cliff to fall off.
+        let mut headers = http::HeaderMap::new();
+        headers.append(
+            COOKIE,
+            http::HeaderValue::from_bytes(b"bad=caf\xE9").unwrap(),
+        );
+        headers.append(COOKIE, http::HeaderValue::from_static("SID=deadbeef"));
+        let buf = CookieJarBuf::from_headers(&headers);
+        assert_eq!(
+            buf.jar_strict().value.get("SID").map(|c| c.value()),
+            Some("deadbeef")
+        );
+        assert!(buf.jar().value.get("bad").is_none());
+    }
+
+    #[test]
+    fn from_headers_without_a_cookie_header_is_empty() {
+        let buf = CookieJarBuf::from_headers(&http::HeaderMap::new());
+        assert!(buf.jar().value.is_empty());
+        assert_eq!(buf.as_bytes(), b"");
     }
 
     // ---- the response side -------------------------------------------------
