@@ -492,3 +492,41 @@ impl RustComparator for AxumExtra {
         ParseOutcome::NotApplicable
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// The one field-line divergence a joined wire cannot express: kekse's
+    /// byte-level reassembly refuses an obs-text PAIR while keeping its
+    /// clean siblings, axum-extra 0.10 gates each field line on `to_str()`
+    /// and drops the whole line. If this pin ever fails on the axum-extra
+    /// side, the ecosystems converged; update it to record that.
+    #[test]
+    fn field_lines_obs_text_kekse_keeps_the_sibling_axum_extra_drops_the_line() {
+        let mut headers = http::HeaderMap::new();
+        headers.append(
+            http::header::COOKIE,
+            http::HeaderValue::from_bytes(b"bad=caf\xE9; good=1").unwrap(),
+        );
+        headers.append(
+            http::header::COOKIE,
+            http::HeaderValue::from_static("SID=deadbeef"),
+        );
+
+        let joined = kekse::CookieJarBuf::from_headers(&headers);
+        let kekse_jar = joined.jar();
+        assert_eq!(kekse_jar.value.get("good").map(|c| c.value()), Some("1"));
+        assert_eq!(
+            kekse_jar.value.get("SID").map(|c| c.value()),
+            Some("deadbeef")
+        );
+        assert!(kekse_jar.value.get("bad").is_none());
+
+        let axum_jar = axum_extra::extract::cookie::CookieJar::from_headers(&headers);
+        assert_eq!(axum_jar.get("SID").map(|c| c.value()), Some("deadbeef"));
+        assert!(
+            axum_jar.get("good").is_none(),
+            "axum-extra kept a pair from the obs-text line, so the to_str() \
+             cliff is gone; update this pin to record the convergence"
+        );
+    }
+}

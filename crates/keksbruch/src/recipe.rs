@@ -97,6 +97,9 @@ impl<'a> KeksbruchRecipe<'a> {
             (Keksbruch::NoEquals, _) => format!("flag; {n}=v").into_bytes(),
             (Keksbruch::ExtraEquals, _) => format!("{n}=a=b").into_bytes(),
 
+            (Keksbruch::FieldLines(lines), _) => join_lines(lines, b"; "),
+            (Keksbruch::CommaFoldedLines(lines), _) => join_lines(lines, b", "),
+
             (Keksbruch::DuplicateName, _) => format!("{n}=1; {n}=2; {n}=3").into_bytes(),
             (Keksbruch::CaseVariantDuplicate, _) => {
                 format!("{n}=lo; {}=hi", n.to_uppercase()).into_bytes()
@@ -318,6 +321,20 @@ impl<'a> KeksbruchRecipe<'a> {
     pub fn render_str(&self) -> Option<String> {
         String::from_utf8(self.render()).ok()
     }
+}
+
+/// Reassemble field-line byte strings the way a recipient joins repeated
+/// `Cookie:` headers: `joint` between adjacent lines, empty lines included
+/// (they become empty `;`-segments, which the readers must skip).
+fn join_lines(lines: &[&[u8]], joint: &[u8]) -> Vec<u8> {
+    let mut wire = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            wire.extend_from_slice(joint);
+        }
+        wire.extend_from_slice(line);
+    }
+    wire
 }
 
 /// `n=a<byte>b` then `tail` — a value with one spliced raw byte, as bytes.
