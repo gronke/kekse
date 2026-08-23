@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-23
+
+A kekse-only release; rfc_6265 stays at the published 0.1.1.
+
 ### Added
 
 - keksbruch: field-line scenarios. The request corpus now covers h2/h3 multi-line `Cookie:` headers (a cookie in a later field line, an empty line, a trailing-`;` line, an obs-text line, and the corrupting RFC 9110 comma fold), a Layer A oracle asserts `CookieJarBuf::from_headers` reproduces the hand-rendered RFC 9113 §8.2.3 join, and a divergence pin records that axum-extra drops a whole obs-text field line where kekse loses only the pair.
@@ -76,6 +80,7 @@ The primitives crate's changes are additive, and from this release it versions i
 - keksbruch (unpublished): the differential QA harness pinning kekse across 80+ scenarios and a 30+ parser cross-language matrix.
 - No `unsafe`; three dependencies (`percent-encoding`, `http`, `time`); Rust 1.88+.
 
-[Unreleased]: https://github.com/gronke/kekse/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/gronke/kekse/compare/kekse-v0.2.1...HEAD
+[0.2.1]: https://github.com/gronke/kekse/compare/v0.2.0...kekse-v0.2.1
 [0.2.0]: https://github.com/gronke/kekse/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/gronke/kekse/releases/tag/v0.1.0
