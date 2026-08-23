@@ -12,6 +12,12 @@ readme = "README.md"
 documentation = "https://docs.rs/kekse"
 keywords = ["cookie", "http", "rfc6265", "set-cookie", "codec"]
 categories = ["web-programming", "encoding", "network-programming"]
+# The published crate is exactly this allowlist: the sources, the RFC
+# conformance tests and the examples ship (both run standalone from the
+# .crate; every dev-dependency is a registry crate), while the criterion
+# benches stay home with the rest of the dev tooling. The release gate
+# lists the shipped set on every run.
+include = ["src/**", "tests/**", "examples/**", "README.md", "LICENSE"]
 
 # docs.rs builds with every feature, so the optional `axum` extractor and the
 # `tracing` integration show up in the rendered docs. CI's `doc` leg already

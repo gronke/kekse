@@ -13,6 +13,9 @@ rust-version.workspace = true
 readme = "README.md"
 keywords = ["rfc6265", "cookie", "http", "date", "grammar"]
 categories = ["web-programming", "parser-implementations", "date-and-time"]
+# The published crate is exactly this allowlist: sources plus the
+# conformance and property tests, which run standalone from the .crate.
+include = ["src/**", "tests/**", "README.md", "LICENSE"]
 
 [package.metadata.docs.rs]
 all-features = true

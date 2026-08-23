@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- The published crates ship an explicit allowlist: sources, the RFC conformance tests and the examples stay (both verified to run standalone from the packaged crate), while the criterion benches remain repository-only dev tooling.
+
 ## [0.2.1] - 2026-08-23
 
 A kekse-only release; rfc_6265 stays at the published 0.1.1.
