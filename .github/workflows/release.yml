@@ -1,30 +1,54 @@
 name: Release gate
 
-# A pre-publish GATE, not a publisher. On a v* tag (or a manual run) it checks each
-# publishable crate is release-ready via gronke/rust-ci's `publish-dry-run`, which
-# splits the work in two:
-#   1. a networked, build-free prep — `cargo fetch`, tag <-> Cargo.toml version,
-#      a not-already-published probe on crates.io, and `cargo publish --dry-run
-#      --no-verify` (publish checks, no dependency code runs); then
-#   2. a SEALED verify-build — `cargo package --offline` under --network=none, so a
-#      dependency build.rs / proc-macro that runs during packaging cannot reach the
-#      network.
-# Nothing is published here.
+# A pre-publish GATE, not a publisher: one workflow run per crate, driven by a
+# crate-prefixed tag. Nothing is published here; publishing stays a manual
+# `cargo publish -p <crate>` after the gate is green.
+#
+# The release recipe for this two-crate workspace:
+#   1. bump versions + CHANGELOG, then tag `rfc_6265-vX.Y.Z`; the gate checks the
+#      leaf crate (tag <-> version, not-already-published, dry-run, sealed
+#      verify-build, package contents in the log);
+#   2. `cargo publish -p rfc_6265`;
+#   3. tag `kekse-vX.Y.Z` (the legacy bare `vX.Y.Z` also reads as kekse); the
+#      gate additionally proves the ordering: kekse's pinned rfc_6265 version
+#      must already be live on crates.io (a named probe, and the packaging
+#      resolution behind it), so a premature kekse tag fails legibly;
+#   4. `cargo publish -p kekse`.
+#
+# Each run checks exactly one crate via gronke/rust-ci's `publish-dry-run`:
+# a networked, build-free prep (`cargo fetch`, tag <-> Cargo.toml version, the
+# not-already-published probe, `cargo publish --dry-run --no-verify`, the
+# .crate build and the registry warm-up for its dependencies), then a SEALED
+# verify-build (`cargo package --offline` under --network=none) preceded by a
+# `cargo package --list` of the exact shipped file set.
 on:
   push:
-    tags: ["v*"]
-  workflow_dispatch: # run by hand to exercise the gate without cutting a tag
+    tags: ["v*", "kekse-v*", "rfc_6265-v*"]
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Crate to gate.
+        type: choice
+        options: [kekse, rfc_6265]
+        required: true
+      version:
+        description: Expected version (else read from Cargo.toml unchecked).
+        required: false
+        default: ""
 
-# Read-only: the probe hits the public crates.io API (no auth), and nothing is published.
+# Read-only: the probes hit the public crates.io API (no auth), and nothing is published.
 permissions:
   contents: read
 
 env:
   # The ONE place the gronke/rust-ci version is pinned (kept identical to ci.yml).
   # The job checks the repo out once at this ref, then uses its actions by local ./
-  # path — GitHub does not allow an expression in a step's `uses:`. Bump here only;
-  # pinned to the signed release tag.
-  RUST_CI_REF: v0.0.4
+  # path, since GitHub does not allow an expression in a step's `uses:`. Bump here only;
+  # pinned to the signed release tag. v1.7.0 is the first release carrying the
+  # per-crate publish-dry-run (crate-prefixed tags, require-deps-published, the
+  # registry warm-up and the contents listing); a missing tag fails the checkout
+  # loudly instead of silently gating without the ordering probe.
+  RUST_CI_REF: v1.7.0
   # Resilient crates.io access in the networked prep (matches CI).
   CARGO_NET_RETRY: "10"
   CARGO_HTTP_MULTIPLEXING: "false"
@@ -35,6 +59,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+
+      # Map the trigger to exactly one crate: `rfc_6265-vX` gates rfc_6265,
+      # `kekse-vX` and the legacy bare `vX` gate kekse, a dispatch takes its
+      # inputs. The version stays empty on dispatch-without-version; the
+      # action then skips the coherence check and gates the manifest version.
+      - name: Resolve the crate under gate
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="${GITHUB_REF:-}"
+          package="${{ inputs.package || '' }}"
+          version="${{ inputs.version || '' }}"
+          case "$ref" in
+            refs/tags/rfc_6265-v*) package=rfc_6265; version="${ref#refs/tags/rfc_6265-v}" ;;
+            refs/tags/kekse-v*)    package=kekse;    version="${ref#refs/tags/kekse-v}" ;;
+            refs/tags/v*)          package=kekse;    version="${ref#refs/tags/v}" ;;
+          esac
+          [ -n "$package" ] || { echo "::error::no package resolved (tag or dispatch input required)"; exit 1; }
+          echo "package=$package" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "gating $package ${version:-<manifest version>}"
 
       # Check gronke/rust-ci out once at the pinned ref; the steps below use it by
       # local ./ path. It is a public repo, so the default token can read it.
@@ -50,29 +96,22 @@ jobs:
       - name: Build toolchain image
         uses: ./.rust-ci/.github/actions/build-image
 
-      # rfc_6265 is the workspace leaf (no internal deps), so its dry-run + sealed
-      # verify-build stand on their own — a hard gate. It versions independently of
-      # the workspace (the v* tag names the kekse release), so its expected version is
-      # pinned here; bump it when rfc_6265 ships. On a kekse-only release an unchanged
-      # rfc_6265 is already published, so this step's not-already-published probe fails
-      # by design — make the step advisory for that tag.
-      - name: Dry-run rfc_6265
+      # The one hard gate. `require-deps-published` makes the ordering explicit:
+      # gating kekse while its pinned rfc_6265 version is not on crates.io fails
+      # with a named error instead of a bare resolution failure. keksbruch is
+      # `publish = false` (the adversarial harness) and intentionally not gated.
+      - name: Dry-run ${{ steps.resolve.outputs.package }}
         uses: ./.rust-ci/.github/actions/publish-dry-run
         with:
-          package: rfc_6265
-          expected-version: "0.1.1"
+          package: ${{ steps.resolve.outputs.package }}
+          expected-version: ${{ steps.resolve.outputs.version }}
+          require-deps-published: "true"
 
-      # kekse pins rfc_6265 by exact minimum version. In a release that ships both
-      # crates the pinned rfc_6265 is not on crates.io at tag time, so kekse's
-      # `cargo package` verify-build can't resolve the dependency and this step stays
-      # advisory (classic workspace publish-order); `cargo publish --workspace` on the
-      # release machine verifies both against each other, and re-running this gate via
-      # workflow_dispatch after rfc_6265 is live shows kekse verifying for real.
-      - name: Dry-run kekse (advisory — a co-shipped rfc_6265 is not on crates.io yet)
-        continue-on-error: true
-        uses: ./.rust-ci/.github/actions/publish-dry-run
+      # The gated .crate, for whoever wants to inspect a release before the
+      # manual publish. Short retention; the log already carries the file list.
+      - name: Upload the packaged crate
+        uses: actions/upload-artifact@v7
         with:
-          package: kekse
-
-      # keksbruch is `publish = false` (the adversarial harness), so it is intentionally
-      # not gated here.
+          name: ${{ steps.resolve.outputs.package }}-crate
+          path: target/package/*.crate
+          retention-days: 7
