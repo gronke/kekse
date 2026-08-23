@@ -23,7 +23,7 @@ env:
   # out once at this ref, then uses its actions by local ./ path — GitHub does not
   # allow an expression in a step's `uses:`, so this is how the ref stays single-
   # sourced. Bump here only; pinned to the signed release tag.
-  RUST_CI_REF: v0.0.4
+  RUST_CI_REF: v1.7.0
   # Incremental compilation is counter-productive in CI: it bloats the cache and
   # never pays off across the clean checkouts each run starts from. No debug symbols
   # either — nobody attaches a debugger to CI artifacts. Both are CARGO_* so the
