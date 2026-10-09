@@ -36,12 +36,12 @@
     <!-- Single source of truth for the pinned versions: used both for the
          dependency coordinates and (via resource filtering) for the version
          strings the sidecar reports, since a shaded jar loses per-jar manifests. -->
-    <tomcat.version>9.0.118</tomcat.version>
+    <tomcat.version>9.0.121</tomcat.version>
     <jakarta.rs.version>3.1.0</jakarta.rs.version>
     <resteasy.version>6.2.16.Final</resteasy.version>
     <jersey.version>3.1.11</jersey.version>
     <gson.version>2.14.0</gson.version>
-    <hc5.version>5.6.1</hc5.version>
+    <hc5.version>5.6.3</hc5.version>
   </properties>
 
   <dependencies>
